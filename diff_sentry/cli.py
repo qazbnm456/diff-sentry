@@ -9,8 +9,8 @@
 `run()` is the programmatic entry. It records `traces/{run_id}.jsonl`, writes `responses/{run_id}.json`,
 and — host-side, AFTER the run — emits a SIEM signal when the assembled verdict warrants it. A host-side
 BASELINE indicator scan runs at ingest and rides in the run_start meta, so the deterministic evidence is
-in the trace before the planner takes a turn (MF3). `classify`/`render`/`export` work offline; `pr`/`issue`
-need model creds (DS_* env) + a Deno sandbox.
+in the trace before the planner takes a turn (MF3). `render`/`export` work offline; `pr`/`issue`/`classify`
+need model creds (DS_* env) + a Deno sandbox (`classify` only *ingests* offline).
 """
 
 from __future__ import annotations

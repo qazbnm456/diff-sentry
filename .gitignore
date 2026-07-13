@@ -19,3 +19,6 @@ output/
 
 # macOS
 .DS_Store
+
+# Claude Code local overrides (never commit)
+.claude/settings.local.json
