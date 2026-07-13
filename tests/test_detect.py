@@ -39,11 +39,23 @@ def test_instructions_inject_skill_manifest(configure_dummy):
 def test_tools_wired(configure_dummy):
     task = ClassifyChange(config=_cfg())
     names = {getattr(t, "__name__", getattr(t, "name", "")) for t in task.tools}
-    assert "scan_indicators_tool" in names        # the deterministic detector tool
+    assert "scan_indicators" in names             # the deterministic detector tool (registered name)
     assert "deep_classify" in names               # the second-stage seam
     assert "read_skill" in names
     # fetch is OFF by default (exfil surface) — no fetch_url unless enable_fetch
     assert "fetch_url" not in names
+
+
+def test_prompt_tool_names_match_registered_tools(configure_dummy):
+    """Every consumer tool the prompt tells the planner to call must be REGISTERED under that exact name.
+    A mismatch is a NameError in the sandbox that only the live forward path would otherwise surface
+    (regresses the scan_indicators/scan_indicators_tool drift)."""
+    task = ClassifyChange(config=_cfg())
+    names = {getattr(t, "__name__", getattr(t, "name", "")) for t in task.tools}
+    for name in ("scan_indicators", "deep_classify", "read_skill"):
+        assert name in names, f"{name!r} is not a registered tool name"
+        assert f"`{name}(" in INSTRUCTIONS or f"`{name}`" in INSTRUCTIONS, \
+            f"{name!r} is registered but the prompt never tells the planner to call it"
 
 
 def test_fetch_tool_wired_when_enabled(configure_dummy):

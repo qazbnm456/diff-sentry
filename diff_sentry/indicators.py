@@ -220,6 +220,13 @@ def make_indicator_tool() -> Callable[[str], str]:
         lines = [f"- {h.id} [{h.severity}] {h.rule}: {h.title}" for h in hits]
         return f"{len(hits)} indicator(s):\n" + "\n".join(lines)
 
+    # dspy registers a tool under its __name__ and the planner calls it by that name; the prompt
+    # (detect.INSTRUCTIONS) says `scan_indicators(region)`, so the tool MUST register under exactly that
+    # name — otherwise the sandbox call is a NameError. The inner def can't literally BE `scan_indicators`
+    # without shadowing the module-level detector it calls, so rename the callable here. (The trace
+    # `tool_call` already records the "scan_indicators" name via record_tool_call above.)
+    scan_indicators_tool.__name__ = "scan_indicators"
+    scan_indicators_tool.__qualname__ = "scan_indicators"
     return scan_indicators_tool
 
 
