@@ -1,0 +1,42 @@
+[project]
+name = "diff-sentry"
+version = "0.1.0"
+description = "Classify a GitHub change (PR/issue/push) for malicious intent via an RLM harness — a BewAIre-style detector (rlm-kit consumer)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # Consumed via a local editable path until rlm-kit ships on PyPI (see [tool.uv.sources]).
+    "rlm-kit",
+    "pydantic>=2.0",
+    "httpx>=0.27",      # the GitHub-allowlisted enrichment fetcher + the host-side SIEM emitter
+]
+
+[project.optional-dependencies]
+# The swappable second-stage classifier's default `self` backend talks an OpenAI-compatible API.
+classify = ["openai>=1.0"]
+observe = ["langfuse>=4.6.1", "openinference-instrumentation-dspy>=0.1.36"]
+
+[tool.uv.sources]
+# A downstream consumer of rlm-kit, overlaid editable for local co-dev (the dogfooding loop). Switch to a git
+# source (uv.lock pinning the commit) for CI, exactly as the other consumers do, once this stabilizes.
+rlm-kit = { path = "../rlm-kit", editable = true }
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# `packages` ships every file under the package dir — the skills/*.md ride along automatically. (A
+# redundant force-include of those same paths duplicates them and breaks the wheel build.)
+packages = ["diff_sentry"]

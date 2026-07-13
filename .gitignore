@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# uv / virtualenv
+.venv/
+
+# Run artifacts (traces / responses / datasets the CLI writes)
+output/
+/traces/
+/responses/
+*.jsonl
+
+# Secrets / local env (only .env.example is tracked)
+.env
+
+# macOS
+.DS_Store
