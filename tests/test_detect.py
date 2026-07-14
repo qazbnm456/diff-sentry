@@ -97,6 +97,12 @@ def test_setup_passes_max_output_chars_through():
 
 
 def test_from_env_reads_roles_and_knobs(monkeypatch):
+    from tests.test_config import _DS_ENV
+
+    # Scrub the FULL DS_* set first (the test_config convention): importing dspy pulls litellm, whose
+    # import-time load_dotenv() injects the developer's repo `.env` into this very process.
+    for name in _DS_ENV:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("DS_ROOT_LM", "planner-x")
     monkeypatch.setenv("DS_SUB_LM", "analyst-x")
     monkeypatch.setenv("DS_MAX_OUTPUT_CHARS", "42000")

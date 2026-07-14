@@ -39,6 +39,7 @@
     if (trajEl.handle) trajEl.handle.hidden = true;
     if (trajEl.drawer && !trajEl.drawer.hidden) closeTrajectory();
   }
+  let closeTimer = null;
   async function openTrajectory() {
     if (!getRunId()) return;
     try {
@@ -47,15 +48,20 @@
       traj = await r.json();
     } catch (e) { feedError(e); return; }
     renderTrajectory();
+    clearTimeout(closeTimer);   // a re-open inside the close window must not be re-hidden by the stale timer
     trajEl.backdrop.hidden = false; trajEl.drawer.hidden = false;
     trajEl.handle.setAttribute("aria-expanded", "true");
-    requestAnimationFrame(() => { trajEl.backdrop.classList.add("show"); trajEl.drawer.classList.add("open"); });
+    // Flush the unhide before animating: rAF alone fires BEFORE the next style recalc, so coming from
+    // display:none the .open/.show transitions would have no start frame and jump straight to the end.
+    void trajEl.drawer.offsetHeight;
+    trajEl.steps.scrollTop = 0; trajEl.timeline.scrollLeft = 0;   // render-time scrollIntoView no-ops while hidden
+    trajEl.backdrop.classList.add("show"); trajEl.drawer.classList.add("open");
   }
   function closeTrajectory() {
     stopReplay(); setFull(false);
     trajEl.drawer.classList.remove("open"); trajEl.backdrop.classList.remove("show");
     trajEl.handle.setAttribute("aria-expanded", "false");
-    setTimeout(() => { trajEl.drawer.hidden = true; trajEl.backdrop.hidden = true; }, 260);
+    closeTimer = setTimeout(() => { trajEl.drawer.hidden = true; trajEl.backdrop.hidden = true; }, 260);
   }
   function setFull(full) {
     trajEl.drawer.classList.toggle("full", full);

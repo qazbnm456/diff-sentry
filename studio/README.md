@@ -108,6 +108,7 @@ uv run --package diff-sentry-studio uvicorn diff_sentry_studio.app:app --reload
 open http://127.0.0.1:8000/                   # paste/PR/issue → live feed → verdict + indicators
 curl http://127.0.0.1:8000/v1/runs
 uv run pytest studio/tests                    # the contract tests (no server, no diff-sentry needed)
+for t in studio/tests/*.test.js; do node "$t"; done   # the node core-tests (zero-dep, pure JS)
 ```
 
 **Live** (`POST /v1/classify` drives a REAL classification) needs `diff_sentry` importable AND its env

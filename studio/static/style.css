@@ -34,6 +34,10 @@
 }
 
 * { box-sizing:border-box; }
+/* `hidden` must always win: a class's `display:*` (author origin) otherwise beats the UA's
+   `[hidden]{display:none}` and the attribute silently no-ops — the mode panes and the trajectory
+   handle were all visible while hidden. The JS already sequences unhide → rAF → animate around this. */
+[hidden] { display:none !important; }
 html, body { margin:0; height:100%; }
 body {
   background:var(--bg); color:var(--text); font-family:var(--mono); font-size:15px; line-height:1.5;
@@ -158,6 +162,8 @@ button { font-family:var(--mono); cursor:pointer; }
   color:var(--text-faint); background:var(--surface-1);
 }
 .empty-stage .es-glyph { font-size:2.4rem; color:var(--border-strong); display:block; margin-bottom:12px; }
+/* the glyph is an inline SVG with only a viewBox: unsized it inflates to the full column width */
+.empty-stage .es-glyph svg { width:38px; height:38px; stroke:currentColor; fill:none; stroke-width:1.7; }
 .skeleton-card { border-style:solid; }
 .skeleton-card.iron { box-shadow:inset 0 0 0 2px var(--iron-2); }
 .sk-pulse { display:inline-block; width:34px; height:34px; border-radius:50%; border:3px solid var(--border);
@@ -282,7 +288,8 @@ button { font-family:var(--mono); cursor:pointer; }
 
 /* ── trajectory drawer (ported; family colors adapted) ──────────────────── */
 .traj-handle {
-  position:fixed; bottom:16px; left:50%; transform:translateX(-50%); z-index:30; display:flex; gap:8px;
+  /* bottom-right: the family convention across the sibling consoles */
+  position:fixed; right:24px; bottom:20px; z-index:30; display:flex; gap:8px;
   align-items:center; padding:8px 16px; border-radius:999px; background:var(--surface-2);
   border:1px solid var(--border-strong); color:var(--text); box-shadow:0 4px 18px rgba(0,0,0,0.4);
 }
