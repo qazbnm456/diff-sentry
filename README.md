@@ -44,6 +44,28 @@ so a strong injection can skew the *verdict* — but never the evidence: the det
 the SIEM regardless of the model's call (`assemble` unions them and derives `signal` with a high/critical
 floor). Verdict-skew is possible; evidence-suppression is structurally prevented.
 
+## Grounded in the real incident
+
+The attack shapes above are not hypothetical — they are the payloads `hackerbot-claw` actually used, replayed
+offline. Datadog's writeup quotes them verbatim, and the original GitHub artifacts are gone (the attacker
+account was deleted: `datadog-iac-scanner` PR #7/#8 and `datadog-agent` issues #47021/#47024 all 404 today;
+only the remediation PR #9 survives). So `tests/corpus/hackerbot_claw_incident.json` **reconstructs** the three
+events and `tests/test_incident_hackerbot_claw.py` proves the deterministic layer catches each one — no model,
+no loop, no network:
+
+- **The `datadog-iac-scanner` PR** — a `${IFS}`/base64 payload hidden in a *filename* under
+  `documentation/rules/` (the vulnerable workflow interpolated the changed-file list into bash). It
+  de-obfuscates to the published, now-dead `curl … | bash` IOC (**critical**); `raw_content` scans filenames,
+  so a filename-borne payload can't hide.
+- **The bulk-label issue** (#47021) — a prompt injection telling the triage LLM to label every open issue and
+  exfiltrate into Slack. Fires `prompt-injection`.
+- **The CODEOWNERS issue** (#47024) — a prompt injection to append a fake owner to `.github/CODEOWNERS`.
+  Signals on two independent grounds: `prompt-injection` **and** `codeowners-tamper`.
+
+Each event is asserted under a *neutral benign verdict*, so the signal is evidence-driven (MF3): a false-benign
+self-report could not have suppressed any of them. (Shipping the real dead IOC in a defensive corpus is standard
+practice — the change is static data the detector reads, never fetches or executes.)
+
 ## Scale / tier (the honest caveat)
 
 BewAIre runs ~10k PRs/week at second-latency. An RLM episode is multi-turn reasoning — seconds-to-minutes
