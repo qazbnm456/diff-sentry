@@ -20,6 +20,16 @@ framework on [`rlm-kit`](https://github.com/qazbnm456/rlm-kit) (a BewAIre-style 
   stays dspy-free and a proxy-only install never pulls the extra. A sentinel-configured run in an env
   that never installed the extra fails LOUD with an actionable error naming
   `uv sync --extra subscription` (`uv lock` records the extra; only sync installs it).
+- **Studio: a page-height three-view stage.** The middle column is ONE verdict-alloy card fixed at page
+  height (content scrolls inside; a sticky head keeps the view switch reachable) with a top-right
+  **Verdict / Indicators / Change** switch in triage order — Indicators always reachable, refusal
+  included. Run telemetry leads the right column (the sibling-console convention); the header's
+  `backend:self` chip is gone (API-only metadata now). The Change view is **trace-backed** for pr/issue
+  and replayed runs (their diff never reaches the client): it lazily reads the run's own `run_start`
+  event via `GET /v1/runs/{id}/iterations` — the exact normalized untrusted content the planner saw —
+  through a pure, unit-tested view-state core (`run-core.js:planChangeView`) that can never wedge on
+  loading and never reports a transient fetch error as a gone trace. A `[hidden]`-attribute CSS guard
+  (with a static contract test) fixes the mode panes and the Trajectory handle rendering while hidden.
 - **The classifier ALWAYS stays on its own OpenAI-compatible endpoint**, never the subscription (mixed
   auth by design). `config.from_env` now REJECTS a `claude-agent-sdk/…` classifier model — set either
   explicitly (`DS_CLASSIFIER_LM`) or inherited from a subscription `DS_SUB_LM` when `DS_CLASSIFIER_LM`

@@ -13,7 +13,7 @@ Two pieces:
    live classification and stream its **action** trajectory.
 2. **Web frontend** — a detection console: a change-input box (paste a payload, or ingest a PR/issue),
    a live event feed, a verdict card whose **frame is keyed to the derived state** (signal + evidence
-   severity), the **indicators** as the star module, and a Trajectory drawer that replays the RLM run
+   severity), the **indicators** as the star view, and a Trajectory drawer that replays the RLM run
    turn by turn.
 
 It does **not** re-implement any diff-sentry logic. diff-sentry owns the contract; this serves it. The
@@ -160,15 +160,17 @@ FastAPI app serves it (same-origin, no CORS); `/static/*` are the assets, `/v1/*
 - **Detection log** — the live SSE feed of *actions* as they happen (scan / deep-classify / ask-analyst
   / fetch / skill). Newest at the bottom. (Planner reasoning is in the Trajectory drawer — see the
   live-feed caveat above.)
-- **The result** (two columns) — the middle **stage** is the **verdict card**, whose alloy is the
-  **derived state, not the verdict**: `alert` (signal **and** ≥high evidence), `amber` (signal, softer
-  evidence), `clear` (no signal), `iron` (refusal / no verdict). When the planner says `benign` but a
-  hard indicator forced a signal, a **CONTRADICTION** banner spells out that the deterministic evidence
-  overrode the self-report. A Verdict/Change switch shows the untrusted diff. The right column is
-  modules in one visual language: **Indicators** (the **star** — every union hit, severity-ranked, with
-  bounded evidence and any base64 decode), **Run telemetry**, **Verdict detail** (rationale, techniques,
-  suspect files, and any **fabricated citations**), and the **SIEM signal** (the decision + the
-  would-send payload, never POSTed).
+- **The result** (two columns) — the middle **stage** is ONE page-height **verdict card** (content
+  scrolls inside it) whose alloy is the **derived state, not the verdict**: `alert` (signal **and**
+  ≥high evidence), `amber` (signal, softer evidence), `clear` (no signal), `iron` (refusal / no
+  verdict). When the planner says `benign` but a hard indicator forced a signal, a **CONTRADICTION**
+  banner spells out that the deterministic evidence overrode the self-report. A top-right
+  **Verdict / Indicators / Change** switch walks the triage order: the call, then **Indicators** (the
+  **star** — every union hit, severity-ranked, with bounded evidence and any base64 decode; always
+  reachable, refusal included), then the untrusted diff. The right column opens on **Run telemetry**
+  (the run's signature, top-right like the sibling consoles), then **Verdict detail** (rationale,
+  techniques, suspect files, and any **fabricated citations**), and the **SIEM signal** (the decision +
+  the would-send payload, never POSTed).
 - Every `status` is explicit — a `failed`/`inconclusive` run shows an **iron refusal card** with the
   reason and any evidence still gathered, never a blank screen.
 

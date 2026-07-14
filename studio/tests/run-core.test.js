@@ -35,5 +35,30 @@ test("INVARIANT: EVERY outcome finalizes the stage (the bug was a branch that fi
   }
 });
 
+// ---- planChangeView: the Change view can never wedge on "loading" (the pr/issue trace fallback) ----
+test("a pasted payload with files renders the per-file diff, whatever the trace state", () => {
+  assert.equal(RC.planChangeView({ files: [{}] }, undefined).kind, "files");
+  assert.equal(RC.planChangeView({ files: [{}] }, "trace text").kind, "files");
+});
+test("a pasted body (an issue) renders the body", () => {
+  assert.equal(RC.planChangeView({ body: "issue body" }, undefined).kind, "body");
+});
+test("no client change + never asked → loading, and fetch fires exactly on this state", () => {
+  assert.deepStrictEqual(RC.planChangeView(null, undefined), { kind: "loading", fetch: true });
+});
+test("fetch in flight → still loading, but never refires", () => {
+  assert.deepStrictEqual(RC.planChangeView(null, null), { kind: "loading", fetch: false });
+});
+test("the fetched run_start event renders as the trace view", () => {
+  assert.equal(RC.planChangeView(null, '{"_diff_sentry_metadata": …}').kind, "trace");
+});
+test("a gone trace or an empty event is TERMINAL, never an infinite loading", () => {
+  assert.equal(RC.planChangeView(null, false).kind, "gone");
+  assert.equal(RC.planChangeView(null, "").kind, "gone");
+});
+test("a transient fetch failure is its own honest terminal state — never claimed as a gone trace", () => {
+  assert.equal(RC.planChangeView(null, { error: true }).kind, "error");
+});
+
 console.log(failed ? "\n" + failed + " test(s) FAILED" : "\nall passing");
 process.exit(failed ? 1 : 0);

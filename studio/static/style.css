@@ -68,7 +68,6 @@ button { font-family:var(--mono); cursor:pointer; }
 .chip.ready .dot { background:var(--signal); }
 .chip .role-name { text-transform:uppercase; letter-spacing:.05em; color:var(--text-faint); flex:none; }
 .chip .role-model { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.chip-backend { color:var(--signal-dim); }
 .theme-toggle {
   width:32px; height:32px; border-radius:var(--radius); background:var(--surface-2);
   border:1px solid var(--border); color:var(--text-dim); font-size:1rem; flex:none;
@@ -160,6 +159,9 @@ button { font-family:var(--mono); cursor:pointer; }
 .empty-stage, .skeleton-card {
   border:1px dashed var(--border); border-radius:var(--card-radius); padding:56px 24px; text-align:center;
   color:var(--text-faint); background:var(--surface-1);
+  /* centered, at the SAME page-height as the result card (same 420px floor) — no jump between states */
+  min-height:max(420px, calc(100vh - 172px));
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
 }
 .empty-stage .es-glyph { font-size:2.4rem; color:var(--border-strong); display:block; margin-bottom:12px; }
 /* the glyph is an inline SVG with only a viewBox: unsized it inflates to the full column width */
@@ -170,6 +172,17 @@ button { font-family:var(--mono); cursor:pointer; }
   border-top-color:var(--signal); animation:spin 1s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 
+/* The stage is page-height and STABLE — exact fit: 56px header + 20px top padding + the 96px bottom
+   band the fixed Trajectory pill floats in. Switching views or a long indicator list scrolls INSIDE
+   the card; with the default view the page itself does not scroll at all. */
+.stage-col .card { height:calc(100vh - 172px); min-height:420px; display:flex; flex-direction:column; }
+.stage-col .card-inner { flex:1; min-height:0; overflow-y:auto; }
+/* Keep the state headline + view switch reachable while the card body scrolls. Only the FIRST head —
+   the badges row inside the verdict view is also a direct .card-head child and must scroll away. */
+.stage-col .card-inner > .card-head:first-child {
+  position:sticky; top:-16px; z-index:2; background:var(--surface-1);
+  margin:-16px -16px 12px; padding:16px 16px 10px;
+}
 .card {
   position:relative; border-radius:var(--card-radius); background:var(--surface-1); padding:2px;
   box-shadow:0 2px 14px rgba(0,0,0,0.45);
@@ -226,7 +239,7 @@ button { font-family:var(--mono); cursor:pointer; }
 /* the change view (diff) */
 .change-src { font-size:.75rem; color:var(--text-dim); margin-bottom:10px; word-break:break-word; }
 .diff-well {
-  background:var(--surface-3); border-radius:var(--radius); overflow-x:auto; max-height:60vh; overflow-y:auto;
+  background:var(--surface-3); border-radius:var(--radius); overflow-x:auto;
   font-size:.78rem; line-height:1.5;
 }
 .diff-line { display:block; white-space:pre; padding:0 10px; }
@@ -242,7 +255,6 @@ button { font-family:var(--mono); cursor:pointer; }
 .no-meta .meta-col { display:none; }
 .module { background:var(--surface-1); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
 .module-cap { height:3px; background:linear-gradient(90deg, var(--signal), transparent); }
-.module.star .module-cap { background:linear-gradient(90deg, var(--alert-1), transparent); }
 .module-head {
   font-size:.6875rem; text-transform:uppercase; letter-spacing:.08em; color:var(--text-faint);
   padding:9px 12px 0;

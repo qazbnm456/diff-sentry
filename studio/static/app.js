@@ -24,7 +24,7 @@
   };
 
   const feedEl = $("#feed"), stageEl = $("#stage-col"), metaEl = $("#meta-col"), layoutEl = $(".layout");
-  let CONFIG = { models: {}, max_iterations: 25, emit_on: [], classify_backend: "self" };
+  let CONFIG = { models: {}, max_iterations: 25, emit_on: [] };
   let currentRunId = null, busy = false;
   const getRunId = () => currentRunId, isBusy = () => busy;
 
@@ -104,13 +104,18 @@
     const st = deriveState(r);
     const isRefusal = st.key === "iron";
     const hasChange = !!(r.source && (r.source.repo || r.source.number)) || (CURRENT._change);
-    const switchHtml = !isRefusal && hasChange
-      ? `<div class="stage-switch"><button data-view="verdict" class="${stageView === "verdict" ? "on" : ""}">Verdict</button>` +
-        `<button data-view="change" class="${stageView === "change" ? "on" : ""}">Change</button></div>` : "";
+    // ONE page-height alloy card (frame = derived state, MF3), three views behind the top-right
+    // switch, in triage order: VERDICT → INDICATORS (always reachable, even on a refusal — the
+    // evidence outlives the self-report) → CHANGE (when the run carries one; never on a refusal).
+    const views = [["verdict", "Verdict"], ["indicators", "Indicators"]];
+    if (!isRefusal && hasChange) views.push(["change", "Change"]);
+    if (!views.some(([v]) => v === stageView)) stageView = "verdict";
+    const switchHtml = `<div class="stage-switch">` + views.map(([v, label]) =>
+      `<button data-view="${v}" class="${stageView === v ? "on" : ""}">${label}</button>`).join("") + `</div>`;
     let body;
-    if (stageView === "change" && hasChange) body = changeView(r);
-    else if (isRefusal) body = refusalView(r);
-    else body = verdictView(r, st);
+    if (stageView === "indicators") body = indicatorsHtml(r);
+    else if (stageView === "change") body = changeView(r);
+    else body = isRefusal ? refusalView(r) : verdictView(r, st);
     stageEl.innerHTML = `<div class="card ${st.key} sweep"><div class="card-inner">` +
       `<div class="card-head"><span class="state-head ${st.key}">${esc(st.head)}</span>${switchHtml}</div>` +
       body + `</div></div>`;
@@ -143,17 +148,41 @@
     const s = r.source || {};
     const num = s.number != null ? `#${esc(s.number)} · ` : "";
     const srcLine = `${esc(s.repo || "")} · ${esc(s.kind || "")} · ${num}${esc(s.author || "")}`;
-    const change = CURRENT._change;   // set when we ingested a payload locally
+    const change = CURRENT._change;   // set when we ingested a payload locally (paste mode only)
+    const plan = RunCore.planChangeView(change, CURRENT._traceChange);
     let diff = "";
-    if (change && change.files && change.files.length) {
+    if (plan.kind === "files") {
       diff = change.files.map((f) => `<div class="file-head">${esc(f.filename || "")} [${esc(f.status || "")} +${f.additions || 0} -${f.deletions || 0}]</div>` +
         `<div class="diff-well">${diffLines(f.patch || "")}</div>`).join("");
-    } else if (change && change.body) {
+    } else if (plan.kind === "body") {
       diff = `<div class="diff-well"><span class="diff-line ctx">${esc(change.body)}</span></div>`;
+    } else if (plan.kind === "trace") {
+      // A pr/issue (or replayed) run — the diff never reaches the client. This is the run's OWN
+      // `run_start` event from /iterations: the exact normalized untrusted content the planner saw.
+      diff = `<div class="diff-well"><span class="diff-line ctx">${esc(CURRENT._traceChange)}</span></div>`;
+    } else if (plan.kind === "loading") {
+      if (plan.fetch) fetchTraceChange(CURRENT);
+      diff = `<div class="prose">loading the change from the run's trace…</div>`;
+    } else if (plan.kind === "error") {
+      diff = `<div class="prose">Couldn't read the run's trace (a transient fetch error) — load the run again to retry.</div>`;
     } else {
-      diff = `<div class="prose">The change body is not held client-side for this run — open the Trajectory drawer's Init pane to read the exact untrusted content the planner saw.</div>`;
+      diff = `<div class="prose">The change body is not held client-side and this run's trace carries no readable event — nothing to show.</div>`;
     }
     return `<div class="change-src">${srcLine}</div>${diff}`;
+  }
+  async function fetchTraceChange(r) {
+    r._traceChange = null;   // in flight — planChangeView won't refire while pending
+    try {
+      const resp = await fetch(`/v1/runs/${encodeURIComponent(r.id || currentRunId)}/iterations`);
+      if (resp.ok) {
+        const init = ((await resp.json()) || {}).initial;
+        r._traceChange = (init && typeof init.change === "string" && init.change) ? init.change : false;
+      } else {
+        // 404 = the trace is genuinely gone (terminal "gone"); anything else is transient → "error".
+        r._traceChange = resp.status === 404 ? false : { error: true };
+      }
+    } catch (_) { r._traceChange = { error: true }; }
+    if (CURRENT === r && stageView === "change") renderStage(r);
   }
   function diffLines(patch) {
     return String(patch).split("\n").map((ln) => {
@@ -166,16 +195,19 @@
     }).join("");
   }
 
-  function renderModules(r) {
-    const p = r.process || {};
+  function indicatorsHtml(r) {
     const inds = r.indicators || [];
-    const indHtml = inds.length
+    return inds.length
       ? inds.map((h) => `<div class="ind sev-${esc(h.severity || "info")}"><div class="ind-top"><span class="ind-sev">${esc(h.severity || "")}</span>` +
         `<span class="ind-rule">${esc(h.rule || "")}</span></div><div class="ind-title">${esc(h.title || "")}</div>` +
         (h.evidence ? `<code class="ind-ev">${esc(h.evidence)}</code>` : "") +
         (h.decoded ? `<code class="ind-ev ind-decoded">decoded → ${esc(h.decoded)}</code>` : "") +
         (h.location ? `<div class="ind-loc">${esc(h.location)}</div>` : "") + `</div>`).join("")
       : `<div class="ind-empty">no indicators fired — the deterministic layer found nothing</div>`;
+  }
+
+  function renderModules(r) {
+    const p = r.process || {};
 
     // Show the run's OWN step count unclamped — clamping to CONFIG.max_iterations (today's env) would
     // falsify a replayed run recorded under a different cap. Cap-hit is authoritative from `process`.
@@ -196,8 +228,8 @@
         `<div class="emit-note">The studio does not POST — this is the payload the host-side emitter would send.</div>`
       : `<div class="siem-off">no signal — below the emit threshold and the evidence floor</div>`;
 
+    // Telemetry first — the run's signature sits top-right, the family convention across the consoles.
     metaEl.innerHTML =
-      module("Indicators", indHtml, true) +
       module("Run telemetry", `<div class="headline">${esc(formatElapsed(p.elapsed_s) || "—")}</div><div class="stat-grid">${stats}</div>` +
         (p.hit_iteration_cap ? `<span class="flag-chip">hit iteration cap</span>` : "")) +
       module("Verdict detail", (r.rationale ? `<div class="prose">${esc(r.rationale)}</div>` : "") +
@@ -206,8 +238,8 @@
       module("SIEM signal", siem) +
       (r.summary ? module("Summary", `<div class="prose">${esc(r.summary)}</div>`) : "");
   }
-  function module(label, body, star) {
-    return `<div class="module${star ? " star" : ""}"><div class="module-cap"></div><div class="module-head">${esc(label)}</div><div class="module-body">${body}</div></div>`;
+  function module(label, body) {
+    return `<div class="module"><div class="module-cap"></div><div class="module-head">${esc(label)}</div><div class="module-body">${body}</div></div>`;
   }
   function siemPayload(r) {
     // Mirror emit.signal_payload field-for-field — the console claims this is what the host-side emitter
@@ -307,8 +339,6 @@
       chip.querySelector(".role-model").textContent = name || "";
       chip.title = name || role; chip.classList.toggle("ready", !!name);
     });
-    const bk = $("#chip-backend");
-    if (bk) { bk.textContent = `backend:${CONFIG.classify_backend || "self"}`; bk.hidden = false; }
   }
   async function loadFixtures() {
     let fx = [];

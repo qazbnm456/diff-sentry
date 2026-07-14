@@ -78,7 +78,8 @@ refusal `detail`. The mono-frame / sans-prose contrast is the hierarchy.
 `▣ diff-sentry studio` wordmark (`▣` in `--signal`). Right: three role chips
 `planner / analyst / classifier`, each a mono pill showing the configured model name from `GET /v1/config`
 on page load (steady `--signal` dot, NO pulse; truncates with ellipsis only when the header runs out of
-width). A `backend:self` chip (from `classify_backend`). Then a theme toggle (`☾`/`☀`).
+width). Then a theme toggle (`☾`/`☀`). (No backend chip — the sibling consoles don't surface it either;
+the classify backend stays API-only metadata on `GET /v1/config`.)
 
 ### 5.2 Change input (left rail, top) — no feed
 `▾ CHANGE` panel with a **mode switch** (`paste | pr | issue`):
@@ -111,31 +112,40 @@ the core story (which indicators fired, did it escalate).
 ### 5.4 The result: middle stage + right modules
 Page-level **3 columns**: process rail | stage | modules.
 
-**Middle stage:** a **verdict-alloy card** (frame per §2) with a top-right **Verdict / Change** switch.
-- **Verdict view:** the derived-state headline (ALERT / FLAGGED / CLEAR / REFUSAL), the `verdict` chip +
-  `confidence`, the `max_indicator_severity` badge, a **SIGNAL** badge (`● SIEM signal` when
-  `signal==true`), the CONTRADICTION marker when the verdict undersells the evidence (§2), then the
-  `summary` (sans) and `recommended_action` (allow / flag-for-review / block-merge).
-- **Change view:** the change under review — the source line (`repo · kind · #number · author`), then the
-  diff/body colored by role (additions green, deletions red, hunk headers signal, file headers faint).
-  For an issue, the body. Absent → a note.
+**Middle stage:** ONE **verdict-alloy card** (frame per §2), fixed at page height — content scrolls
+INSIDE the card, the page never grows — with a top-right **Verdict / Indicators / Change** switch, in
+triage order:
+1. **Verdict view** (the landing view): the derived-state headline (ALERT / FLAGGED / CLEAR /
+   REFUSAL), the `verdict` chip + `confidence`, the `max_indicator_severity` badge, a **SIGNAL** badge
+   (`● SIEM signal` when `signal==true`), the CONTRADICTION marker when the verdict undersells the
+   evidence (§2), then the `summary` (sans) and `recommended_action` (allow / flag-for-review /
+   block-merge).
+2. **Indicators view** (the star — ALWAYS present, refusal included: the evidence outlives the
+   self-report): the deterministic evidence, the UNION of every hit. Each a well colored by severity:
+   `[SEV] rule` (mono) + `title` (sans) + a bounded `evidence` snippet (+ `decoded` when the rule
+   de-obfuscated one) + `location`. The union is rendered FLAT — a baseline hit and a planner re-scan of
+   the same content dedupe to one member (`mint_id` is deterministic), so "baseline vs re-scan" is not
+   cleanly recoverable from the union and is not drawn here; that provenance lives in the Trajectory
+   drawer's per-turn `scan` calls (and the `run_start` `baseline` count). Empty → "no indicators fired".
+3. **Change view** (when the run carries one; never on a refusal): the change under review — the source
+   line (`repo · kind · #number · author`), then the diff/body colored by role (additions green,
+   deletions red, hunk headers signal, file headers faint). For an issue, the body. A pr/issue or
+   replayed run (whose diff never reaches the client) falls back to the run's OWN `run_start` event,
+   fetched lazily from `GET /v1/runs/{id}/iterations` — the exact normalized untrusted content the
+   planner saw, mono and uncolored (≤16k with an honest truncation marker). A note only when the trace
+   itself is gone; a transient fetch error gets its own retry note, never a false "gone" claim.
 
 **Right modules** (`.module`: thin top accent, uppercase label head, `--surface-1` body), in order:
-1. `INDICATORS` (the star — pinned first): the deterministic evidence, the UNION of every hit. Each a well
-   colored by severity: `[SEV] rule` (mono) + `title` (sans) + a bounded `evidence` snippet (+ `decoded`
-   when the rule de-obfuscated one) + `location`. The union is rendered FLAT — a baseline hit and a planner
-   re-scan of the same content dedupe to one member (`mint_id` is deterministic), so "baseline vs re-scan"
-   is not cleanly recoverable from the union and is not drawn here; that provenance lives in the Trajectory
-   drawer's per-turn `scan` calls (and the `run_start` `baseline` count). Empty → "no indicators fired".
-2. `RUN TELEMETRY` (`process`): `elapsed_s` headline, then a grid — steps (the run's OWN count, unclamped) ·
+1. `RUN TELEMETRY` (top-right — the run's signature, the family convention across the sibling consoles)
+   (`process`): `elapsed_s` headline, then a grid — steps (the run's OWN count, unclamped) ·
    scans · deep-classify (amber if circuit-broke) · analyst (violet if >0). Fetch is off by default, so it
    is not a fixed tile; a fetch shows in the Trajectory drawer when one occurs. `hit_iteration_cap` as an
    amber flag chip (authoritative from `process`, never inferred from a step-vs-cap comparison).
-3. `VERDICT DETAIL`: `rationale` (sans), `techniques[]` chips, `suspect_files[]`, `cited_unknown_ids` as a
+2. `VERDICT DETAIL`: `rationale` (sans), `techniques[]` chips, `suspect_files[]`, `cited_unknown_ids` as a
    red fabrication chip.
-4. `SIEM SIGNAL`: whether a signal fired + the compact would-send payload (the `signal_payload` subset:
+3. `SIEM SIGNAL`: whether a signal fired + the compact would-send payload (the `signal_payload` subset:
    verdict, severity, techniques, suspect_files, the indicator list). A note: the studio does not POST.
-5. `SUMMARY`: the one-line recap, a closing module.
+4. `SUMMARY`: the one-line recap, a closing module.
 
 ### 5.5 States (every state explicit)
 | status | frame | body |
@@ -152,7 +162,8 @@ Page-level **3 columns**: process rail | stage | modules.
   hackerbot demo." The right column collapses (`.no-meta`).
 - Running: a skeleton card (iron frame) + "Classifying…" in the stage; the right column is empty
   (`.no-meta`). The live activity IS the Detection log (left rail), which streams actions as they happen —
-  the run's telemetry/indicators render in the right column once the result lands.
+  the run's telemetry renders in the right column (and the indicators in their card view) once the
+  result lands.
 - Stream error mid-run: the backend emits a `failed` response → render the refusal card. Never blank.
   (Even without the `live` extra, the worker completes the SSE with a `failed` refusal — the stream never
   hangs.)
@@ -174,7 +185,7 @@ gradient is the verdict-alloy frame + its one-time sweep on mount). All motion r
 
 ## 7. Do / Don't
 Do: mono for structure, sans for prose; frame keyed to DERIVED state (§2), never the raw verdict; make
-the INDICATORS module the star; render every state explicitly (refusal is first-class); show the
+the INDICATORS view the star; render every state explicitly (refusal is first-class); show the
 CONTRADICTION marker when verdict undersells evidence. Don't: no Inter, no centered-hero, no
 three-identical-cards, no purple/blue gradient; don't invent response fields a run lacks (hide, don't
 fake); don't block the UI on the font (it degrades); don't key the frame on the planner's
