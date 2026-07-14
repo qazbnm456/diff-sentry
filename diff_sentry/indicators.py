@@ -270,6 +270,77 @@ def scan_indicators(text: str, *, location: str = "") -> list[IndicatorHit]:
     return list(deduped.values())
 
 
+# ── provenance detectors: FACTS from host-side `gh api` ingest enrichment, NOT untrusted text ─────────
+# These take the structured `provenance` dict (author type/association, account age, commit signatures)
+# ingest.py attaches — the "source/provenance" signals from the malicious-PR research. Host-side ONLY: not
+# an RLM tool (there is nothing for the planner to decode), recorded into the run_start baseline so they
+# join the evidence union (MF3) and re-derive on read.
+
+# Base names of first-party automation bots. A REAL bot commits as a `Bot`-type account
+# (`renovate[bot]`); we scrutinise a `User`-type account wearing a bot identity. github.com forbids `[`/`]`
+# in a username, so a `[bot]`-suffixed User login is STRUCTURALLY impossible for a real account → forged.
+# A bot-like NAME (exact `renovate`, or a lookalike `renovate-bot`/`dependabot-fix`) is ambiguous: a legit
+# HOSTED machine account (Mend's `renovate-bot`, `snyk-bot`) has one too, so it only rises to a signal when
+# the account is ALSO an outsider (new / first-time) — an established machine account never trips it.
+_BOT_BASES = ("dependabot", "renovate", "github-actions", "mergify", "snyk", "greenkeeper",
+              "depfu", "imgbot", "pre-commit-ci", "allcontributors")
+# author_association values that mean "not an established contributor to THIS repo".
+_OUTSIDER_ASSOCIATIONS = frozenset({"FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE", "MANNEQUIN"})
+_YOUNG_ACCOUNT_DAYS = 30  # younger than this is a weak newness tell (sub-floor)
+
+
+def _resembles_bot(login_lower: str) -> bool:
+    stripped = login_lower.replace("[bot]", "")
+    return any(base in stripped for base in _BOT_BASES)
+
+
+def scan_provenance(provenance: dict) -> list[IndicatorHit]:
+    """Deterministic signals from host-side ingest enrichment (author/commit facts from `gh api`), not
+    from the untrusted text. Tuned like the text rules: a new/first-time author and an unsigned commit are
+    COMMON → sub-floor `low` corroborators (never force a signal alone). Bot identity: a `[bot]`-suffixed
+    User login is a FORGED identity (impossible on real github.com) → `high`; a bot-like NAME only rises to
+    a `medium` corroborator when the account is ALSO an outsider, so a legit hosted `renovate-bot` machine
+    account never forces a signal. Deterministic + side-effect-free (safe in baseline)."""
+    prov = provenance or {}
+    hits: list[IndicatorHit] = []
+
+    login = str(prov.get("author_login") or "")
+    login_l = login.strip().lower()
+    atype = str(prov.get("author_type") or "")
+    is_user = bool(atype) and atype.lower() != "bot"   # KNOWN User (unknown/empty type stays silent)
+
+    assoc = str(prov.get("author_association") or "").upper()
+    age = prov.get("author_account_age_days")
+    young = isinstance(age, (int, float)) and not isinstance(age, bool) and age < _YOUNG_ACCOUNT_DAYS
+    outsider = assoc in _OUTSIDER_ASSOCIATIONS or young
+
+    if is_user and login_l.endswith("[bot]"):
+        hits.append(_hit("bot-impersonation", "high",
+                         "a `[bot]`-suffixed login on a User account — a forged automation identity",
+                         f"login={login[:80]} type={atype[:20]}"))
+    elif is_user and outsider and _resembles_bot(login_l):
+        hits.append(_hit("bot-like-author", "medium",
+                         "a new/unestablished User account whose login mimics an automation bot",
+                         f"login={login[:80]} type={atype[:20]} association={assoc[:40] or 'n/a'}"))
+
+    unverified = prov.get("commits_unverified")
+    if isinstance(unverified, int) and not isinstance(unverified, bool) and unverified > 0:
+        total = prov.get("commits_total")
+        ev = f"unverified={unverified}" + (f" of {total}" if isinstance(total, int) else "")
+        hits.append(_hit("unsigned-commits", "low", "one or more commits are unsigned / unverified", ev))
+
+    reasons: list[str] = []
+    if assoc in _OUTSIDER_ASSOCIATIONS:
+        reasons.append(f"association={assoc}")
+    if young:
+        reasons.append("account_age<30d")   # BUCKETED, so re-ingesting a day later keeps the same hit id
+    if reasons:
+        hits.append(_hit("unknown-contributor", "low",
+                         "author is not an established contributor (new / first-time)",
+                         "; ".join(reasons)[:_MAX_EVIDENCE]))
+    return hits
+
+
 def make_indicator_tool() -> Callable[[str], str]:
     """Build the sync `scan_indicators` RLM tool. It scans a region the planner passes and RECORDS the
     full structured hits into the trace (so the evidence is a fact, re-sourced on read), then returns a

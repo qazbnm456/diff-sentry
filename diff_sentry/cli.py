@@ -42,15 +42,14 @@ async def detect_from_event(
     import rlm_kit
 
     from .detect import ClassifyChange, setup
-    from .indicators import scan_indicators
-    from .normalize import event_metadata, normalize_event, raw_content
+    from .normalize import event_metadata, normalize_event
 
     setup(config)
     task = ClassifyChange(config=config, extra_tools=extra_tools)
     event_str = normalize_event(event)
     meta_source = event_metadata(event)
     # Host-side BASELINE scan — deterministic evidence in the trace before the planner runs (MF3).
-    baseline = [h.model_dump() for h in scan_indicators(raw_content(event))]
+    baseline = _baseline_indicators(event)
 
     async def _run():
         return await task.arun(event=event_str)
@@ -77,6 +76,17 @@ async def detect_from_event(
         }):
             return await _run()
     return await _run()
+
+
+def _baseline_indicators(event: dict) -> list[dict]:
+    """The host-side deterministic evidence recorded in run_start meta BEFORE the planner runs: the text
+    detectors over the raw content ∪ the provenance detectors over the ingest facts. Both re-source into the
+    evidence union on read (MF3), so a false-benign SUBMIT can skew the verdict but never suppress these."""
+    from .indicators import scan_indicators, scan_provenance
+    from .normalize import raw_content
+
+    return ([h.model_dump() for h in scan_indicators(raw_content(event))]
+            + [h.model_dump() for h in scan_provenance(event.get("provenance") or {})])
 
 
 def _write(path_parts: tuple[str, str], content: str) -> str:

@@ -51,6 +51,33 @@ def _meta_filenames(files: list[dict]) -> list[str]:
     return names
 
 
+# GitHub-authoritative enums. Constraining the MF1 sandwich to these drops any arbitrary string a
+# host-supplied/pasted `provenance` might try to smuggle into the "trusted" header as free text.
+_GH_AUTHOR_TYPES = frozenset({"User", "Bot", "Organization", "Mannequin"})
+_GH_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR",
+                              "FIRST_TIMER", "NONE", "MANNEQUIN"})
+
+
+def _provenance_summary(provenance: Any) -> dict[str, Any]:
+    """A BOUNDED, host-derived subset of the ingest `provenance` block for the MF1 metadata sandwich —
+    only the keys present (so an offline/pasted event with no provenance carries none), and only
+    GitHub-enum values for the string fields (so a forged provenance can't inject free text as trusted)."""
+    if not isinstance(provenance, dict):
+        return {}
+    out: dict[str, Any] = {}
+    atype = str(provenance.get("author_type") or "")
+    if atype in _GH_AUTHOR_TYPES:
+        out["author_type"] = atype
+    assoc = str(provenance.get("author_association") or "").upper()
+    if assoc in _GH_ASSOCIATIONS:
+        out["author_association"] = assoc
+    for key in ("author_account_age_days", "commits_total", "commits_unverified"):
+        val = provenance.get(key)
+        if isinstance(val, int) and not isinstance(val, bool):
+            out[key] = val
+    return out
+
+
 def event_metadata(event: dict) -> dict[str, Any]:
     """The DERIVED, trustworthy summary of a change — repo, kind, number, author, file stats, and a
     sha256 of the raw untrusted content. Computed by us, never taken from the model. Attacker-authored
@@ -59,7 +86,7 @@ def event_metadata(event: dict) -> dict[str, Any]:
     # Fingerprint over ALL untrusted content (title/author/filenames/patches/body) so two events
     # differing only in a malicious filename don't collide.
     digest = hashlib.sha256(raw_content(event).encode("utf-8", "replace")).hexdigest()
-    return {
+    meta = {
         "repo": str(event.get("repo", "") or ""),
         "kind": str(event.get("kind", "") or ""),
         "number": event.get("number"),
@@ -71,6 +98,12 @@ def event_metadata(event: dict) -> dict[str, Any]:
         "deletions": sum(f["deletions"] for f in files),
         "content_sha256": digest,
     }
+    prov = _provenance_summary(event.get("provenance"))
+    if prov:
+        # Host-DERIVED source facts (author association/type, account age, unsigned-commit count) ride in
+        # the MF1 sandwich as trustworthy context, distinct from the untrusted middle. Bounded like the rest.
+        meta["provenance"] = prov
+    return meta
 
 
 def normalize_event(event: dict) -> str:
