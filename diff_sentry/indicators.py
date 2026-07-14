@@ -323,11 +323,55 @@ def scan_provenance(provenance: dict) -> list[IndicatorHit]:
                          "a new/unestablished User account whose login mimics an automation bot",
                          f"login={login[:80]} type={atype[:20]} association={assoc[:40] or 'n/a'}"))
 
+    # Display-name spoof — a bot-like PROFILE NAME (not login) worn by a new/unestablished User. Same
+    # outsider gate as bot-like-author, so an established `renovate-bot` ("Renovate Bot") stays silent.
+    display = str(prov.get("author_display_name") or "")
+    if is_user and outsider and display and (_resembles_bot(display.lower())
+                                             or display.strip().lower().endswith("[bot]")):
+        hits.append(_hit("bot-like-display-name", "medium",
+                         "a new/unestablished User whose DISPLAY NAME mimics an automation bot",
+                         f"name={display[:80]} login={login[:80]}"))
+
+    # Author account does not resolve — a positively-confirmed 404, or GitHub's `ghost` deletion
+    # attribution. A real post-incident tell, but benign deletions happen too → medium (sub-floor).
+    if prov.get("author_not_found") is True or login_l == "ghost":
+        hits.append(_hit("author-unresolvable", "medium",
+                         "the author account does not resolve (deleted / not found)",
+                         f"login={login[:80] or 'n/a'} "
+                         f"resolved={'404' if prov.get('author_not_found') is True else 'ghost-attribution'}"))
+
     unverified = prov.get("commits_unverified")
     if isinstance(unverified, int) and not isinstance(unverified, bool) and unverified > 0:
         total = prov.get("commits_total")
         ev = f"unverified={unverified}" + (f" of {total}" if isinstance(total, int) else "")
         hits.append(_hit("unsigned-commits", "low", "one or more commits are unsigned / unverified", ev))
+
+    # A signature was attached but does NOT bind to the committer's GitHub identity (bad_email / unknown_key
+    # / no_user / unverified_email) — spoofing-shaped, distinct from plain unsigned. Low: misconfigured-but-
+    # honest signers produce these constantly, so a corroborator, never a signal driver.
+    mismatch = prov.get("commits_sig_identity_mismatch")
+    if isinstance(mismatch, int) and not isinstance(mismatch, bool) and mismatch > 0:
+        hits.append(_hit("signature-identity-mismatch", "low",
+                         "a commit signature does not bind to the committer's GitHub identity",
+                         f"identity_mismatch={mismatch}"))
+
+    # A forged bot-like git AUTHOR name on an UNVERIFIED commit (real API-created bot commits VERIFY) — the
+    # commit-level spoof shape. Same outsider gate as the login/display rules: an established machine account
+    # (self-hosted Renovate without platformCommit, github-actions committing via git) legitimately produces
+    # unverified bot-named commits, and a Bot-type author authoring bot-named commits is normal — so this
+    # only rises to a corroborator for an OUTSIDER User, and a name matching the author's OWN login (a
+    # self-consistent identity) is not a spoof. Medium; the git author string is pure attacker input.
+    authors = prov.get("unverified_commit_authors")
+    if is_user and outsider and isinstance(authors, list):
+        spoofed = next(
+            (n for n in authors
+             if isinstance(n, str) and n.strip().lower() != login_l
+             and (_resembles_bot(n.strip().lower()) or n.strip().lower().endswith("[bot]"))),
+            None)
+        if spoofed:
+            hits.append(_hit("spoofed-commit-author", "medium",
+                             "an unsigned commit's git author name mimics an automation bot",
+                             f"git_author={spoofed[:80]} login={login[:80]}"))
 
     reasons: list[str] = []
     if assoc in _OUTSIDER_ASSOCIATIONS:

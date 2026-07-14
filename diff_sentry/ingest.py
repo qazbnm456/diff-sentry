@@ -21,12 +21,43 @@ from typing import Any, Callable, Optional
 # An `api` maps a `gh api <path>` argument to parsed JSON. Injectable for tests; default uses `gh`.
 GhApi = Callable[[str], Any]
 
+# GitHub commit `verification.reason` values where a signature WAS attached but does not bind to the
+# committer's GitHub identity (spoofing-shaped) — distinct from a plain unsigned commit.
+_SIG_MISMATCH_REASONS = frozenset({"bad_email", "unknown_key", "no_user", "unverified_email"})
+
+
+class GhApiError(Exception):
+    """A `gh api` call failed. `status` is the HTTP status when the failure was an HTTP error the CLI
+    reported (a POSITIVELY-confirmed 404 vs a transient/network error, which leaves `status=None`) — so an
+    enrichment caller can turn a real 404 into a fact while still omitting on any transient failure."""
+
+    def __init__(self, message: str, *, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status
+
 
 def _gh_cli_api(timeout: float = 30.0) -> GhApi:
     def call(path: str) -> Any:
         import subprocess  # host-side only; NEVER reached from inside the RLM
 
-        out = subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=timeout, check=True)
+        out = subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=timeout)
+        if out.returncode != 0:
+            # gh prints the HTTP error BODY (JSON, with a `"status"`) to stdout on an HTTP failure; stdout is
+            # empty on a network/transport failure. So a confirmed 404 is distinguishable from a transient.
+            status = None
+            body = out.stdout.strip()
+            if body:
+                try:
+                    parsed = json.loads(body)
+                    raw = parsed.get("status") if isinstance(parsed, dict) else None
+                    status = int(raw) if raw is not None and str(raw).isdigit() else None
+                except (ValueError, TypeError):
+                    status = None
+            # gh puts the human-readable error ("gh: Not Found (HTTP 404)", auth hints) on stderr — carry a
+            # bounded slice so a host-side status=failed response is diagnosable, not just "exit 1".
+            detail = (out.stderr or "").strip()[:200]
+            msg = f"gh api {path} failed (exit {out.returncode})" + (f": {detail}" if detail else "")
+            raise GhApiError(msg, status=status)
         return json.loads(out.stdout)
 
     return call
@@ -55,13 +86,21 @@ def _provenance(repo: str, number: Optional[int], user: Optional[dict], associat
     prov: dict = {"author_login": login, "author_type": str(user.get("type", "") or "")}
     if association:
         prov["author_association"] = str(association)
-    if login:
+    uid = user.get("id")
+    # `ghost` is GitHub's reserved deleted-user attribution — no lookup needed (scan_provenance flags the
+    # login). Otherwise prefer the immutable numeric id (rename-proof) over the login.
+    if login and login.strip().lower() != "ghost":
         try:
-            created = (call(f"users/{login}") or {}).get("created_at")
-            age = _age_days(created) if created else None
+            acct = call(f"user/{uid}" if uid else f"users/{login}") or {}
+            age = _age_days(acct.get("created_at")) if acct.get("created_at") else None
             if age is not None:
                 prov["author_account_age_days"] = age
-        except Exception:  # noqa: BLE001 — enrichment is best-effort; a failed lookup just omits age
+            if acct.get("name"):
+                prov["author_display_name"] = str(acct["name"])[:120]   # attacker-authored — kept OUT of MF1
+        except GhApiError as e:
+            if e.status == 404:
+                prov["author_not_found"] = True                         # POSITIVE 404 → a fact
+        except Exception:  # noqa: BLE001 — transient failure: omit, never sink the ingest
             pass
     if fetch_commits and number is not None:
         try:
@@ -69,11 +108,36 @@ def _provenance(repo: str, number: Optional[int], user: Optional[dict], associat
         except Exception:  # noqa: BLE001 — best-effort; a failed lookup just omits the commit-signature facts
             commits = None
         if isinstance(commits, list):
-            # Count BOTH before assigning, so a malformed element can't leave a half-populated pair.
-            unverified = sum(1 for c in commits if isinstance(c, dict)
-                             and not (((c.get("commit") or {}).get("verification") or {}).get("verified")))
+            # Tally everything BEFORE assigning, so a malformed element can't leave a half-populated dict.
+            # Every nested field is isinstance-guarded (not just `or {}`): a TRUTHY non-dict — `{"commit":
+            # "x"}` from a schema-broken 200 or a proxying transport — would otherwise raise on `.get` and
+            # sink the whole ingest, breaking the best-effort contract this function documents above.
+            unverified = mismatch = 0
+            spoofed_authors: list[str] = []
+            for c in commits:
+                if not isinstance(c, dict):
+                    continue
+                commit = c.get("commit")
+                commit = commit if isinstance(commit, dict) else {}
+                verification = commit.get("verification")
+                verification = verification if isinstance(verification, dict) else {}
+                if verification.get("verified"):
+                    continue
+                unverified += 1
+                if str(verification.get("reason") or "") in _SIG_MISMATCH_REASONS:
+                    mismatch += 1
+                author = commit.get("author")
+                author_name = str((author if isinstance(author, dict) else {}).get("name") or "")
+                if author_name:
+                    spoofed_authors.append(author_name[:80])
             prov["commits_total"] = len(commits)
             prov["commits_unverified"] = unverified
+            if mismatch:
+                prov["commits_sig_identity_mismatch"] = mismatch
+            if spoofed_authors:
+                # DEDUPE (order-preserving) before the bound so an attacker can't flood the list with copies
+                # of a plain name to push a bot-named commit past the cap. scan_provenance judges the names.
+                prov["unverified_commit_authors"] = list(dict.fromkeys(spoofed_authors))[:20]
     return prov
 
 

@@ -75,6 +75,10 @@ def _provenance_summary(provenance: Any) -> dict[str, Any]:
         val = provenance.get(key)
         if isinstance(val, int) and not isinstance(val, bool):
             out[key] = val
+    # a host-derived boolean (the author account does not resolve) — the display name is attacker-authored
+    # free text and is deliberately NOT surfaced here.
+    if provenance.get("author_not_found") is True or str(provenance.get("author_login") or "").strip().lower() == "ghost":
+        out["author_unresolvable"] = True
     return out
 
 

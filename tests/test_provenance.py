@@ -95,6 +95,52 @@ def test_empty_or_missing_provenance_is_a_noop():
     assert scan_provenance(None) == []
 
 
+# ── source/identity signals: deleted author, display-name spoof, signature/commit-author forgery ───
+
+def test_author_unresolvable_fires_on_404_and_ghost_but_stays_subfloor():
+    for prov in ({"author_login": "gone", "author_type": "User", "author_not_found": True},
+                 {"author_login": "ghost", "author_type": "User"}):
+        assert "author-unresolvable" in _rules(prov)
+        assert _sev(prov)["author-unresolvable"] == "medium"
+        assert _signal(prov) is False   # a benign deletion / departed contributor must not force a signal
+
+
+def test_bot_like_display_name_is_outsider_gated():
+    spoof = {"author_login": "xz-9a", "author_type": "User", "author_association": "FIRST_TIME_CONTRIBUTOR",
+             "author_display_name": "Dependabot"}
+    assert "bot-like-display-name" in _rules(spoof)
+    assert _sev(spoof)["bot-like-display-name"] == "medium" and _signal(spoof) is False
+    # an ESTABLISHED hosted machine account with a bot display name must NOT fire (same gate as bot-like-author)
+    legit = {"author_login": "renovate-bot", "author_type": "User", "author_association": "MEMBER",
+             "author_account_age_days": 900, "author_display_name": "Renovate Bot"}
+    assert scan_provenance(legit) == []
+
+
+def test_signature_identity_mismatch_is_a_subfloor_corroborator():
+    prov = {"commits_sig_identity_mismatch": 2}
+    assert _rules(prov) == ["signature-identity-mismatch"]
+    assert _sev(prov)["signature-identity-mismatch"] == "low" and _signal(prov) is False
+
+
+def test_spoofed_commit_author_flags_only_outsider_bot_like_git_authors():
+    outsider = {"author_login": "xz-9a", "author_type": "User", "author_association": "FIRST_TIME_CONTRIBUTOR"}
+    spoof = {**outsider, "unverified_commit_authors": ["dependabot[bot]", "realdev"]}
+    assert "spoofed-commit-author" in _rules(spoof)
+    assert _sev(spoof)["spoofed-commit-author"] == "medium" and _signal(spoof) is False
+    # ordinary git-author names never trip it (the outsider still trips low `unknown-contributor`, so
+    # assert the specific rule's absence rather than an empty hit set)
+    assert "spoofed-commit-author" not in _rules({**outsider, "unverified_commit_authors": ["realdev", "alice"]})
+    # an ESTABLISHED account's unverified bot-named commits (self-hosted Renovate / github-actions via git)
+    # must NOT fire — same outsider gate as the login/display rules.
+    established = {"author_login": "renovate-bot", "author_type": "User", "author_association": "MEMBER",
+                  "author_account_age_days": 900, "unverified_commit_authors": ["renovate[bot]"]}
+    assert scan_provenance(established) == []
+    # a Bot-type author authoring its own bot-named commits is self-consistent, not a spoof
+    selfbot = {"author_login": "dependabot[bot]", "author_type": "Bot",
+               "unverified_commit_authors": ["dependabot[bot]"]}
+    assert scan_provenance(selfbot) == []
+
+
 # ── the MF1 metadata-sandwich summary (host-derived, bounded, enum-gated) ──────────────────────────
 
 def test_provenance_summary_keeps_enum_values_and_int_counts():
@@ -115,6 +161,12 @@ def test_provenance_summary_absent_when_no_provenance():
     assert _provenance_summary(None) == {}
     assert _provenance_summary("nope") == {}
     assert "provenance" not in event_metadata({"repo": "a/b", "title": "t"})
+
+
+def test_provenance_summary_surfaces_unresolvable_but_not_display_name():
+    # a host-derived boolean rides in MF1; the attacker-authored display name never does
+    s = _provenance_summary({"author_login": "ghost", "author_display_name": "Deleted user"})
+    assert s == {"author_unresolvable": True}
 
 
 # ── the cli baseline unions text + provenance (the live integration point) ─────────────────────────
