@@ -1,7 +1,7 @@
 # diff-sentry
 
 A **BewAIre-style malicious-change detector** built on [`rlm-kit`](../rlm-kit) — a downstream consumer of
-the RLM scaffold, alongside `cve-reverser`. It reproduces the shape of Datadog's
+the RLM scaffold. It reproduces the shape of Datadog's
 [BewAIre defense](https://www.datadoghq.com/blog/engineering/stopping-hackerbot-claw-with-bewaire/) (the
 `hackerbot-claw` incident): ingest a GitHub change, analyze the diff as **untrusted data**, and emit a
 **structured verdict** (benign / suspicious / malicious) into a SIEM.
