@@ -17,7 +17,9 @@ framework on [`rlm-kit`](https://github.com/qazbnm456/rlm-kit) (a BewAIre-style 
   `ANTHROPIC_API_KEY` unset (the adapter refuses to start otherwise). Vendored per the base/wrap split
   (rlm-kit ships the adapter only under `examples/`, not in its wheel; provenance + re-sync in
   `VENDOR.md`). Imported lazily (only in `detect.setup()`'s sentinel branch) so `import diff_sentry`
-  stays dspy-free and a proxy-only install never pulls the extra.
+  stays dspy-free and a proxy-only install never pulls the extra. A sentinel-configured run in an env
+  that never installed the extra fails LOUD with an actionable error naming
+  `uv sync --extra subscription` (`uv lock` records the extra; only sync installs it).
 - **The classifier ALWAYS stays on its own OpenAI-compatible endpoint**, never the subscription (mixed
   auth by design). `config.from_env` now REJECTS a `claude-agent-sdk/…` classifier model — set either
   explicitly (`DS_CLASSIFIER_LM`) or inherited from a subscription `DS_SUB_LM` when `DS_CLASSIFIER_LM`

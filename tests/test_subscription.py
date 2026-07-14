@@ -75,6 +75,24 @@ def test_from_env_proxy_path_unchanged(monkeypatch):
     assert cfg.classifier_model == "openai/gpt-4o"
 
 
+def test_maybe_subscription_lm_missing_extra_is_actionable(monkeypatch):
+    """Sentinel + missing claude-agent-sdk → an error that NAMES the fix, not a bare import crash.
+
+    (The real-world path: `uv lock` records the extra but only `uv sync --extra subscription`
+    installs it — a sentinel-configured run in a never-synced env must say so.)
+    """
+    pytest.importorskip("dspy")  # importing detect pulls dspy+rlm_kit, present in the dev env
+    import sys
+
+    from diff_sentry.detect import _maybe_subscription_lm
+
+    monkeypatch.delitem(sys.modules, "diff_sentry.claude_agent_lm", raising=False)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)  # import → ModuleNotFoundError
+    with pytest.raises(ModuleNotFoundError) as exc:
+        _maybe_subscription_lm("claude-agent-sdk/claude-sonnet-5")
+    assert "uv sync --extra subscription" in str(exc.value)
+
+
 def test_maybe_subscription_lm_non_sentinel_returns_none():
     """The router returns None for a non-sentinel model WITHOUT importing the vendored adapter/SDK."""
     pytest.importorskip("dspy")  # importing detect pulls dspy+rlm_kit, present in the dev env

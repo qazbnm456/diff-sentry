@@ -98,7 +98,18 @@ def _maybe_subscription_lm(model: str):
     """
     if not model.startswith(SUBSCRIPTION_PREFIX):
         return None
-    from .claude_agent_lm import ClaudeAgentLM
+    try:
+        from .claude_agent_lm import ClaudeAgentLM
+    except ModuleNotFoundError as exc:
+        if exc.name != "claude_agent_sdk":
+            raise
+        raise ModuleNotFoundError(
+            f"A role's model is {model!r} (the {SUBSCRIPTION_PREFIX!r} subscription sentinel) but "
+            "claude-agent-sdk is not installed in this environment — the extra is opt-in. Run "
+            "`uv sync --extra subscription` (and keep the flag on any explicit `uv sync`; a plain "
+            "`uv run` won't remove it), log the Claude Code CLI in, and unset ANTHROPIC_API_KEY. "
+            "See the subscription block in .env.example."
+        ) from exc
 
     return ClaudeAgentLM(model[len(SUBSCRIPTION_PREFIX):])
 
