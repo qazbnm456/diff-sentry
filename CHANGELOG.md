@@ -20,8 +20,10 @@ framework on [`rlm-kit`](https://github.com/qazbnm456/rlm-kit) (a BewAIre-style 
   stays dspy-free and a proxy-only install never pulls the extra. A sentinel-configured run in an env
   that never installed the extra fails LOUD with an actionable error naming
   `uv sync --extra subscription` (`uv lock` records the extra; only sync installs it).
-- **Studio: a page-height three-view stage.** The middle column is ONE verdict-alloy card fixed at page
-  height (content scrolls inside; a sticky head keeps the view switch reachable) with a top-right
+- **Studio: a page-height three-view stage.** The middle column is ONE verdict-alloy card filling a
+  viewport-height grid — all three columns are independent scroll tracks (feed / card / modules; the
+  page itself never scrolls, the family pattern), a sticky head keeps the view switch reachable, and
+  long attacker-influenced tokens wrap instead of being clipped by the module frame — with a top-right
   **Verdict / Indicators / Change** switch in triage order — Indicators always reachable, refusal
   included. Run telemetry leads the right column (the sibling-console convention); the header's
   `backend:self` chip is gone (API-only metadata now). The Change view is **trace-backed** for pr/issue

@@ -77,10 +77,13 @@ button { font-family:var(--mono); cursor:pointer; }
 /* ── layout ─────────────────────────────────────────────────────────────── */
 .layout {
   display:grid; grid-template-columns:340px minmax(0,1fr) 340px; gap:16px;
-  max-width:1720px; margin:0 auto; padding:20px 24px 96px; align-items:start;
+  max-width:1720px; margin:0 auto; padding:20px 24px;
+  /* The grid IS the viewport (56px sticky header above): the page never scrolls; each column is its
+     own independent scroll track (rail feed / stage card / meta modules) — the family pattern. */
+  height:calc(100vh - 56px);
 }
 .layout.no-meta { grid-template-columns:340px minmax(0,1fr); }
-.rail { display:flex; flex-direction:column; gap:16px; position:sticky; top:72px; }
+.rail { display:flex; flex-direction:column; gap:16px; min-height:0; }
 .panel { background:var(--surface-1); border:1px solid var(--border); border-radius:var(--radius); padding:12px; }
 .panel-label {
   font-size:.6875rem; text-transform:uppercase; letter-spacing:.08em; color:var(--text-faint);
@@ -129,7 +132,7 @@ button { font-family:var(--mono); cursor:pointer; }
 /* ── detection log (live feed) ──────────────────────────────────────────── */
 .feed-panel { flex:1; min-height:220px; display:flex; flex-direction:column; }
 .feed {
-  flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:2px; max-height:60vh;
+  flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:2px;
   -webkit-mask-image:linear-gradient(to bottom, transparent, #000 12px, #000 calc(100% - 10px), transparent);
           mask-image:linear-gradient(to bottom, transparent, #000 12px, #000 calc(100% - 10px), transparent);
 }
@@ -155,13 +158,12 @@ button { font-family:var(--mono); cursor:pointer; }
 .fr-detail.reason { font-family:var(--sans); font-style:italic; border-left:2px solid var(--border); padding-left:8px; }
 
 /* ── stage: the verdict-alloy card ──────────────────────────────────────── */
-.stage-col { min-width:0; display:flex; flex-direction:column; gap:16px; }
+.stage-col { min-width:0; min-height:0; display:flex; flex-direction:column; gap:16px; }
 .empty-stage, .skeleton-card {
   border:1px dashed var(--border); border-radius:var(--card-radius); padding:56px 24px; text-align:center;
   color:var(--text-faint); background:var(--surface-1);
-  /* centered, at the SAME page-height as the result card (same 420px floor) — no jump between states */
-  min-height:max(420px, calc(100vh - 172px));
-  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  /* centered, filling the same viewport-height column as the result card — no jump between states */
+  flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
 }
 .empty-stage .es-glyph { font-size:2.4rem; color:var(--border-strong); display:block; margin-bottom:12px; }
 /* the glyph is an inline SVG with only a viewBox: unsized it inflates to the full column width */
@@ -172,10 +174,9 @@ button { font-family:var(--mono); cursor:pointer; }
   border-top-color:var(--signal); animation:spin 1s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 
-/* The stage is page-height and STABLE — exact fit: 56px header + 20px top padding + the 96px bottom
-   band the fixed Trajectory pill floats in. Switching views or a long indicator list scrolls INSIDE
-   the card; with the default view the page itself does not scroll at all. */
-.stage-col .card { height:calc(100vh - 172px); min-height:420px; display:flex; flex-direction:column; }
+/* The card fills its viewport-height column (the .layout grid owns the height): switching views or a
+   long indicator list scrolls INSIDE the card, never the page. */
+.stage-col .card { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
 .stage-col .card-inner { flex:1; min-height:0; overflow-y:auto; }
 /* Keep the state headline + view switch reachable while the card body scrolls. Only the FIRST head —
    the badges row inside the verdict view is also a direct .card-head child and must scroll away. */
@@ -251,7 +252,11 @@ button { font-family:var(--mono); cursor:pointer; }
 .refusal .rf-reason { font-family:var(--mono); color:var(--iron-1); text-transform:uppercase; letter-spacing:.05em; font-size:.72rem; }
 
 /* ── right modules ──────────────────────────────────────────────────────── */
-.meta-col { display:flex; flex-direction:column; gap:14px; min-width:0; }
+.meta-col { display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; overflow-y:auto; }
+/* .module carries overflow:hidden (corner clipping), which flips its flex automatic min-size to 0 —
+   inside this fixed-height column the modules would COMPRESS to fit (content crushed, nothing left to
+   scroll) instead of overflowing. Pin them at content height; the COLUMN is the scroller. */
+.meta-col .module { flex-shrink:0; }
 .no-meta .meta-col { display:none; }
 .module { background:var(--surface-1); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
 .module-cap { height:3px; background:linear-gradient(90deg, var(--signal), transparent); }
@@ -288,12 +293,15 @@ button { font-family:var(--mono); cursor:pointer; }
 .ind-ev { display:block; margin-top:5px; padding:5px 7px; background:var(--surface-2); border-radius:var(--radius);
   font-size:.72rem; color:var(--text-dim); white-space:pre-wrap; word-break:break-word; }
 .ind-decoded { color:var(--sev-high); }
-.ind-loc { font-size:.68rem; color:var(--text-faint); margin-top:3px; }
+.ind-loc { font-size:.68rem; color:var(--text-faint); margin-top:3px; word-break:break-word; }
 .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
 .tchip { padding:3px 8px; border-radius:999px; background:var(--surface-3); border:1px solid var(--border);
+  max-width:100%; overflow-wrap:anywhere;
   font-size:.68rem; color:var(--text-dim); }
 .tchip.fab { color:var(--bad); border-color:var(--bad); }
-.prose { font-family:var(--sans); color:var(--text-dim); line-height:1.55; font-size:.82rem; }
+/* rationale/summary prose and chips carry attacker-influenced strings (URLs, paths, base64): an
+   unbreakable long token must WRAP — .module{overflow:hidden} would otherwise clip it invisible. */
+.prose { font-family:var(--sans); color:var(--text-dim); line-height:1.55; font-size:.82rem; word-break:break-word; }
 .siem-payload { background:var(--surface-3); border-radius:var(--radius); padding:8px 10px; overflow-x:auto;
   font-size:.72rem; color:var(--text-dim); margin-top:8px; white-space:pre; }
 .siem-on { color:var(--alert-1); font-weight:700; } .siem-off { color:var(--text-faint); }
@@ -385,10 +393,11 @@ summary { cursor:pointer; font-size:.74rem; color:var(--text-dim); }
 
 /* ── responsive ─────────────────────────────────────────────────────────── */
 @media (max-width:1280px) {
-  .layout, .layout.no-meta { grid-template-columns:340px minmax(0,1fr); }
-  .meta-col { grid-column:1 / -1; flex-direction:row; flex-wrap:wrap; }
+  /* two columns + the meta modules dropping to a full-width row: heights go auto, the page scrolls */
+  .layout, .layout.no-meta { grid-template-columns:340px minmax(0,1fr); height:auto; }
+  .feed { max-height:34vh; }
+  .meta-col { grid-column:1 / -1; flex-direction:row; flex-wrap:wrap; overflow-y:visible; }
   .meta-col .module { flex:1 1 280px; }
-  .rail { position:static; }
 }
 @media (max-width:760px) {
   .layout, .layout.no-meta { grid-template-columns:1fr; }
