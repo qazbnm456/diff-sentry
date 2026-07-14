@@ -1,6 +1,6 @@
 [project]
 name = "diff-sentry"
-version = "0.1.0"
+version = "0.2.0"
 description = "Classify a GitHub change (PR/issue/push) for malicious intent via an RLM harness — a BewAIre-style detector (rlm-kit consumer)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,6 +15,10 @@ dependencies = [
 # The swappable second-stage classifier's default `self` backend talks an OpenAI-compatible API.
 classify = ["openai>=1.0"]
 observe = ["langfuse>=4.6.1", "openinference-instrumentation-dspy>=0.1.36"]
+# Run planner + analyst on a Claude Pro/Max subscription (DS_ROOT_LM / DS_SUB_LM =
+# `claude-agent-sdk/<id>`) via the vendored diff_sentry/claude_agent_lm.py. Also needs the Claude
+# Code CLI installed + logged in — a runtime prerequisite pip can't express (see .env.example).
+subscription = ["claude-agent-sdk>=0.1.60"]
 
 [tool.uv.sources]
 # A downstream consumer of rlm-kit, overlaid editable for local co-dev (the dogfooding loop). Switch to a git

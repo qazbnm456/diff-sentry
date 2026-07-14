@@ -87,9 +87,18 @@ uv run python -m diff_sentry render output/traces/pr-7.jsonl pr-7    # re-render
 uv run python -m diff_sentry export "output/traces/*.jsonl" ds.json  # reward-free export (offline)
 ```
 
+Prefer a **Claude Pro/Max subscription** over an API key for the planner/analyst? Give either role a
+`claude-agent-sdk/<model>` value (e.g. `DS_SUB_LM=claude-agent-sdk/claude-fable-5`) and it runs on your
+personal Claude login via the official Claude Agent SDK — `uv sync --extra subscription`, log the Claude
+Code CLI in, and `unset ANTHROPIC_API_KEY`. The **classifier** always needs its own OpenAI-compatible
+endpoint (set `DS_CLASSIFIER_LM`), so a subscription-only end-to-end run isn't supported. See the
+subscription block in [`.env.example`](.env.example).
+
 ## Status
 
-**v0.1.0** — the classify → judgement-only verdict → deterministic-evidence union → response → reward-free
-export loop, fully offline-testable. Host-side GitHub ingestion and the SIEM emitter ship as real, injectable
+**v0.2.0** — the classify → judgement-only verdict → deterministic-evidence union → response → reward-free
+export loop, fully offline-testable. The planner/analyst can now run on a **Claude Pro/Max subscription**
+(`claude-agent-sdk/<model>`, the opt-in `subscription` extra); the classifier stays on its own
+OpenAI-compatible endpoint by design. Host-side GitHub ingestion and the SIEM emitter ship as real, injectable
 seams (unit-tested with fakes); wiring them to a live GitHub/SIEM and adding the cheap pre-filter tier are the
 next increments. Built on `rlm-kit` with **zero** changes to the kit — a consumer extends, it doesn't fork.

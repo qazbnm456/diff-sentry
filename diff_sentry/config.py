@@ -19,6 +19,11 @@ from typing import Optional
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
+# The sentinel model-string prefix that routes a ROLE onto the user's Claude Pro/Max SUBSCRIPTION via
+# the vendored ClaudeAgentLM (see detect._maybe_subscription_lm). A config-level naming convention, so
+# it lives in this dspy-free module; detect.py imports it for the actual (lazy, dspy-bearing) wiring.
+SUBSCRIPTION_PREFIX = "claude-agent-sdk/"
+
 # Enrichment fetch is ALLOWLISTED to GitHub hosts (MF2): the input is attacker-authored, and an
 # injected instruction could otherwise drive the SSRF-guarded fetcher to exfiltrate context to an
 # attacker-external URL. The kit's SSRF guard blocks INTERNAL targets; this allowlist blocks EXTERNAL
@@ -111,6 +116,26 @@ class DetectConfig:
         base_url = os.getenv("DS_BASE_URL")
         api_key = os.getenv("DS_API_KEY")
         classifier = os.getenv("DS_CLASSIFIER_LM") or analyst
+        # The classifier is a SEPARATE OpenAI-compatible client (deep_classify._selfclassify_chat →
+        # rlm-kit make_model_tool), NOT the subscription Agent SDK adapter — so its model can NEVER be
+        # a `claude-agent-sdk/…` sentinel. Two ways the sentinel could reach it, both config errors:
+        # an EXPLICIT DS_CLASSIFIER_LM set to a sentinel, or the DEFAULT inheriting a subscription
+        # DS_SUB_LM when DS_CLASSIFIER_LM is unset. `deep_classify` is ALWAYS registered, so a sentinel
+        # here would fail LATE — mid-trajectory, when the planner escalates, burning the one hard-budget
+        # attempt (max_retries=1) — so fail LOUD and actionable here rather than shipping the sentinel
+        # to the classifier endpoint as a bogus model id.
+        if classifier.startswith(SUBSCRIPTION_PREFIX):
+            inherited = not os.getenv("DS_CLASSIFIER_LM")
+            raise ValueError(
+                "The second-stage classifier cannot run on a Claude Pro/Max subscription — it is a "
+                "separate OpenAI-compatible endpoint (deep_classify's chat client), not the Agent SDK "
+                f"adapter, so its model may not use the {SUBSCRIPTION_PREFIX!r} sentinel. "
+                + ("DS_CLASSIFIER_LM is unset, so it inherited the subscription DS_SUB_LM. "
+                   if inherited
+                   else "DS_CLASSIFIER_LM is set to a subscription sentinel. ")
+                + "Set DS_CLASSIFIER_LM to the plain model id your classifier endpoint serves (and "
+                "DS_CLASSIFIER_BASE_URL / DS_CLASSIFIER_API_KEY if it is a separate box). See .env.example."
+            )
         _pmt = os.getenv("DS_PLANNER_MAX_TOKENS")
         return cls(
             main_model=planner,

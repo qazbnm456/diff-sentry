@@ -25,7 +25,7 @@ from rlm_kit import (
     render_skills_manifest,
 )
 
-from .config import DetectConfig
+from .config import DetectConfig, SUBSCRIPTION_PREFIX
 from .indicators import make_indicator_tool
 from .schema import ChangeVerdict
 
@@ -88,10 +88,36 @@ HARD RULES — do not violate:
   SUBMITs ships nothing — the worst outcome. Triage, escalate at most once on a genuine ambiguity, decide."""
 
 
+def _maybe_subscription_lm(model: str):
+    """A `ClaudeAgentLM` when a role's model uses the `claude-agent-sdk/` sentinel, else None.
+
+    Imports the vendored adapter LAZILY, inside the sentinel branch ONLY: `claude-agent-sdk` is the
+    optional `[subscription]` extra, so a proxy-only install (no sentinel) never imports it — and
+    `import diff_sentry` stays dspy-free. The stripped remainder is the Claude model — prefer a full
+    id (`claude-sonnet-5` / `claude-fable-5`) over an alias, which drifts over time.
+    """
+    if not model.startswith(SUBSCRIPTION_PREFIX):
+        return None
+    from .claude_agent_lm import ClaudeAgentLM
+
+    return ClaudeAgentLM(model[len(SUBSCRIPTION_PREFIX):])
+
+
 def setup(config: DetectConfig) -> DetectConfig:
-    """Configure rlm-kit (planner + analyst via the proxy) for this process."""
+    """Configure rlm-kit (planner + analyst) for this process.
+
+    A role whose model is `claude-agent-sdk/<id>` runs on the user's Claude Pro/Max SUBSCRIPTION (the
+    vendored `ClaudeAgentLM`, injected through configure's public seam); every other role is built from
+    the DS_* proxy, byte-identical to before. Mixed auth is by design — the classifier (a separate tool)
+    always stays on its own OpenAI-compatible endpoint, never routed through the subscription.
+    """
+    # None → configure builds a dspy.LM from the proxy config (the pre-existing behavior).
+    main_lm = _maybe_subscription_lm(config.main_model)
+    sub_lm = _maybe_subscription_lm(config.sub_model)
     rlm_kit.configure(
         RLMConfig(
+            # Inert once an LM is injected (configure builds from config ONLY for un-supplied seats),
+            # but still labels the trace + log; on the proxy path it is the real model built.
             main_model=config.main_model,
             sub_model=config.sub_model,
             api_key=config.api_key,
@@ -105,7 +131,9 @@ def setup(config: DetectConfig) -> DetectConfig:
             max_output_chars=config.max_output_chars,
             # ONE attempt, no whole-RLM retry: max_iterations is a HARD budget, never multiplied.
             max_retries=1,
-        )
+        ),
+        main_lm=main_lm,
+        sub_lm=sub_lm,
     )
     return config
 
