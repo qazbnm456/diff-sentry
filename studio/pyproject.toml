@@ -1,0 +1,33 @@
+[project]
+name = "diff-sentry-studio"
+version = "0.1.0"
+description = "SSE server + web frontend for diff-sentry — serve a run's DetectionResponse, replay its trace as live Server-Sent Events, and render the verdict, the deterministic indicator evidence, and the change diff as a detection console."
+requires-python = ">=3.11"  # matches the `live` sibling diff-sentry (>=3.11); keeps `uv run` resolvable
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+# `live` pulls diff-sentry (and through it dspy/rlm-kit) so POST /v1/classify can drive a real run.
+# Replay (the GET endpoints) needs none of it — keep it optional so a replay-only deploy stays light.
+# NOTE: diff-sentry consumes rlm-kit as an EDITABLE PATH dep (../rlm-kit), so a `live` install also
+# requires the ../rlm-kit sibling checkout to be present (the repo's existing state).
+live = ["diff-sentry"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+# In-repo: diff-sentry is the workspace ROOT package (studio/ is a member of it). The `live` extra
+# resolves it as a workspace dep — no sibling-dir assumption. External sources (rlm-kit) are declared at
+# the workspace root's pyproject and apply here transitively.
+[tool.uv.sources]
+diff-sentry = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["diff_sentry_studio"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

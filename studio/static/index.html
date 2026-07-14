@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>diff-sentry studio</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="wordmark"><span class="mark">▣</span> diff-sentry <span class="dim">studio</span></div>
+    <div class="header-right">
+      <div class="roles" id="roles">
+        <span class="chip" id="role-planner"><span class="dot"></span><span class="role-name">planner</span><span class="role-model"></span></span>
+        <span class="chip" id="role-analyst"><span class="dot"></span><span class="role-name">analyst</span><span class="role-model"></span></span>
+        <span class="chip" id="role-classifier"><span class="dot"></span><span class="role-name">classifier</span><span class="role-model"></span></span>
+        <span class="chip chip-backend" id="chip-backend" hidden></span>
+      </div>
+      <button id="theme-toggle" class="theme-toggle" title="Toggle light / dark" aria-label="Toggle theme">☾</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="rail">
+      <div class="panel input-panel">
+        <div class="panel-label">▾ Change</div>
+        <div class="mode-switch" id="mode-switch" role="tablist" aria-label="ingest mode">
+          <button class="mode-btn on" data-mode="classify" role="tab">paste</button>
+          <button class="mode-btn" data-mode="pr" role="tab">pr</button>
+          <button class="mode-btn" data-mode="issue" role="tab">issue</button>
+        </div>
+
+        <div class="mode-pane" id="pane-classify">
+          <textarea id="payload" class="text-input mono-area" spellcheck="false" rows="9"
+            placeholder='{"repo":"acme/widgets","kind":"pull_request","number":7,"author":"…","title":"…","body":"…","files":[{"filename":"…","patch":"…"}]}'></textarea>
+          <div class="row demo-row">
+            <select id="fixture-pick" class="text-input"><option value="">⚡ load a hackerbot demo…</option></select>
+          </div>
+          <div class="fixture-note" id="fixture-note" hidden></div>
+        </div>
+
+        <div class="mode-pane" id="pane-pr" hidden>
+          <input id="pr-repo" class="text-input" placeholder="owner/repo" spellcheck="false" />
+          <input id="pr-number" class="text-input" type="number" min="1" step="1" placeholder="PR number" />
+        </div>
+        <div class="mode-pane" id="pane-issue" hidden>
+          <input id="issue-repo" class="text-input" placeholder="owner/repo" spellcheck="false" />
+          <input id="issue-number" class="text-input" type="number" min="1" step="1" placeholder="issue number" />
+        </div>
+
+        <div class="row classify-row">
+          <button id="classify" class="btn btn-primary" disabled>Classify <span class="arrow">▶</span></button>
+        </div>
+        <div class="emit-note">SIEM emission is off in the studio — the signal decision + the would-send payload are shown, never POSTed.</div>
+
+        <div class="or-divider"><span>or load a past run</span></div>
+        <div class="row">
+          <input id="load-id" class="text-input" list="runs" placeholder="pick or type a run id…" spellcheck="false" />
+          <button id="load" class="btn btn-ghost">Load</button>
+        </div>
+        <datalist id="runs"></datalist>
+        <div class="hint" id="runs-hint"></div>
+      </div>
+
+      <div class="panel feed-panel">
+        <div class="panel-label">▾ Detection log</div>
+        <div class="feed" id="feed" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section class="stage-col" id="stage-col">
+      <!-- the verdict-alloy card (+ the change diff) or skeleton / empty placeholder render here -->
+    </section>
+
+    <aside class="meta-col" id="meta-col">
+      <!-- INDICATORS (the star), telemetry, verdict detail, SIEM signal, summary render here -->
+    </aside>
+  </main>
+
+  <button id="traj-handle" class="traj-handle" hidden aria-expanded="false" aria-controls="traj-drawer">
+    <span class="th-ic">▤</span><span class="th-text">Trajectory</span><span class="th-up">▲</span>
+  </button>
+  <div id="traj-backdrop" class="traj-backdrop" hidden></div>
+  <section id="traj-drawer" class="traj-drawer" hidden aria-label="Trajectory breakdown" aria-modal="true" role="dialog">
+    <header class="traj-head">
+      <div class="traj-id"><span class="traj-tag">Trajectory</span><span id="traj-run" class="traj-run"></span></div>
+      <div class="traj-stat" id="traj-stat"></div>
+      <div class="traj-tools">
+        <div class="traj-transport" role="group" aria-label="replay controls">
+          <button id="traj-prev" class="tctl" title="previous step (←; rewind while playing)" aria-label="previous step">⏮</button>
+          <button id="traj-play" class="tctl tctl-play" title="play / pause" aria-label="play / pause">▶</button>
+          <button id="traj-next" class="tctl" title="next step (→; fast-forward while playing)" aria-label="next step">⏭</button>
+          <button id="traj-speed" class="tctl tctl-speed" title="replay speed: real time ÷ this (higher = faster)" aria-label="replay speed">2×</button>
+        </div>
+        <button id="traj-expand" class="traj-close" title="expand (full screen)" aria-label="expand">⤢</button>
+        <button id="traj-close" class="traj-close" title="close (Esc)" aria-label="close">✕</button>
+      </div>
+    </header>
+    <div class="traj-progress" id="traj-progress" hidden>
+      <span class="tp-label" id="traj-progress-label"></span>
+      <div class="tp-track"><span class="tp-fill" id="traj-progress-fill"></span></div>
+    </div>
+    <div class="traj-note" id="traj-note"></div>
+    <div class="traj-timeline-wrap">
+      <div class="traj-axis"><span>start</span><span id="traj-axis-end"></span></div>
+      <div class="traj-timeline" id="traj-timeline" role="list" aria-label="tool timeline (width is time)"></div>
+    </div>
+    <div class="traj-main">
+      <div class="traj-nav">
+        <div class="traj-search-wrap">
+          <input id="traj-search" class="traj-search" type="search" spellcheck="false"
+            placeholder="search turns…" aria-label="search turn content" />
+          <span id="traj-search-count" class="traj-search-count"></span>
+        </div>
+        <nav class="traj-steps" id="traj-steps" aria-label="iterations"></nav>
+      </div>
+      <div class="traj-detail" id="traj-detail"></div>
+    </div>
+  </section>
+
+  <script src="/static/replay-core.js"></script>
+  <script src="/static/run-core.js"></script>
+  <script src="/static/trajectory.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

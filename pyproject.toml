@@ -21,6 +21,14 @@ observe = ["langfuse>=4.6.1", "openinference-instrumentation-dspy>=0.1.36"]
 # source (uv.lock pinning the commit) for CI, exactly as the other consumers do, once this stabilizes.
 rlm-kit = { path = "../rlm-kit", editable = true }
 
+# The visualization console ships IN-REPO as its own package (studio/) — a uv workspace member, NOT part
+# of the `diff_sentry` wheel. It reads this package's trace/DetectionResponse contract, so co-locating
+# keeps them in sync; its web stack (fastapi/uvicorn/frontend) stays behind the package boundary + the
+# studio's `live` optional extra, so a harness-only install never pulls it. The external path source
+# (rlm-kit) lives here at the workspace root and applies to every member.
+[tool.uv.workspace]
+members = ["studio"]
+
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 
