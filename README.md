@@ -28,7 +28,7 @@ guarantee about itself.
 | Ingest (host-side) | `ingest.py` | `gh api` PR/issue → a change-event dict (transport injectable). |
 | Normalize | `normalize.py` | Derived metadata at the **head AND tail** so dspy's ~1000-char input preview shows structure, not attacker free-text (MF1). |
 | Classify | `detect.py` | `ClassifyChange(RLMTask)`, a MISSION-framed judgement-only task; interpreter `pyodide` — **reads, never executes** the change. |
-| Deterministic detectors | `indicators.py` | Pure-Python, in-loop-safe (no subprocess): `${IFS}`, `curl \| bash`, base64 de-obfuscation, CODEOWNERS/workflow tamper, prompt-injection, exfiltration. |
+| Deterministic detectors | `indicators.py` | Pure-Python, in-loop-safe (no subprocess): `${IFS}`, `curl \| bash`, base64 de-obfuscation, CODEOWNERS/workflow tamper, `permissions: write-all` escalation, CI-skip bypass, secret/`/proc/<pid>/mem` exfiltration, known OAST/exfil callback domains, prompt-injection. |
 | Second stage | `deep_classify.py` | A swappable classifier via `rlm_kit.tools.make_model_tool` — the main LM *chooses* to consult it, so the decision is a `tool_call` in the trajectory. |
 | Assemble | `assemble.py` | Unions **all** indicator hits from the trace (baseline ∪ tool calls) and derives `signal` — a benign self-report can't suppress hard evidence (MF3). |
 | Emit (host-side) | `emit.py` | POST the signal to a SIEM webhook after the run — plumbing, not a planner tool (the planner never holds SIEM creds). |

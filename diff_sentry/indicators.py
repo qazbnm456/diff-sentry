@@ -72,12 +72,51 @@ _B64_RE = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 # Exfiltration: environment/secret READS and a secret NAME piped to a network sink. Deliberately NOT the
 # bare token name alone (a legit workflow uses `${{ secrets.GITHUB_TOKEN }}`) and NOT `export X=$Y`
 # (`export PATH=$PATH:…` is a normal idiom) — the secret must actually reach an exfil verb to fire.
+# `/proc/<pid>/mem` (and maps) reading ANOTHER process is the runner-memory-dump technique from the
+# tj-actions supply-chain incident; the secret-name alternation covers the CI token families that class of
+# attack harvests. `self/maps` is deliberately EXCLUDED — parsing your own memory map is textbook legit
+# native tooling (crash reporters, profilers, sanitizers); the cross-process (`\d+`) reads are the tell.
 _EXFIL_RE = re.compile(
-    r"printenv|env\s*\||/proc/self/environ|~/\.aws/credentials|"
-    r"(?:AWS_SECRET_ACCESS_KEY|GITHUB_TOKEN|NPM_TOKEN)\b[^\n]{0,80}?(?:curl|wget|nc\b|https?://|\|\s*(?:ba)?sh)",
+    r"printenv|env\s*\||/proc/(?:self/(?:environ|mem)|\d+/(?:environ|mem|maps))|~/\.aws/credentials|"
+    r"(?:AWS_SECRET_ACCESS_KEY|GITHUB_TOKEN|NPM_TOKEN|NODE_AUTH_TOKEN|PYPI_TOKEN|ACTIONS_RUNTIME_TOKEN|"
+    r"ACTIONS_ID_TOKEN_REQUEST_TOKEN|CARGO_REGISTRY_TOKEN|TWINE_PASSWORD|NUGET_API_KEY)\b"
+    r"[^\n]{0,80}?(?:curl|wget|nc\b|https?://|\|\s*(?:ba)?sh)",
     re.IGNORECASE)
 _CI_PATH_RE = re.compile(r"(?:^|[\s\"'/])(\.github/workflows/[^\s\"']+|CODEOWNERS)\b")
 _RAW_IP_URL_RE = re.compile(r"https?://\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?/\S*")
+
+# Exfil sinks come in TWO precision tiers. The enrichment-fetch allowlist (MF2) owns "org-owned vs
+# external"; THIS is the detection side — a NAMED list, not "any external host".
+# Tier 1 — OAST / interaction / request-bin services whose ONLY purpose is receiving out-of-band callbacks
+# (the tj-actions gist/webhook-callback shape). A committed reference has NO legitimate use → `high`.
+_OAST_DOMAINS = (
+    "webhook.site", "requestbin.com", "requestbin.net", "burpcollaborator.net",
+    "oast.pro", "oast.live", "oast.site", "oast.online", "oast.fun", "oast.me",
+    "interactsh.com", "dnslog.cn", "hookbin.com",
+)
+_OAST_DOMAIN_RE = re.compile(r"\b(?:" + "|".join(re.escape(d) for d in _OAST_DOMAINS) + r")\b", re.IGNORECASE)
+# Tier 2 — dev tunnels / API-mock services. Heavily ABUSED as exfil sinks, BUT with mainstream legitimate
+# use (smee.io is GitHub's own Probot webhook proxy; ngrok/beeceptor appear in ordinary dev READMEs). So a
+# corroborating `medium` — BELOW the signal floor — never a standalone signal (the FP-safe tier).
+_TUNNEL_DOMAINS = (
+    "ngrok.io", "ngrok-free.app", "ngrok.app", "ngrok.dev", "smee.io",
+    "beeceptor.com", "pipedream.net", "trycloudflare.com", "serveo.net",
+)
+_TUNNEL_DOMAIN_RE = re.compile(r"\b(?:" + "|".join(re.escape(d) for d in _TUNNEL_DOMAINS) + r")\b", re.IGNORECASE)
+
+# CI-bypass markers: a commit/PR that skips the CI checks a malicious change would otherwise trip. Legit
+# uses exist (a docs-only commit), so `medium` — BELOW the signal floor: a corroborating tell, never a
+# standalone smoking gun (mirrors `workflow-tamper`'s tuning; a real payload fires its own high rule).
+# GitHub honors [skip ci]/[ci skip]/[no ci]/[skip actions]/[actions skip] and the skip-checks trailer.
+_CI_BYPASS_RE = re.compile(
+    r"\[\s*(?:skip[\s_-]*ci|ci[\s_-]*skip|no[\s_-]*ci|skip[\s_-]*actions|actions[\s_-]*skip)\s*\]"
+    r"|skip-checks\s*:\s*true", re.IGNORECASE)
+
+# Workflow permission escalation: an over-broad `permissions: write-all` grant — the "permission model
+# change" the malicious-PR research flags. Rare and high-signal, like a CODEOWNERS reassignment → `high`.
+# LINE-ANCHORED (MULTILINE) on the YAML shorthand and NOT on a diff `-` deletion line, so REMOVING a
+# write-all (the recommended hardening after tj-actions) and prose mentions do NOT fire.
+_WRITE_ALL_RE = re.compile(r"^[+ ]?\s*permissions\s*:\s*write-all\b", re.IGNORECASE | re.MULTILINE)
 
 # Prompt-injection phrases — the class of payload hackerbot-claw aimed at a claude-code-action workflow.
 _INJECTION_PHRASES = (
@@ -125,7 +164,9 @@ def _scan_obfuscation(text: str) -> list[IndicatorHit]:
         if not decoded.isprintable() and "\n" not in decoded:
             continue
         # Only flag base64 that DECODES to something suspicious — a plain data blob isn't an indicator.
-        inner = _scan_shell(decoded) + _scan_urls(decoded) + _scan_exfil(decoded)
+        # (Rescan shell/exfil/URL/callback-domain payloads; CI-skip and permission markers aren't usefully
+        # base64-wrapped, so they're not in the inner set.)
+        inner = _scan_shell(decoded) + _scan_urls(decoded) + _scan_exfil(decoded) + _scan_exfil_domains(decoded)
         if inner:
             worst = max((h.severity for h in inner), key=lambda s: _sev_rank(s))
             hits.append(_hit("obfuscated-payload", worst,
@@ -144,6 +185,32 @@ def _scan_urls(text: str) -> list[IndicatorHit]:
     return [_hit("raw-ip-url", "medium", "hardcoded raw-IP URL (possible C2 / non-standard host)",
                  _snip(text, m.start(), m.end()))
             for m in _RAW_IP_URL_RE.finditer(text)]
+
+
+def _scan_exfil_domains(text: str) -> list[IndicatorHit]:
+    hits = [_hit("exfil-infrastructure", "high",
+                 "references a known exfil / OAST callback service (no legitimate use in a change)",
+                 _snip(text, m.start(), m.end()))
+            for m in _OAST_DOMAIN_RE.finditer(text)]
+    hits += [_hit("dev-tunnel-endpoint", "medium",
+                  "references a dev-tunnel / API-mock service (abused as an exfil sink)",
+                  _snip(text, m.start(), m.end()))
+             for m in _TUNNEL_DOMAIN_RE.finditer(text)]
+    return hits
+
+
+def _scan_ci_bypass(text: str) -> list[IndicatorHit]:
+    return [_hit("ci-bypass", "medium",
+                 "CI-skip marker (evades the checks a malicious change would trip)",
+                 _snip(text, m.start(), m.end()))
+            for m in _CI_BYPASS_RE.finditer(text)]
+
+
+def _scan_workflow_perms(text: str) -> list[IndicatorHit]:
+    return [_hit("workflow-permission-escalation", "high",
+                 "over-broad workflow permission grant (`write-all`)",
+                 _snip(text, m.start(), m.end()))
+            for m in _WRITE_ALL_RE.finditer(text)]
 
 
 def _scan_ci_paths(text: str) -> list[IndicatorHit]:
@@ -192,7 +259,8 @@ def scan_indicators(text: str, *, location: str = "") -> list[IndicatorHit]:
     text = text or ""
     all_hits = (
         _scan_shell(text) + _scan_obfuscation(text) + _scan_exfil(text) + _scan_urls(text)
-        + _scan_ci_paths(text) + _scan_injection(text) + _scan_entropy(text)
+        + _scan_exfil_domains(text) + _scan_ci_paths(text) + _scan_ci_bypass(text)
+        + _scan_workflow_perms(text) + _scan_injection(text) + _scan_entropy(text)
     )
     deduped: dict[str, IndicatorHit] = {}
     for h in all_hits:
@@ -210,7 +278,8 @@ def make_indicator_tool() -> Callable[[str], str]:
 
     def scan_indicators_tool(region: str) -> str:
         """Scan a snippet of the change (or a value you decoded) for malicious indicators — shell
-        injection, obfuscated payloads, exfiltration, CI/CODEOWNERS tampering, prompt injection. Returns
+        injection, obfuscated payloads, secret exfiltration, known exfil/OAST callback services,
+        CI/CODEOWNERS tampering, workflow permission escalation, CI-skip bypass, prompt injection. Returns
         the hits found (id, rule, severity, title). Cite an id in your final `indicator_ids`."""
         hits = scan_indicators(region or "")
         record_tool_call("scan_indicators", args={"region": (region or "")[:200]}, ok=True,

