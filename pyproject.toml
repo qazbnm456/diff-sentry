@@ -4,6 +4,9 @@ version = "0.2.0"
 description = "Classify a GitHub change (PR/issue/push) for malicious intent via an RLM harness — a BewAIre-style detector (rlm-kit consumer)."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Boik Su" }]
+keywords = ["rlm", "dspy", "security", "malicious-code-detection", "supply-chain-security", "prompt-injection", "siem"]
 dependencies = [
     # rlm-kit is consumed via a git source until it ships on PyPI (see [tool.uv.sources]).
     "rlm-kit",
