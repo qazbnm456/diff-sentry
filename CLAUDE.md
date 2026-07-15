@@ -20,8 +20,9 @@ One companion rule ships under `.claude/rules/`:
   Deno: dspy-bearing paths use DummyLM / rlm-kit's `ScriptedInterpreter` (the offline forward path),
   transports are injected fakes, and the detection-quality corpus (`tests/corpus/`) pins the indicator
   suite's hit/miss behavior.
-- `uvx ruff check .` — lint (ruff defaults, line-length 110). Not part of the pytest suite, and this
-  repo has no CI yet — run it yourself and keep it green, exactly as the siblings' CI gates it.
+- `uvx ruff check .` — lint (ruff defaults, line-length 110). Not part of the pytest suite; CI gates it
+  as its own job (`.github/workflows/ci.yml` — both suites + node tests + ruff, mirroring the siblings),
+  so keep it green locally too.
 - A *live* run needs role creds (`DS_*`, see `.env.example`), a Deno sandbox (`brew install deno`), and
   `gh` for `pr`/`issue` ingest. `render`/`export` are fully offline; `classify` ingests offline but
   classifies live.

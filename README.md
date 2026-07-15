@@ -106,4 +106,8 @@ export loop, fully offline-testable. The planner/analyst can now run on a **Clau
 (`claude-agent-sdk/<model>`, the opt-in `subscription` extra); the classifier stays on its own
 OpenAI-compatible endpoint by design. Host-side GitHub ingestion and the SIEM emitter ship as real, injectable
 seams (unit-tested with fakes); wiring them to a live GitHub/SIEM and adding the cheap pre-filter tier are the
-next increments. Built on `rlm-kit` with **zero** changes to the kit — a consumer extends, it doesn't fork.
+next increments. CI gates the offline suite + ruff on every push/PR (`.github/workflows/ci.yml`). A further
+tracked increment: a self-review workflow that dogfoods the detector on this repo's own incoming PRs/issues —
+structurally safe because the change is ingested as *data* (never checked out, never executed) and a skewed
+verdict cannot suppress the evidence union; advisory comment only, never a required merge check. Built on
+`rlm-kit` with **zero** changes to the kit — a consumer extends, it doesn't fork.
