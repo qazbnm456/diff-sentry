@@ -5,7 +5,7 @@ description = "Classify a GitHub change (PR/issue/push) for malicious intent via
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    # Consumed via a local editable path until rlm-kit ships on PyPI (see [tool.uv.sources]).
+    # rlm-kit is consumed via a git source until it ships on PyPI (see [tool.uv.sources]).
     "rlm-kit",
     "pydantic>=2.0",
     "httpx>=0.27",      # the GitHub-allowlisted enrichment fetcher + the host-side SIEM emitter
@@ -20,15 +20,17 @@ observe = ["langfuse>=4.6.1", "openinference-instrumentation-dspy>=0.1.36"]
 # Code CLI installed + logged in — a runtime prerequisite pip can't express (see .env.example).
 subscription = ["claude-agent-sdk>=0.1.60"]
 
+# rlm-kit is public but not yet on PyPI, so it comes in via git (uv.lock pins the exact commit); swap to
+# a version spec once it ships on PyPI. The dogfooding loop rlm-kit is designed around still holds: when
+# co-developing rlm-kit locally, overlay an editable install (`uv pip install -e ../rlm-kit`) or bump
+# this ref after pushing, so a fix that surfaces here can be promoted into the kit.
 [tool.uv.sources]
-# A downstream consumer of rlm-kit, overlaid editable for local co-dev (the dogfooding loop). Switch to a git
-# source (uv.lock pinning the commit) for CI, exactly as the other consumers do, once this stabilizes.
-rlm-kit = { path = "../rlm-kit", editable = true }
+rlm-kit = { git = "https://github.com/qazbnm456/rlm-kit.git", branch = "main" }
 
 # The visualization console ships IN-REPO as its own package (studio/) — a uv workspace member, NOT part
 # of the `diff_sentry` wheel. It reads this package's trace/DetectionResponse contract, so co-locating
 # keeps them in sync; its web stack (fastapi/uvicorn/frontend) stays behind the package boundary + the
-# studio's `live` optional extra, so a harness-only install never pulls it. The external path source
+# studio's `live` optional extra, so a harness-only install never pulls it. The external git source
 # (rlm-kit) lives here at the workspace root and applies to every member.
 [tool.uv.workspace]
 members = ["studio"]

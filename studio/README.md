@@ -117,9 +117,9 @@ sandbox (`brew install deno`) for the pyodide REPL, and `gh` for `pr`/`issue` in
 `diff_sentry` the live worker raises `ModuleNotFoundError` — the stream still completes with a `failed`
 card, but nothing runs.
 
-Because `diff-sentry` consumes **rlm-kit as an editable path dep** (`../rlm-kit`), a live studio needs
-that sibling checked out next to the repo, exactly as the root `README.md` requires. Replay-only does
-not.
+`diff-sentry` consumes **rlm-kit as a commit-pinned git source**, so `uv sync` is self-contained — no
+sibling checkout needed. Co-developing rlm-kit locally? Overlay it editable (`uv pip install -e
+../rlm-kit`) so your local edits are picked up.
 
 Do the root env setup first (`cp .env.example .env` and fill it in — see the root `README.md`); the
 studio reads `os.environ` directly and does **not** auto-load `.env`, so source it into your shell:

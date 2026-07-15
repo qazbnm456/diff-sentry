@@ -4,8 +4,9 @@ A **BewAIre-style malicious-change detector** built on `rlm-kit` — a downstrea
 scaffold, alongside `cve-reverser`. It classifies ONE GitHub change (PR/issue/push)
 for malicious intent: the diff is UNTRUSTED DATA held in a sandboxed REPL, the planner SUBMITs a
 judgement-only verdict, and the deterministic indicator EVIDENCE is unioned on read into a SIEM signal.
-rlm-kit is consumed as a **local editable path dep** (`../rlm-kit`, `[tool.uv.sources]`) — never
-pip-install it; switch to a commit-pinned git source (like the siblings) once this stabilizes. See
+rlm-kit is consumed as a **commit-pinned git source** (`[tool.uv.sources]` → GitHub, `uv.lock` pins the
+commit — like the siblings); never pip-install it, and overlay `uv pip install -e ../rlm-kit` only when
+co-developing the kit locally. See
 `README.md` for the pipeline table + the honest caveats (prompt-injection residual, deep-tier scale),
 and rlm-kit's **"Building a consumer"** for the extension contract this project lives within.
 

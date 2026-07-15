@@ -11,8 +11,8 @@ dependencies = [
 [project.optional-dependencies]
 # `live` pulls diff-sentry (and through it dspy/rlm-kit) so POST /v1/classify can drive a real run.
 # Replay (the GET endpoints) needs none of it — keep it optional so a replay-only deploy stays light.
-# NOTE: diff-sentry consumes rlm-kit as an EDITABLE PATH dep (../rlm-kit), so a `live` install also
-# requires the ../rlm-kit sibling checkout to be present (the repo's existing state).
+# NOTE: diff-sentry consumes rlm-kit as a COMMIT-PINNED GIT source (workspace-root [tool.uv.sources]),
+# so a `live` install is self-contained — no ../rlm-kit sibling checkout needed.
 live = ["diff-sentry"]
 dev = ["pytest>=8", "httpx>=0.27"]
 

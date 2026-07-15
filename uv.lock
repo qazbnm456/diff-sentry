@@ -546,7 +546,7 @@ requires-dist = [
     { name = "openai", marker = "extra == 'classify'", specifier = ">=1.0" },
     { name = "openinference-instrumentation-dspy", marker = "extra == 'observe'", specifier = ">=0.1.36" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "rlm-kit", editable = "../rlm-kit" },
+    { name = "rlm-kit", git = "https://github.com/qazbnm456/rlm-kit.git?branch=main" },
 ]
 provides-extras = ["classify", "observe", "subscription"]
 
@@ -2300,27 +2300,10 @@ wheels = [
 [[package]]
 name = "rlm-kit"
 version = "0.2.0"
-source = { editable = "../rlm-kit" }
+source = { git = "https://github.com/qazbnm456/rlm-kit.git?branch=main#48374a16de6862d3e702d2fea3942626000d2d7a" }
 dependencies = [
     { name = "dspy" },
     { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "dspy", specifier = ">=3.2.1" },
-    { name = "jsonschema", marker = "extra == 'jsonschema'", specifier = ">=4.0" },
-    { name = "langfuse", marker = "extra == 'observe'", specifier = ">=4.6.1" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0" },
-    { name = "openinference-instrumentation-dspy", marker = "extra == 'observe'", specifier = ">=0.1.36" },
-    { name = "pydantic", specifier = ">=2.9" },
-]
-provides-extras = ["observe", "mcp", "jsonschema"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
 ]
 
 [[package]]
