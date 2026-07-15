@@ -20,7 +20,7 @@ from typing import Optional
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 # The sentinel model-string prefix that routes a ROLE onto the user's Claude Pro/Max SUBSCRIPTION via
-# the vendored ClaudeAgentLM (see detect._maybe_subscription_lm). A config-level naming convention, so
+# rlm-kit's ClaudeAgentLM (see detect._maybe_subscription_lm). A config-level naming convention, so
 # it lives in this dspy-free module; detect.py imports it for the actual (lazy, dspy-bearing) wiring.
 SUBSCRIPTION_PREFIX = "claude-agent-sdk/"
 

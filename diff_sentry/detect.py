@@ -91,18 +91,20 @@ HARD RULES — do not violate:
 def _maybe_subscription_lm(model: str):
     """A `ClaudeAgentLM` when a role's model uses the `claude-agent-sdk/` sentinel, else None.
 
-    Imports the vendored adapter LAZILY, inside the sentinel branch ONLY: `claude-agent-sdk` is the
-    optional `[subscription]` extra, so a proxy-only install (no sentinel) never imports it — and
-    `import diff_sentry` stays dspy-free. The stripped remainder is the Claude model — prefer a full
-    id (`claude-sonnet-5` / `claude-fable-5`) over an alias, which drifts over time.
+    Imports rlm-kit's `ClaudeAgentLM` LAZILY, inside the sentinel branch ONLY, so `import diff_sentry`
+    stays dspy-free and a proxy-only install (no sentinel) never touches it. `claude-agent-sdk` is the
+    optional `[subscription]` extra; the kit defers that import to construction, so a missing SDK
+    surfaces as an `ImportError` at build time HERE — re-raised as our uv-workflow-specific actionable
+    message. The stripped remainder is the Claude model — prefer a full id (`claude-sonnet-5` /
+    `claude-fable-5`) over an alias, which drifts over time.
     """
     if not model.startswith(SUBSCRIPTION_PREFIX):
         return None
+    from rlm_kit import ClaudeAgentLM
+
     try:
-        from .claude_agent_lm import ClaudeAgentLM
-    except ModuleNotFoundError as exc:
-        if exc.name != "claude_agent_sdk":
-            raise
+        return ClaudeAgentLM(model[len(SUBSCRIPTION_PREFIX):])
+    except ImportError as exc:
         raise ModuleNotFoundError(
             f"A role's model is {model!r} (the {SUBSCRIPTION_PREFIX!r} subscription sentinel) but "
             "claude-agent-sdk is not installed in this environment — the extra is opt-in. Run "
@@ -111,14 +113,12 @@ def _maybe_subscription_lm(model: str):
             "See the subscription block in .env.example."
         ) from exc
 
-    return ClaudeAgentLM(model[len(SUBSCRIPTION_PREFIX):])
-
 
 def setup(config: DetectConfig) -> DetectConfig:
     """Configure rlm-kit (planner + analyst) for this process.
 
-    A role whose model is `claude-agent-sdk/<id>` runs on the user's Claude Pro/Max SUBSCRIPTION (the
-    vendored `ClaudeAgentLM`, injected through configure's public seam); every other role is built from
+    A role whose model is `claude-agent-sdk/<id>` runs on the user's Claude Pro/Max SUBSCRIPTION
+    (rlm-kit's `ClaudeAgentLM`, injected through configure's public seam); every other role is built from
     the DS_* proxy, byte-identical to before. Mixed auth is by design — the classifier (a separate tool)
     always stays on its own OpenAI-compatible endpoint, never routed through the subscription.
     """

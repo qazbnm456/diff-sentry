@@ -19,8 +19,9 @@ dependencies = [
 classify = ["openai>=1.0"]
 observe = ["langfuse>=4.6.1", "openinference-instrumentation-dspy>=0.1.36"]
 # Run planner + analyst on a Claude Pro/Max subscription (DS_ROOT_LM / DS_SUB_LM =
-# `claude-agent-sdk/<id>`) via the vendored diff_sentry/claude_agent_lm.py. Also needs the Claude
-# Code CLI installed + logged in — a runtime prerequisite pip can't express (see .env.example).
+# `claude-agent-sdk/<id>`) via rlm-kit's `rlm_kit.ClaudeAgentLM`. Installs the Claude Agent SDK the
+# adapter needs; also needs the Claude Code CLI installed + logged in — a runtime prerequisite pip
+# can't express (see .env.example).
 subscription = ["claude-agent-sdk>=0.1.60"]
 
 # rlm-kit is public but not yet on PyPI, so it comes in via git (uv.lock pins the exact commit); swap to

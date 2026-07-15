@@ -112,10 +112,11 @@ One companion rule ships under `.claude/rules/`:
 - **Keep the dspy-free modules dspy-free.** `config.py`, `schema.py`, `normalize.py`,
   `indicators.py`, `assemble.py`, `response.py`, `emit.py`, `ingest.py`, `rl_export.py` must not
   import dspy at module top; `import diff_sentry` must not import dspy (`ClassifyChange` / `setup` /
-  `run` / `detect_from_event` are lazy PEP 562 re-exports). The vendored `claude_agent_lm.py` (the
-  Claude-subscription adapter) is dspy-bearing BY DESIGN and is therefore deliberately NOT on this
-  list — it is imported LAZILY (only inside `detect.setup()`'s `claude-agent-sdk/` sentinel branch,
-  via `_maybe_subscription_lm`) and never from `__init__.py`, so `import diff_sentry` stays dspy-free.
+  `run` / `detect_from_event` are lazy PEP 562 re-exports). The Claude-subscription adapter is now
+  `rlm_kit.ClaudeAgentLM` (promoted INTO the rlm-kit wheel — no longer vendored here); it is
+  dspy/SDK-bearing BY DESIGN and imported LAZILY (`from rlm_kit import ClaudeAgentLM`, only inside
+  `detect.setup()`'s `claude-agent-sdk/` sentinel branch, via `_maybe_subscription_lm`) and never from
+  `__init__.py`, so `import diff_sentry` stays dspy-free.
   The classifier NEVER runs on the subscription (its model may not carry the `claude-agent-sdk/`
   sentinel — `config.from_env` rejects it, explicit or inherited); mixed auth is by design.
 - **The trace self-describes the run.** `run_start` meta carries the normalized event, the

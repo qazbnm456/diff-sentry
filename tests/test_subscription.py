@@ -1,7 +1,7 @@
 """Subscription-path wiring: the classifier-hazard guard (config) + the sentinel router (detect).
 
 Runs WITHOUT the `[subscription]` extra: the hazard tests touch only dspy-free config.from_env; the
-router test exercises only the NON-sentinel branch (which never imports the vendored adapter). The
+router test exercises only the NON-sentinel branch (which never imports rlm-kit's adapter). The
 sentinel branch, which imports claude-agent-sdk, is left to a live run / an env that has the extra.
 """
 
@@ -86,19 +86,23 @@ def test_maybe_subscription_lm_missing_extra_is_actionable(monkeypatch):
 
     from diff_sentry.detect import _maybe_subscription_lm
 
-    monkeypatch.delitem(sys.modules, "diff_sentry.claude_agent_lm", raising=False)
-    monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)  # import → ModuleNotFoundError
+    # rlm-kit defers the SDK import to ClaudeAgentLM construction; None in sys.modules makes that
+    # `import claude_agent_sdk` raise, so the missing extra surfaces at build time, not at module import.
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)
     with pytest.raises(ModuleNotFoundError) as exc:
         _maybe_subscription_lm("claude-agent-sdk/claude-sonnet-5")
     assert "uv sync --extra subscription" in str(exc.value)
 
 
 def test_maybe_subscription_lm_non_sentinel_returns_none():
-    """The router returns None for a non-sentinel model WITHOUT importing the vendored adapter/SDK."""
+    """The router returns None for a non-sentinel model WITHOUT importing the adapter/SDK."""
     pytest.importorskip("dspy")  # importing detect pulls dspy+rlm_kit, present in the dev env
     import sys
 
     from diff_sentry.detect import _maybe_subscription_lm
 
+    had_adapter = "rlm_kit.claude_agent_lm" in sys.modules  # a prior sentinel test may have loaded it
     assert _maybe_subscription_lm("openai/gpt-4o") is None
-    assert "diff_sentry.claude_agent_lm" not in sys.modules
+    # the non-sentinel branch returns BEFORE the lazy `from rlm_kit import ClaudeAgentLM`, so the call
+    # must not NEWLY import the adapter (robust to test ordering, unlike a bare `not in sys.modules`)
+    assert ("rlm_kit.claude_agent_lm" in sys.modules) == had_adapter

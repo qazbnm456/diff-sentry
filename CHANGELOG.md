@@ -10,16 +10,17 @@ framework on [`rlm-kit`](https://github.com/qazbnm456/rlm-kit) (a BewAIre-style 
 ### Added
 - **Run the planner + analyst on a Claude Pro/Max SUBSCRIPTION** (no API key). Give `DS_ROOT_LM` /
   `DS_SUB_LM` a `claude-agent-sdk/<model>` value and that role runs on your personal Claude login
-  through the vendored `diff_sentry/claude_agent_lm.py` (`ClaudeAgentLM`, a `dspy.BaseLM` over
-  `claude-agent-sdk`), injected via rlm-kit's `configure(main_lm=, sub_lm=)` seam. Each call is a pure
-  completion — no tools, no filesystem, no settings leakage — so the sandbox stays the only place code
-  runs. Opt-in extra: `uv sync --extra subscription`; requires the Claude Code CLI logged in and
-  `ANTHROPIC_API_KEY` unset (the adapter refuses to start otherwise). Vendored per the base/wrap split
-  (rlm-kit ships the adapter only under `examples/`, not in its wheel; provenance + re-sync in
-  `VENDOR.md`). Imported lazily (only in `detect.setup()`'s sentinel branch) so `import diff_sentry`
-  stays dspy-free and a proxy-only install never pulls the extra. A sentinel-configured run in an env
-  that never installed the extra fails LOUD with an actionable error naming
-  `uv sync --extra subscription` (`uv lock` records the extra; only sync installs it).
+  through rlm-kit's `rlm_kit.ClaudeAgentLM` (a `dspy.BaseLM` over `claude-agent-sdk`), injected via
+  rlm-kit's `configure(main_lm=, sub_lm=)` seam. Each call is a pure completion — no tools, no
+  filesystem, no settings leakage — so the sandbox stays the only place code runs. Opt-in extra:
+  `uv sync --extra subscription` (installs the Claude Agent SDK the adapter needs); requires the Claude
+  Code CLI logged in and `ANTHROPIC_API_KEY` unset (the adapter refuses to start otherwise). The adapter
+  ships in the rlm-kit wheel behind its own `[subscription]` extra (promoted out of `examples/` —
+  diff-sentry no longer vendors it). Imported lazily via `from rlm_kit import ClaudeAgentLM` (only in
+  `detect.setup()`'s sentinel branch) so `import diff_sentry` stays dspy-free and a proxy-only install
+  never pulls the extra. A sentinel-configured run in an env that never installed the extra fails LOUD
+  with an actionable error naming `uv sync --extra subscription` (`uv lock` records the extra; only sync
+  installs it).
 - **Studio: a page-height three-view stage.** The middle column is ONE verdict-alloy card filling a
   viewport-height grid — all three columns are independent scroll tracks (feed / card / modules; the
   page itself never scrolls, the family pattern), a sticky head keeps the view switch reachable, and
