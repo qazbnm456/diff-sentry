@@ -20,6 +20,12 @@ One companion rule ships under `.claude/rules/`:
   Deno: dspy-bearing paths use DummyLM / rlm-kit's `ScriptedInterpreter` (the offline forward path),
   transports are injected fakes, and the detection-quality corpus (`tests/corpus/`) pins the indicator
   suite's hit/miss behavior.
+- The **eval** member (`eval/`, the `diff-sentry-eval` workspace package) has its OWN offline suite —
+  `uv run --package diff-sentry-eval --extra dev python -m pytest eval/tests` (a plain root `uv run`
+  won't install the member; the `--package` is load-bearing, and CI gets it via `uv sync --all-packages`).
+  It is a ONE-WAY reader of the trace / assembled-verdict contract (a reward-free MEASUREMENT scorer — see
+  `eval/README.md`); run it when you touch `assemble.py`, `rl_export.py`, `rubric.py`, `schema.py`, or the
+  trace payloads it scores.
 - `uvx ruff check .` — lint (ruff defaults, line-length 110). Not part of the pytest suite; CI gates it
   as its own job (`.github/workflows/ci.yml` — both suites + node tests + ruff, mirroring the siblings),
   so keep it green locally too.
@@ -103,6 +109,31 @@ One companion rule ships under `.claude/rules/`:
   counters. Reward/credit-assignment/GRPO are a separate project. The classifier-vs-orchestrator
   split is load-bearing: `deep_classify` tool_calls train the CLASSIFIER; every other action is the
   planner's. A prompt/policy rule that improves rollout quality is in scope; a reward is not.
+- **The ATLAS rubric is a REWARD-FREE LABEL surface — a FIXED, no-LLM skeleton.** `rl_export.rubric_signal`
+  attaches, per run, the ATLAS 4-category (TF/TA/TG/PA) decomposition carried as LABELS in `run_start` meta
+  (`rubric_to_meta(default_rubric())` — a deterministic skeleton, one criterion per category, since
+  diff-sentry's task is constant; there is NO `generate_rubric` LLM path) PLUS deterministic per-criterion
+  `criteria_facts`. Those facts are a RE-LENS over `run_labels`/`run_metrics` (NOT a second derivation —
+  `rubric.trace_facts` reuses them via a lazy import, so a criterion's `observed` can never drift from the
+  labels/metrics a trainer reads), and stay reward-free (`CriterionFact` has NO score/met field — the
+  trainer scores dᵢ). `rubric.py` is a dspy-free LEAF (imports only `.schema` at top; the rl_export reuse
+  is a function-level import). The `_CATEGORY_LENS` maps each category to diff-sentry's OWN keys —
+  TF↔(verdict/signal/hit_iteration_cap), TA↔(scan/deep_classify/analyst/fetch/skill counts + circuit-breaks),
+  TG↔(indicator_count/max_indicator_severity/signal/cited_unknown), PA↔(verdict/cited_unknown). The response
+  (`response._rubric`) surfaces it as `DetectionResponse.rubric` (a `RubricReport`), and the studio shows it
+  as a "labels — not a score" card — presentation only, adding NO judgement (the facts already ride
+  `rubric_signal`). Do NOT add a reward/score/met field to any rubric type, and keep the studio card
+  legacy-guarded (a response without a `rubric` renders nothing).
+- **The eval member measures; it never rewards (the one-way fence).** `eval/` (`diff-sentry-eval`) is a
+  workspace member that scores a recorded run's assembled VERDICT with a fixed external ATLAS LLM-as-judge
+  (TF/TA/TG/PA, 0–10, TF primary, per-category MEANS only — no composite, no threshold). It is a ONE-WAY
+  reader of the trace contract, reaching diff-sentry ONLY through its public surface (`verdict_from_events`
+  / `run_labels` / `run_metrics` / `AssembledVerdict`), and `diff_sentry` NEVER imports `diff_sentry_eval`
+  (test-enforced, `eval/tests/test_boundary.py`). The judge is deliberately RUBRIC-FREE (a generic prompt —
+  it never reads `rubric_signal`, which would bias the measure) and holds read-never-execute (it assesses
+  the classification statically, treating the change as untrusted). A run it cannot score (never finalized /
+  no usable verdict / judge failed) is `unscored`, never a fake 0. Keep it reward-free and out of the
+  rollout core — see `eval/README.md`.
 - **Attack knowledge lives in `diff_sentry/skills/`, not the prompt.** Progressive disclosure
   (`load_skills_as_tools(discovery="inject")`): the catalog is injected, `read_skill(name)` pulls a
   body JIT. Fix a wrong convention by editing/adding a skill, NOT by bloating `detect.INSTRUCTIONS`
@@ -110,9 +141,11 @@ One companion rule ships under `.claude/rules/`:
   in the wheel via `packages = ["diff_sentry"]` — do NOT add a force-include (it duplicates them and
   breaks the build).
 - **Keep the dspy-free modules dspy-free.** `config.py`, `schema.py`, `normalize.py`,
-  `indicators.py`, `assemble.py`, `response.py`, `emit.py`, `ingest.py`, `rl_export.py` must not
-  import dspy at module top; `import diff_sentry` must not import dspy (`ClassifyChange` / `setup` /
-  `run` / `detect_from_event` are lazy PEP 562 re-exports). The Claude-subscription adapter is now
+  `indicators.py`, `assemble.py`, `response.py`, `emit.py`, `ingest.py`, `rl_export.py`, `rubric.py` must
+  not import dspy at module top; `import diff_sentry` must not import dspy (`ClassifyChange` / `setup` /
+  `run` / `detect_from_event` are lazy PEP 562 re-exports). `rubric.py` imports only `.schema` at top; its
+  `rl_export` reuse (for `trace_facts`) is a FUNCTION-LEVEL import — that call path (rl_export → assemble →
+  indicators) is itself dspy-free, so `response.py` importing `rubric` at top stays clean. The Claude-subscription adapter is now
   `rlm_kit.ClaudeAgentLM` (promoted INTO the rlm-kit wheel — no longer vendored here); it is
   dspy/SDK-bearing BY DESIGN and imported LAZILY (`from rlm_kit import ClaudeAgentLM`, only inside
   `detect.setup()`'s `claude-agent-sdk/` sentinel branch, via `_maybe_subscription_lm`) and never from
@@ -120,10 +153,11 @@ One companion rule ships under `.claude/rules/`:
   The classifier NEVER runs on the subscription (its model may not carry the `claude-agent-sdk/`
   sentinel — `config.from_env` rejects it, explicit or inherited); mixed auth is by design.
 - **The trace self-describes the run.** `run_start` meta carries the normalized event, the
-  instructions, the source echo, `baseline_indicators`, `emit_on`, the role→model names, and the
-  budgets — so an offline re-render/export re-derives the SAME `signal` the live run emitted
-  (`emit_on` is read from meta, never from current config) and `hit_iteration_cap` uses the run's own
-  cap. Any new per-run config that affects read-time derivation MUST ride in meta.
+  instructions, the source echo, `baseline_indicators`, `emit_on`, the role→model names, the
+  budgets, and the ATLAS `rubric` skeleton — so an offline re-render/export re-derives the SAME `signal`
+  the live run emitted (`emit_on` is read from meta, never from current config), `hit_iteration_cap` uses
+  the run's own cap, and the rubric facts name the SAME criteria they were computed against. Any new
+  per-run config that affects read-time derivation MUST ride in meta.
 
 ## Layout / promotion
 
@@ -137,6 +171,12 @@ One companion rule ships under `.claude/rules/`:
 - The cheap pre-filter tier (deterministic indicators + one small single-shot call in front of the
   RLM) and live GitHub/SIEM wiring are the next increments — the pre-filter is HOST-SIDE plumbing in
   front of `cli.run`, not extra RLM turns.
+- **Two in-repo workspace members, never in the `diff_sentry` wheel:** `studio/` (the detection console,
+  `diff-sentry-studio`, behind its `live` extra) and `eval/` (the reward-free scorecard,
+  `diff-sentry-eval`, a one-way trace reader). Both read this package's trace / `DetectionResponse`
+  contract via its PUBLIC surface only (never a fork), so co-locating keeps reader + producer in sync;
+  keep the root wheel `packages = ["diff_sentry"]` so `uv build` never sweeps them in. Both are registered
+  in the root `[tool.uv.workspace] members` and resolve `diff-sentry = { workspace = true }`.
 
 ## Versioning
 

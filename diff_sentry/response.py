@@ -12,7 +12,15 @@ from typing import Optional
 from rlm_kit.trace import EVENT_RUN_START
 
 from .indicators import hits_from_events
-from .schema import AssembledVerdict, DetectionResponse, ProcessInfo, RefusalInfo
+from .rubric import criteria_facts, default_rubric, rubric_from_meta
+from .schema import (
+    AssembledVerdict,
+    DetectionResponse,
+    ProcessInfo,
+    RefusalInfo,
+    RubricCriterionView,
+    RubricReport,
+)
 
 
 def _meta(events: list[dict]) -> dict:
@@ -60,6 +68,25 @@ def _process(events: list[dict]) -> ProcessInfo:
     )
 
 
+def _rubric(events: list[dict]) -> RubricReport:
+    """The run's ATLAS TF/TA/TG/PA rubric as a reward-free presentation: join each deterministic
+    `CriterionFact` (from `criteria_facts`) with its skeleton `description`. Pure serialization — adds NO
+    judgement and NO score (mirrors `rl_export.rubric_signal`). Works on a partial/empty trace too, so it
+    is attached on every status (a failed run still has a trajectory worth labelling)."""
+    skel = {c.name: c for c in (rubric_from_meta(events).criteria or default_rubric().criteria)}
+    criteria = [
+        RubricCriterionView(
+            criterion=f.criterion,
+            category=f.category,
+            description=(skel[f.criterion].description if f.criterion in skel else ""),
+            weight=f.weight,
+            observed=f.observed,
+        )
+        for f in criteria_facts(events)
+    ]
+    return RubricReport(criteria=criteria)
+
+
 def _status(assembled: AssembledVerdict) -> str:
     return "classified" if (assembled.verdict or "").strip() else "inconclusive"
 
@@ -72,6 +99,7 @@ def build_response(assembled: AssembledVerdict, events: list[dict], run_id: str)
     common = dict(
         id=run_id, created=created, model=_models(events), source=_source(events),
         process=_process(events),
+        rubric=_rubric(events),   # ATLAS TF/TA/TG/PA reward-free labels (surfaced, not judged)
     )
     if status != "classified":
         return DetectionResponse(
@@ -111,4 +139,5 @@ def build_failed_response(run_id: str, events: list[dict], detail: str, *, reaso
         signal=signal, indicators=hits, max_indicator_severity=top,
         refusal=RefusalInfo(reason=reason, detail=detail, indicators=hits),
         process=_process(events),
+        rubric=_rubric(events),   # a failed/cancelled run still has a partial trajectory worth labelling
     )

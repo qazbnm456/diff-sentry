@@ -16,6 +16,40 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+# ─── ATLAS rubric (a rollout LABEL surface, never a reward) ────────────────────────────────────
+# The four ATLAS criterion categories: Task Fulfillment, Tool Appropriateness, Tool Grounding,
+# Parameter Accuracy. The rubric is carried in run_start meta as LABELS + re-sourced into
+# deterministic per-criterion FACTS (see rubric.py); scoring (dᵢ∈[0,1]) is the downstream TRAINER's
+# job, never this service's. These are plain pydantic (schema.py stays a dspy-free leaf).
+CRITERION_CATEGORIES = ("TF", "TA", "TG", "PA")
+
+
+class Criterion(BaseModel):
+    """One rubric criterion — the STRUCTURE only. Scoring (dᵢ∈[0,1]) is the TRAINER's job, never here."""
+
+    name: str = Field(..., description="short unique criterion id, e.g. 'verdict_resolves_change'")
+    description: str = Field(..., description="what the trajectory must satisfy, observable from the trace")
+    weight: float = Field(1.0, description="relative weight WITHIN its category (the trainer aggregates)")
+    category: str = Field(..., description="one of TF / TA / TG / PA")
+
+
+class RubricCriteria(BaseModel):
+    """The per-run rubric — a FIXED skeleton (diff-sentry's task is constant), stored in run_start meta."""
+
+    criteria: list[Criterion] = Field(default_factory=list)
+
+
+class CriterionFact(BaseModel):
+    """A DETERMINISTIC observation about one criterion, re-sourced from the trace (a FACT, never a score)."""
+
+    criterion: str
+    category: str
+    weight: float
+    observed: dict = Field(
+        default_factory=dict, description="deterministic facts (counts, ids); never a score or met/unmet verdict"
+    )
+
+
 # The allowed verdict labels + the ranked severities, kept as plain data so deterministic code
 # (assemble/response) can compare them without importing an enum machinery the model must satisfy.
 VERDICTS = ("benign", "suspicious", "malicious")
@@ -154,6 +188,33 @@ class ProcessInfo(BaseModel):
     hit_iteration_cap: bool = False
 
 
+class RubricCriterionView(BaseModel):
+    """One ATLAS criterion as PRESENTED in the response: its identity plus the deterministic FACTS
+    observed for it this run. A reward-free LABEL — `observed` is never a score/met/unmet verdict
+    (it is copied verbatim from `CriterionFact.observed`; see rubric.py)."""
+
+    criterion: str
+    category: str = Field(..., description="one of TF / TA / TG / PA")
+    description: str = ""
+    weight: float = 1.0
+    observed: dict = Field(
+        default_factory=dict, description="deterministic facts re-lensed from the run's own metrics; never a score"
+    )
+
+
+class RubricReport(BaseModel):
+    """The run's ATLAS TF/TA/TG/PA rubric, presented as reward-free LABELS (see rubric.py). Presentation
+    only — scoring (dᵢ∈[0,1]) is the downstream TRAINER's job; nothing here is a score. Surfacing this in
+    the response/UI does NOT add information to the trajectory (the facts already ride
+    `rl_export.rubric_signal`); it makes the existing labels visible."""
+
+    categories: list[str] = Field(default_factory=lambda: list(CRITERION_CATEGORIES))
+    criteria: list[RubricCriterionView] = Field(default_factory=list)
+    note: str = Field(
+        default="Reward-free labels: deterministic facts re-lensed from the run's own metrics, never a score."
+    )
+
+
 class DetectionResponse(BaseModel):
     """The API-shaped result of one run — an OpenAI-Responses-flavored envelope over the assembled
     verdict. A read-time presentation; carries NO new judgement.
@@ -181,3 +242,7 @@ class DetectionResponse(BaseModel):
     source: Optional[dict] = Field(default=None, description="Echoed change metadata (repo/kind/number).")
     refusal: Optional[RefusalInfo] = None
     process: ProcessInfo = Field(default_factory=ProcessInfo)
+    rubric: Optional[RubricReport] = Field(
+        default=None,
+        description="ATLAS TF/TA/TG/PA reward-free LABELS for this run's trajectory (deterministic facts, never a score).",
+    )

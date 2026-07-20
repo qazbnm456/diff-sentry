@@ -43,6 +43,7 @@ async def detect_from_event(
 
     from .detect import ClassifyChange, setup
     from .normalize import event_metadata, normalize_event
+    from .rubric import default_rubric, rubric_to_meta
 
     setup(config)
     task = ClassifyChange(config=config, extra_tools=extra_tools)
@@ -73,6 +74,10 @@ async def detect_from_event(
             # The budget THIS run ran under, so an offline reader computes hit_iteration_cap correctly.
             "max_iterations": config.max_iterations,
             "max_llm_calls": config.max_llm_calls,
+            # The ATLAS rubric decomposition carried as LABELS (structure only — the trainer scores dᵢ). A
+            # FIXED skeleton (default_rubric): diff-sentry's task is constant, so only the per-criterion
+            # FACTS vary per run (re-sourced from the trace on read; see rubric.criteria_facts).
+            "rubric": rubric_to_meta(default_rubric()),
         }):
             return await _run()
     return await _run()

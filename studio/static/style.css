@@ -306,6 +306,26 @@ button { font-family:var(--mono); cursor:pointer; }
   font-size:.72rem; color:var(--text-dim); margin-top:8px; white-space:pre; }
 .siem-on { color:var(--alert-1); font-weight:700; } .siem-off { color:var(--text-faint); }
 
+/* ATLAS rubric module: reward-free TF/TA/TG/PA labels — a category badge + the run's deterministic facts.
+   Category accent (--rc) tints both the badge and the criterion's left rule; tokens are theme-aware. */
+.rub-tag { font-size:.6rem; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint);
+  border:1px solid var(--border); border-radius:var(--radius); padding:2px 6px; margin-left:8px; font-weight:400; }
+.rub-list { display:flex; flex-direction:column; gap:8px; }
+.rub-crit { background:var(--surface-3); border:1px solid var(--border);
+  border-left:2px solid var(--rc, var(--border-strong)); border-radius:var(--radius); padding:8px 10px; }
+.rub-crit-head { display:flex; align-items:center; gap:8px; }
+.cat-badge { font-family:var(--mono); font-size:.62rem; font-weight:700; letter-spacing:.04em;
+  color:var(--rc, var(--text-faint)); border:1px solid var(--rc, var(--text-faint)); border-radius:var(--radius); padding:1px 6px; }
+.cat-tf { --rc:var(--signal); } .cat-ta { --rc:var(--analyst); } .cat-tg { --rc:var(--amber-1); }
+.cat-pa { --rc:var(--iron-1); } .cat-x { --rc:var(--text-faint); }
+.rub-name { font-family:var(--mono); font-size:.72rem; color:var(--text-dim); overflow-wrap:anywhere; }
+.rub-desc { font-family:var(--sans); font-size:.72rem; color:var(--text-faint); margin:5px 0 0; line-height:1.4; overflow-wrap:anywhere; }
+.rub-facts { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+.rub-facts.empty { font-size:.68rem; color:var(--text-faint); font-style:italic; }
+.rub-fact { display:inline-flex; align-items:baseline; gap:4px; font-family:var(--mono); font-size:.64rem;
+  background:var(--surface-1); border:1px solid var(--border); border-radius:var(--radius); padding:1px 5px; max-width:100%; overflow-wrap:anywhere; }
+.rub-fact .rk { color:var(--text-faint); } .rub-fact .rv { color:var(--text); font-weight:600; }
+
 /* ── trajectory drawer (ported; family colors adapted) ──────────────────── */
 .traj-handle {
   /* bottom-right: the family convention across the sibling consoles */

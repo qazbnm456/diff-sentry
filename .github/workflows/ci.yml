@@ -50,6 +50,11 @@ jobs:
       - name: Studio console tests
         run: uv run --python ${{ matrix.python-version }} python -m pytest studio/tests
 
+      # The eval workspace member (diff-sentry-eval) — its OWN offline suite: the reward-free ATLAS
+      # scorecard, stub judge, synthetic traces, no creds. `--all-packages` above already installed it.
+      - name: Eval scorecard tests
+        run: uv run --package diff-sentry-eval --python ${{ matrix.python-version }} python -m pytest eval/tests
+
       # The studio frontend's pure/factory cores (run-core, replay-core, trajectory) carry assert-based
       # node tests; the ubuntu runner ships node, so gate them here too.
       - name: Frontend core unit tests (node)

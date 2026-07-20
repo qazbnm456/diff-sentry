@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 from rlm_kit.trace import load_events
 
 from diff_sentry.assemble import verdict_from_events
 from diff_sentry.response import build_failed_response, build_response
+from diff_sentry.schema import CRITERION_CATEGORIES
 
 
 def test_build_response_classified(make_trace):
@@ -35,3 +38,31 @@ def test_inconclusive_when_no_result(make_trace):
     events = load_events(make_trace(with_result=False))
     a = verdict_from_events(events)
     assert a is None
+
+
+# ---- ATLAS rubric (a reward-free LABEL surface, surfaced in the response) ----
+
+def test_response_carries_the_atlas_rubric_labels(make_trace):
+    events = load_events(make_trace())
+    r = build_response(verdict_from_events(events), events, "pr-7")
+    assert r.rubric is not None
+    assert r.rubric.categories == list(CRITERION_CATEGORIES)
+    assert len(r.rubric.criteria) == 4                       # one criterion per category (fixed skeleton)
+    assert {c.category for c in r.rubric.criteria} == set(CRITERION_CATEGORIES)
+    tf = next(c for c in r.rubric.criteria if c.category == "TF")
+    assert tf.description and tf.observed.get("verdict") == "malicious"   # facts re-lensed from the trace
+
+
+def test_response_rubric_is_reward_free(make_trace):
+    events = load_events(make_trace())
+    blob = build_response(verdict_from_events(events), events, "pr-7").model_dump_json()
+    d = json.loads(blob)["rubric"]
+    for crit in d["criteria"]:
+        assert "score" not in crit and "met" not in crit    # labels only — no score/verdict on a criterion
+        assert "score" not in crit["observed"] and "reward" not in crit["observed"]
+
+
+def test_failed_response_still_carries_the_rubric(make_trace):
+    events = load_events(make_trace(with_result=False))
+    rf = build_failed_response("pr-7", events, "boom")
+    assert rf.status == "failed" and rf.rubric is not None and len(rf.rubric.criteria) == 4

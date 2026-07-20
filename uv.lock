@@ -12,6 +12,7 @@ resolution-markers = [
 [manifest]
 members = [
     "diff-sentry",
+    "diff-sentry-eval",
     "diff-sentry-studio",
 ]
 
@@ -555,6 +556,30 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
 ]
+
+[[package]]
+name = "diff-sentry-eval"
+version = "0.1.0"
+source = { editable = "eval" }
+dependencies = [
+    { name = "diff-sentry" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+]
+judge = [
+    { name = "openai" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "diff-sentry", editable = "." },
+    { name = "openai", marker = "extra == 'judge'", specifier = ">=1.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+]
+provides-extras = ["judge", "dev"]
 
 [[package]]
 name = "diff-sentry-studio"

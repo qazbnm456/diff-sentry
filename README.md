@@ -90,7 +90,16 @@ uv run python -m diff_sentry issue acme/widgets 12
 uv run python -m diff_sentry classify event.json           # a payload you already hold (offline ingest)
 uv run python -m diff_sentry render output/traces/pr-7.jsonl pr-7    # re-render a response (offline)
 uv run python -m diff_sentry export "output/traces/*.jsonl" ds.json  # reward-free export (offline)
+
+# score recorded runs with the reward-free ATLAS LLM-as-judge scorecard (offline with the stub judge):
+uv run --package diff-sentry-eval python -m diff_sentry_eval score "output/traces/*.jsonl" demo
 ```
+
+Each run also carries an **ATLAS TF/TA/TG/PA rubric** — a fixed, reward-free LABEL surface (deterministic
+per-criterion facts re-lensed from the run's own labels/metrics, never a score) — in its `run_start` meta,
+its `DetectionResponse.rubric`, its `rl_export` bundle (`rubric_signal`), and the studio's rubric card. The
+sibling **[`eval/`](eval/README.md)** workspace member (`diff-sentry-eval`) scores the assembled verdict
+with an independent LLM judge (per-category means only) — a one-way trace reader that never feeds training.
 
 Prefer a **Claude Pro/Max subscription** over an API key for the planner/analyst? Give either role a
 `claude-agent-sdk/<model>` value (e.g. `DS_SUB_LM=claude-agent-sdk/claude-fable-5`) and it runs on your

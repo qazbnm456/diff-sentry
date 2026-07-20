@@ -236,10 +236,43 @@
         (techs ? `<div class="chips">${techs}</div>` : "") + (suspects ? `<div class="ind-group-label">suspect files</div><div class="chips">${suspects}</div>` : "") +
         (fabs ? `<div class="ind-group-label">fabricated citations</div><div class="chips">${fabs}</div>` : "")) +
       module("SIEM signal", siem) +
-      (r.summary ? module("Summary", `<div class="prose">${esc(r.summary)}</div>`) : "");
+      (r.summary ? module("Summary", `<div class="prose">${esc(r.summary)}</div>`) : "") +
+      rubricModule(r.rubric);
   }
   function module(label, body) {
     return `<div class="module"><div class="module-cap"></div><div class="module-head">${esc(label)}</div><div class="module-body">${body}</div></div>`;
+  }
+
+  // The ATLAS rubric module — the run's reward-free TF/TA/TG/PA LABELS. Each criterion shows the
+  // deterministic FACTS re-lensed from the trace (never a score/verdict; the trainer scores dᵢ). Guarded:
+  // a legacy response with no `rubric` field renders nothing.
+  function fmtFact(v) {
+    if (Array.isArray(v)) return v.length ? v.join(", ") : "—";
+    if (v === null || v === undefined) return "—";
+    if (typeof v === "object") return JSON.stringify(v);
+    return String(v);
+  }
+  function rubricModule(rubric) {
+    if (!rubric || !rubric.criteria || !rubric.criteria.length) return "";
+    const crit = (c) => {
+      const cat = String(c.category || "").toLowerCase();
+      const catCls = ["tf", "ta", "tg", "pa"].includes(cat) ? cat : "x";
+      const facts = Object.entries(c.observed || {});
+      const factsHtml = facts.length
+        ? `<div class="rub-facts">${facts.map(([k, v]) =>
+            `<span class="rub-fact"><span class="rk">${esc(k)}</span><span class="rv">${esc(fmtFact(v))}</span></span>`).join("")}</div>`
+        : `<div class="rub-facts empty">no facts observed</div>`;
+      // the category class sits on `.rub-crit` so its `--rc` accent inherits to BOTH the left rule
+      // (`.rub-crit` border) and the badge child — CSS custom props inherit downward only.
+      return `<div class="rub-crit cat-${catCls}"><div class="rub-crit-head">` +
+        `<span class="cat-badge">${esc(c.category)}</span>` +
+        `<span class="rub-name">${esc(c.criterion)}</span></div>` +
+        (c.description ? `<p class="rub-desc">${esc(c.description)}</p>` : "") +
+        factsHtml + `</div>`;
+    };
+    return `<div class="module rubric"><div class="module-cap"></div>` +
+      `<div class="module-head">ATLAS rubric <span class="rub-tag">labels — not a score</span></div>` +
+      `<div class="module-body"><div class="rub-list">${rubric.criteria.map(crit).join("")}</div></div></div>`;
   }
   function siemPayload(r) {
     // Mirror emit.signal_payload field-for-field — the console claims this is what the host-side emitter

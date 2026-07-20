@@ -31,13 +31,13 @@ subscription = ["claude-agent-sdk>=0.1.60"]
 [tool.uv.sources]
 rlm-kit = { git = "https://github.com/qazbnm456/rlm-kit.git", branch = "main" }
 
-# The visualization console ships IN-REPO as its own package (studio/) — a uv workspace member, NOT part
-# of the `diff_sentry` wheel. It reads this package's trace/DetectionResponse contract, so co-locating
-# keeps them in sync; its web stack (fastapi/uvicorn/frontend) stays behind the package boundary + the
-# studio's `live` optional extra, so a harness-only install never pulls it. The external git source
-# (rlm-kit) lives here at the workspace root and applies to every member.
+# The in-repo workspace members — each its OWN package, NOT part of the `diff_sentry` wheel:
+#   studio/ — the visualization console (fastapi/uvicorn/frontend, behind its `live` extra);
+#   eval/   — the offline, reward-free LLM-as-judge scorecard (a one-way trace reader).
+# Both read this package's trace/DetectionResponse contract, so co-locating keeps them in sync. The
+# external git source (rlm-kit) lives here at the workspace root and applies to every member.
 [tool.uv.workspace]
-members = ["studio"]
+members = ["studio", "eval"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]

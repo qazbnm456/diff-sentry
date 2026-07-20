@@ -13,6 +13,23 @@ def test_run_start_carries_models_source_and_baseline_count():
     assert ev["data"]["source"]["repo"] == "acme/x" and ev["data"]["baseline"] == 2
 
 
+def test_run_start_surfaces_the_atlas_rubric_hint():
+    # the run_start meta carries the ATLAS rubric skeleton; the created event surfaces a cheap hint
+    # (the full per-criterion facts arrive via the GET response, never streamed).
+    created = to_event({"type": "run_start", "payload": {"meta": {"rubric": [
+        {"name": "verdict_resolves_change", "category": "TF", "weight": 1.0, "description": "d"},
+        {"name": "tools_used_appropriately", "category": "TA", "weight": 1.0, "description": "d"},
+        {"name": "verdict_grounded_in_indicators", "category": "TG", "weight": 1.0, "description": "d"},
+        {"name": "classification_wellformed", "category": "PA", "weight": 1.0, "description": "d"}]}}})
+    assert created["data"]["rubric"] == {"categories": ["PA", "TA", "TF", "TG"], "criteria": 4}
+
+
+def test_run_start_rubric_hint_empty_when_absent():
+    # a legacy trace with no rubric in meta must not crash — empty hint
+    created = to_event({"type": "run_start", "payload": {"meta": {}}})
+    assert created["data"]["rubric"] == {"categories": [], "criteria": 0}
+
+
 def test_main_step_is_a_plan_step():
     ev = to_event({"type": "main_step", "payload": {"turn": 2, "reasoning": "r", "code": "c"}})
     assert ev == {"event": "detection.plan.step", "data": {"turn": 2, "reasoning": "r", "has_code": True}}

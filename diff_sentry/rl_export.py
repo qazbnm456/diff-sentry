@@ -81,10 +81,32 @@ def run_metrics(events: list[dict]) -> dict:
     }
 
 
+def rubric_signal(events: list[dict]) -> dict:
+    """The ATLAS rubric surface for one run — the fixed rubric + its deterministic per-criterion FACTS.
+    All LABELS: a downstream trainer computes dᵢ∈[0,1] and aggregates; this service never does.
+
+    The reported `rubric` is the EFFECTIVE one — the run_start-meta rubric, or the constant
+    `default_rubric()` for a legacy trace that carries none — so it always names the SAME criteria
+    `criteria_facts` was computed against (no orphan facts). The `rubric` import is LAZY: it keeps
+    rl_export's module top unchanged and can't form a load-time cycle (rubric.trace_facts calls back into
+    THIS module, also lazily)."""
+    from .rubric import criteria_facts, default_rubric, rubric_from_meta
+
+    rubric = rubric_from_meta(events).criteria or default_rubric().criteria
+    return {
+        "rubric": [c.model_dump() for c in rubric],
+        "criteria_facts": [f.model_dump() for f in criteria_facts(events)],
+    }
+
+
 def export_dataset(runs: dict[str, list[dict]]) -> dict:
     """Build the REWARD-FREE trajectory bundle. Two things map to a SEPARATE model: the `classifier`
     (SINGLE-TURN findings→verdict records) and the ORCHESTRATOR (the RLM root, ONE multi-turn policy —
-    `sft_turns` for SFT, `actions`/`export_rl` for RL). Records carry `reward=None`."""
+    `sft_turns` for SFT, `actions`/`export_rl` for RL). Records carry `reward=None`.
+
+    `labels` (intrinsic outcome — verdict/signal/…), `metrics` (objective effort), and `rubric_signal`
+    (the ATLAS 4-category decomposition + deterministic per-criterion facts, a re-lens over labels/metrics)
+    are the three per-run LABEL surfaces — all reward-free."""
     actions = export_actions(runs, reward=None)
     tool_acts = [a for a in actions if a["kind"] == "tool"]
     classifier = [a for a in tool_acts
@@ -97,6 +119,7 @@ def export_dataset(runs: dict[str, list[dict]]) -> dict:
         "sft_turns": export_sft_turns(runs),
         "labels": {rid: run_labels(ev) for rid, ev in runs.items()},
         "metrics": {rid: run_metrics(ev) for rid, ev in runs.items()},
+        "rubric_signal": {rid: rubric_signal(ev) for rid, ev in runs.items()},
     }
 
 
