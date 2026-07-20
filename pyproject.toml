@@ -24,6 +24,14 @@ observe = ["langfuse>=4.6.1", "openinference-instrumentation-dspy>=0.1.36"]
 # can't express (see .env.example).
 subscription = ["claude-agent-sdk>=0.1.60"]
 
+# Bare `uv sync` (and `--all-packages`) default-installs the `subscription-sdk` dev group (below) so the
+# Claude Agent SDK isn't pruned from the shared dev venv — an EXTRA is not synced by default, so a
+# `uv sync` without `--extra subscription` PRUNES it and a subscription dev run then crashes (ClaudeAgentLM
+# ImportError). `dev` MUST stay listed — default-groups REPLACES uv's `["dev"]` default, it doesn't append.
+# The public pip extra above is unchanged. Opt out for one sync: `uv sync --no-group subscription-sdk`.
+[tool.uv]
+default-groups = ["dev", "subscription-sdk"]
+
 # rlm-kit is public but not yet on PyPI, so it comes in via git (uv.lock pins the exact commit); swap to
 # a version spec once it ships on PyPI. The dogfooding loop rlm-kit is designed around still holds: when
 # co-developing rlm-kit locally, overlay an editable install (`uv pip install -e ../rlm-kit`) or bump
@@ -41,6 +49,9 @@ members = ["studio"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+# A dev-group MIRROR of the `subscription` optional-dependency extra (kept above for the pip surface),
+# default-installed via `[tool.uv] default-groups` so a bare `uv sync` doesn't prune the Claude Agent SDK.
+subscription-sdk = ["claude-agent-sdk>=0.1.60"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

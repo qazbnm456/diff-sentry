@@ -537,6 +537,9 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
+subscription-sdk = [
+    { name = "claude-agent-sdk" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -555,6 +558,7 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
 ]
+subscription-sdk = [{ name = "claude-agent-sdk", specifier = ">=0.1.60" }]
 
 [[package]]
 name = "diff-sentry-studio"
