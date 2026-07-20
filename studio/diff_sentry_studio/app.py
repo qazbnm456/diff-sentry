@@ -83,6 +83,19 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+_SUBSCRIPTION_PREFIX = "claude-agent-sdk/"  # mirrors diff_sentry.config.SUBSCRIPTION_PREFIX
+
+
+def _role_or_none(explicit: "str | None", fallback: "str | None") -> "str | None":
+    """`explicit or fallback`, EXCEPT a role that can't run on a subscription (the second-stage
+    classifier — a separate make_model_tool endpoint, not the Agent SDK) must not surface a
+    subscription-sentinel fallback: `from_env` REJECTS a `claude-agent-sdk/…` classifier, so showing the
+    analyst there would display a config a run couldn't use. Fall back only to a real (non-sub) model."""
+    if explicit:
+        return explicit
+    return None if (fallback or "").startswith(_SUBSCRIPTION_PREFIX) else fallback
+
+
 def _slug_id(raw: str) -> str:
     """A filesystem-/URL-safe id token: keep [A-Za-z0-9._-], fold the rest (incl. `/`) to '-', strip
     leading/trailing '.'/'-' so it can NEVER become a traversal segment (`..`, an absolute path, a nested
@@ -122,14 +135,18 @@ def config() -> JSONResponse:
     """The three model ROLES → their configured model names (from env), so the UI can show them on page
     load. Read env DIRECTLY (never `DetectConfig.from_env`, which RAISES without DS_ROOT_LM/DS_SUB_LM) so a
     replay-only deploy still answers. `classifier` mirrors diff-sentry's `DS_CLASSIFIER_LM or analyst`
-    fallback. `classify_backend`/`emit_on`/`max_iterations`/`enable_fetch` let the UI frame the run."""
+    fallback — but NEVER surfaces a subscription-sentinel analyst as the classifier (from_env rejects a
+    subscription classifier; see `_role_or_none`). `classify_backend`/`emit_on`/`max_iterations`/
+    `enable_fetch` let the UI frame the run."""
     analyst = os.environ.get("DS_SUB_LM")
     emit_on = [v.strip() for v in os.environ.get("DS_EMIT_ON", "suspicious,malicious").split(",") if v.strip()]
     return JSONResponse({
         "models": {
             "planner": os.environ.get("DS_ROOT_LM"),
             "analyst": analyst,
-            "classifier": os.environ.get("DS_CLASSIFIER_LM") or analyst,
+            # classifier = DS_CLASSIFIER_LM or analyst, but NEVER surface a subscription analyst as the
+            # classifier (from_env rejects a subscription classifier — a config a run couldn't use).
+            "classifier": _role_or_none(os.environ.get("DS_CLASSIFIER_LM"), analyst),
         },
         "classify_backend": os.environ.get("DS_CLASSIFY_BACKEND", "self"),
         "max_iterations": int(os.environ.get("DS_MAX_ITERATIONS", "25")),

@@ -5,6 +5,25 @@ malicious intent — the diff held as **untrusted data** in a sandboxed REPL, a 
 and deterministic indicator evidence unioned on read into a SIEM signal — as a traced, improvable RLM
 framework on [`rlm-kit`](https://github.com/qazbnm456/rlm-kit) (a BewAIre-style detector).
 
+## 0.2.1
+
+### Fixed
+- **The studio launches on a subscription with the SAME command as every rlm-kit sibling.** The studio
+  member (`diff-sentry-studio`) was missing a forwarding `subscription` extra, so
+  `uv run --package diff-sentry-studio --extra live --extra subscription uvicorn …` was rejected — a
+  studio-scoped `uv` command resolves extras against the MEMBER, not the root, and the Claude Agent SDK
+  extra lived only on the root. Added `subscription = ["diff-sentry[subscription]"]` to
+  `studio/pyproject.toml` (mirroring the sibling harnesses) + a "Subscription mode" section to the studio
+  README. Closes a cross-downstream drift (same gap fixed in the siblings); the paired-extras convention
+  is documented in rlm-kit's "Building a consumer" guide.
+- **`/v1/config` never surfaces a subscription analyst as the classifier (a config a run couldn't use).**
+  The classifier falls back to the analyst (`DS_CLASSIFIER_LM or DS_SUB_LM`), but the classifier is a
+  `make_model_tool` endpoint and `from_env` REJECTS a subscription classifier — so with `DS_CLASSIFIER_LM`
+  unset and `DS_SUB_LM` a `claude-agent-sdk/…` sentinel, the panel showed a classifier model no run could
+  use. Guard it (`_role_or_none`): fall back to the analyst only when it's a real (non-subscription)
+  model, else `None`; the analyst role itself still shows through. Same class swept from the sibling
+  studios. Studio test added.
+
 ## 0.2.0
 
 ### Added

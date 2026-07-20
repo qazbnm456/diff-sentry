@@ -14,6 +14,13 @@ dependencies = [
 # NOTE: diff-sentry consumes rlm-kit as a COMMIT-PINNED GIT source (workspace-root [tool.uv.sources]),
 # so a `live` install is self-contained — no ../rlm-kit sibling checkout needed.
 live = ["diff-sentry"]
+# `subscription` FORWARDS diff-sentry's OWN subscription extra (the Claude Agent SDK, for a
+# planner/analyst on a Claude Pro/Max subscription — `DS_ROOT_LM/DS_SUB_LM=claude-agent-sdk/<id>`). It
+# exists so a live studio run on a subscription requests BOTH capabilities in ONE studio-scoped command:
+# `uv run --package diff-sentry-studio --extra live --extra subscription uvicorn …`. A studio-scoped `uv`
+# command resolves extras against THIS member, so without the forward `--extra subscription` is rejected
+# here (and any sync that omits it prunes the SDK back out).
+subscription = ["diff-sentry[subscription]"]
 dev = ["pytest>=8", "httpx>=0.27"]
 
 # In-repo: diff-sentry is the workspace ROOT package (studio/ is a member of it). The `live` extra

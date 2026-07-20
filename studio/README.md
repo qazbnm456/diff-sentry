@@ -127,8 +127,20 @@ studio reads `os.environ` directly and does **not** auto-load `.env`, so source 
 ```bash
 set -a && source .env && set +a               # DS_ROOT_LM / DS_SUB_LM / DS_CLASSIFIER_LM / DS_BASE_URL … (use `source`, not `.`)
 uv run --package diff-sentry-studio --extra live \
-  uvicorn diff_sentry_studio.app:app --port 8731
+  uvicorn diff_sentry_studio.app:app --port 8731 --timeout-graceful-shutdown 12
 ```
+
+**Subscription mode** — if a role runs on a Claude Pro/Max subscription (`.env` has
+`DS_ROOT_LM`/`DS_SUB_LM=claude-agent-sdk/<id>`), the live worker also needs the Claude Agent SDK, so add
+`--extra subscription` **to every `uv sync`/`uv run`** (it forwards `diff-sentry`'s own `subscription`
+extra); it **must** ride with `--extra live` in the **same** command, or a later bare sync prunes the SDK
+back out:
+```bash
+uv run --package diff-sentry-studio --extra live --extra subscription \
+  uvicorn diff_sentry_studio.app:app --port 8731 --timeout-graceful-shutdown 12
+```
+Without it a subscription run raises `ImportError: ClaudeAgentLM requires the optional dependency … No
+module named 'claude_agent_sdk'`.
 
 (Artifacts default to `<repo-root>/output`, where the CLI writes them, so the studio's own live runs land
 next to CLI runs and are mutually replayable; override with `DS_ARTIFACTS_DIR`. Skip `--reload` for live

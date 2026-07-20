@@ -39,6 +39,19 @@ def test_config_classifier_falls_back_to_analyst(monkeypatch):
     assert client.get("/v1/config").json()["models"]["classifier"] == "analyst-m"
 
 
+def test_config_classifier_never_surfaces_a_subscription_analyst(monkeypatch):
+    # the classifier is a make_model_tool endpoint and from_env REJECTS a subscription classifier, so
+    # the panel must NOT show a subscription-sentinel analyst as the classifier — a config a run couldn't
+    # use. (Regression: classifier = DS_CLASSIFIER_LM or analyst surfaced the subscription analyst.)
+    monkeypatch.setenv("DS_SUB_LM", "claude-agent-sdk/claude-fable-5")
+    monkeypatch.delenv("DS_CLASSIFIER_LM", raising=False)
+    cfg = client.get("/v1/config").json()["models"]
+    assert cfg["analyst"] == "claude-agent-sdk/claude-fable-5"   # the analyst role CAN be subscription
+    assert cfg["classifier"] is None                            # but the classifier fallback is suppressed
+    monkeypatch.setenv("DS_CLASSIFIER_LM", "openai/gpt-4o")      # an explicit non-sub classifier shows through
+    assert client.get("/v1/config").json()["models"]["classifier"] == "openai/gpt-4o"
+
+
 def test_config_exposes_backend_emit_on_and_fetch(monkeypatch):
     monkeypatch.delenv("DS_CLASSIFY_BACKEND", raising=False)
     monkeypatch.setenv("DS_EMIT_ON", "malicious")

@@ -512,7 +512,7 @@ wheels = [
 
 [[package]]
 name = "diff-sentry"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -573,16 +573,20 @@ dev = [
 live = [
     { name = "diff-sentry" },
 ]
+subscription = [
+    { name = "diff-sentry", extra = ["subscription"] },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "diff-sentry", marker = "extra == 'live'", editable = "." },
+    { name = "diff-sentry", extras = ["subscription"], marker = "extra == 'subscription'", editable = "." },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "uvicorn", specifier = ">=0.29" },
 ]
-provides-extras = ["live", "dev"]
+provides-extras = ["live", "subscription", "dev"]
 
 [[package]]
 name = "diskcache"
