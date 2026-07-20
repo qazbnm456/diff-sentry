@@ -14,7 +14,7 @@ import glob
 import json
 import sys
 
-from rlm_kit.dataset import export_actions, export_sft_turns
+from rlm_kit.dataset import export_actions, export_sft_turns, run_label_bundle
 from rlm_kit.trace import group_by_run, load_events
 
 # The second-stage classifier is reached through exactly this tool; every OTHER tool is the PLANNER's own.
@@ -117,9 +117,12 @@ def export_dataset(runs: dict[str, list[dict]]) -> dict:
         "orchestrator_tools": [a for a in tool_acts if a.get("tool") != CLASSIFIER_TOOL],
         "planner": [a for a in actions if a["kind"] == "planner"],
         "sft_turns": export_sft_turns(runs),
-        "labels": {rid: run_labels(ev) for rid, ev in runs.items()},
-        "metrics": {rid: run_metrics(ev) for rid, ev in runs.items()},
-        "rubric_signal": {rid: rubric_signal(ev) for rid, ev in runs.items()},
+        # The three per-run LABEL surfaces ride via rlm-kit's shared run_label_bundle (the canonical
+        # {surface: {run_id: fn(events)}} seam) — one bundle shape across consumers, and `reward` is a
+        # refused surface name (it raises), so the reward-free invariant is structural at the transport.
+        # Output is byte-identical to the old comprehensions. `rubric_signal` is the ATLAS 4-category
+        # (TF/TA/TG/PA) rubric + per-criterion deterministic facts (reward-free LABELS).
+        **run_label_bundle(runs, labels=run_labels, metrics=run_metrics, rubric_signal=rubric_signal),
     }
 
 
