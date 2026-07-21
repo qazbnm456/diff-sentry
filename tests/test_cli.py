@@ -1,8 +1,8 @@
 """cli.run orchestration — the 283-line entry point, driven OFFLINE by stubbing the RLM.
 
 `run()`'s job is orchestration, not classification: reset the stale trace → detect → load the trace →
-assemble → build the response → write it → emit host-side. We stub `detect_from_event` (the cve-reverser
-precedent: `cli.run` resolves it as a module global at call time, so `monkeypatch.setattr(cli, ...)` with
+assemble → build the response → write it → emit host-side. We stub `detect_from_event` (`cli.run`
+resolves it as a module global at call time, so `monkeypatch.setattr(cli, ...)` with
 an `async def` fake is the right seam — no production-signature pollution). The fake WRITES a realistic
 trace (baseline in run_start meta + a scan_indicators tool_call + a result) so run()'s REAL assemble →
 response → emit path runs on genuine JSONL. The crash test's fake writes the trace and THEN raises, so

@@ -1,7 +1,7 @@
 # diff-sentry — agent guide
 
 A **BewAIre-style malicious-change detector** built on `rlm-kit` — a downstream consumer of the RLM
-scaffold, alongside `cve-reverser`. It classifies ONE GitHub change (PR/issue/push)
+scaffold. It classifies ONE GitHub change (PR/issue/push)
 for malicious intent: the diff is UNTRUSTED DATA held in a sandboxed REPL, the planner SUBMITs a
 judgement-only verdict, and the deterministic indicator EVIDENCE is unioned on read into a SIEM signal.
 rlm-kit is consumed as a **commit-pinned git source** (`[tool.uv.sources]` → GitHub, `uv.lock` pins the
@@ -103,7 +103,7 @@ One companion rule ships under `.claude/rules/`:
   talks to GitHub (`ingest.py` shells out to `gh` HOST-SIDE only; transport injectable) and never
   holds SIEM creds — `emit.emit_signal` POSTs after the run, stays OUT of the trajectory, and NEVER
   raises (a SIEM outage cannot sink a finished classification). Only choices the policy MAKES are
-  tools; writing/sending a finished deliverable is plumbing (the cve-reverser publish rule).
+  tools; writing/sending a finished deliverable is plumbing (the publish-is-plumbing rule).
 - **This is a ROLLOUT source — trajectories, NOT reward.** `rl_export` passes `reward=None`; labels
   read the ASSEMBLED verdict (facts, e.g. `signal`, `cited_unknown`) and metrics are objective effort
   counters. Reward/credit-assignment/GRPO are a separate project. The classifier-vs-orchestrator

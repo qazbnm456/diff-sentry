@@ -2,7 +2,7 @@
 
 Emitting a signal is DETERMINISTIC plumbing, not an agentic decision, so it runs HOST-SIDE outside the
 trajectory — the planner never gets SIEM credentials and the POST never appears as a tool call (the same
-reasoning that keeps the cve-reverser publish step host-side). A signal is emitted only when the
+reasoning that keeps any finished-deliverable publish step host-side). A signal is emitted only when the
 assembled response says so (`response.signal`, derived deterministically in `assemble`) AND the config
 carries a webhook. The transport is injectable (`poster`) so this is unit-testable with no network; the
 whole call is guarded so a SIEM outage can never sink an already-finished classification.
