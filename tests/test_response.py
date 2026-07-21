@@ -10,7 +10,7 @@ from diff_sentry.assemble import verdict_from_events
 from diff_sentry.ingest import event_from_payload
 from diff_sentry.response import build_failed_response, build_response
 from diff_sentry.schema import CRITERION_CATEGORIES
-from tests.conftest import BENIGN_EVENT, MALICIOUS_VERDICT
+from tests.conftest import BENIGN_EVENT, MALICIOUS_EVENT, MALICIOUS_VERDICT
 
 
 def test_build_response_classified(make_trace):
@@ -69,6 +69,21 @@ def test_inconclusive_verdict_maps_to_refusal(make_trace):
     assert resp.status == "inconclusive"
     assert resp.refusal and resp.refusal.reason == "insufficient_evidence"
     assert resp.verdict is None
+
+
+def test_inconclusive_verdict_cannot_suppress_hard_evidence(make_trace):
+    """The load-bearing property: an `inconclusive` verdict over a change with a REAL high/critical
+    indicator must STILL force the deterministic signal — the status downgrade never touches the SIEM
+    half (`inconclusive` is not in `emit_on`; hard evidence signals on its own, the MF3 backstop)."""
+    inc = {**MALICIOUS_VERDICT, "verdict": "inconclusive", "techniques": [], "suspect_files": [],
+           "indicator_ids": []}
+    events = load_events(make_trace(event=MALICIOUS_EVENT, verdict=inc, run_id="inc-2"))
+    resp = build_response(verdict_from_events(events), events, "inc-2")
+    assert resp.status == "inconclusive"
+    assert resp.refusal and resp.refusal.reason == "insufficient_evidence"
+    assert resp.signal is True                          # the critical indicator forces the signal anyway
+    assert resp.max_indicator_severity == "critical"
+    assert resp.refusal.indicators                      # the evidence rides the refusal envelope too
 
 
 def test_groundable_benign_stays_classified(make_trace):
