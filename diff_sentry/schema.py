@@ -16,38 +16,16 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+# reward-free rubric TYPES — now rlm-kit's shared, taxonomy-agnostic primitives, re-exported here so
+# diff-sentry's own `from .schema import Criterion, ...` call sites are unchanged.
+from rlm_kit.rubric import Criterion, CriterionFact, RubricCriteria  # noqa: F401 (re-export, back-compat)
+
 # ─── ATLAS rubric (a rollout LABEL surface, never a reward) ────────────────────────────────────
 # The four ATLAS criterion categories: Task Fulfillment, Tool Appropriateness, Tool Grounding,
-# Parameter Accuracy. The rubric is carried in run_start meta as LABELS + re-sourced into
-# deterministic per-criterion FACTS (see rubric.py); scoring (dᵢ∈[0,1]) is the downstream TRAINER's
-# job, never this service's. These are plain pydantic (schema.py stays a dspy-free leaf).
+# Parameter Accuracy. The rubric TYPES above are rlm-kit's (category is opaque to the kit); diff-sentry
+# owns only this ATLAS category set + the criterion descriptions + the lens (see rubric.py). The rubric is
+# carried in run_start meta as LABELS; scoring (dᵢ∈[0,1]) is the downstream TRAINER's job, never here.
 CRITERION_CATEGORIES = ("TF", "TA", "TG", "PA")
-
-
-class Criterion(BaseModel):
-    """One rubric criterion — the STRUCTURE only. Scoring (dᵢ∈[0,1]) is the TRAINER's job, never here."""
-
-    name: str = Field(..., description="short unique criterion id, e.g. 'verdict_resolves_change'")
-    description: str = Field(..., description="what the trajectory must satisfy, observable from the trace")
-    weight: float = Field(1.0, description="relative weight WITHIN its category (the trainer aggregates)")
-    category: str = Field(..., description="one of TF / TA / TG / PA")
-
-
-class RubricCriteria(BaseModel):
-    """The per-run rubric — a FIXED skeleton (diff-sentry's task is constant), stored in run_start meta."""
-
-    criteria: list[Criterion] = Field(default_factory=list)
-
-
-class CriterionFact(BaseModel):
-    """A DETERMINISTIC observation about one criterion, re-sourced from the trace (a FACT, never a score)."""
-
-    criterion: str
-    category: str
-    weight: float
-    observed: dict = Field(
-        default_factory=dict, description="deterministic facts (counts, ids); never a score or met/unmet verdict"
-    )
 
 
 # The allowed verdict labels + the ranked severities, kept as plain data so deterministic code
