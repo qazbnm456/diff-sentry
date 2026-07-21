@@ -18,6 +18,27 @@ from typing import Any, Optional
 
 _ROLES = ("planner", "analyst", "classifier")
 _SEV_ORDER = ("info", "low", "medium", "high", "critical")
+_MAX_SCALAR = 200   # a payload scalar longer than this is treated as bulky and dropped from `fields`
+
+# Payload keys a bespoke tool event already surfaces (or that are bulky) — dropped from the generic
+# unknown-tool event so it carries only SHORT scalar fields, never a raw blob.
+_SCALAR_DROP = frozenset({"tool", "ok", "raw", "preview", "spec", "hits", "args", "result",
+                          "output", "findings", "content", "errors", "reasoning"})
+
+
+def _scalar_fields(p: dict) -> dict:
+    """The payload's SHORT scalar fields (str/int/float/bool) for a tool with no bespoke event — the
+    already-surfaced tool/ok and every bulky key (raw/preview/spec/hits/args/…) are dropped, so an
+    unrecognized tool_call streams a meaningful row instead of being silently DROPPED from the feed."""
+    out: dict = {}
+    for k, v in (p or {}).items():
+        if k in _SCALAR_DROP:
+            continue
+        if isinstance(v, bool) or isinstance(v, (int, float)):
+            out[k] = v
+        elif isinstance(v, str) and len(v) <= _MAX_SCALAR:
+            out[k] = v
+    return out
 
 
 def _worst_severity(hits) -> Optional[str]:
@@ -106,8 +127,12 @@ def to_event(trace_event: dict) -> Optional[dict[str, Any]]:
             })
         if tool in ("read_skill", "list_skills"):
             return _ev("detection.skill.read", {"name": args.get("name") or "(catalog)"})
+        # An UNRECOGNIZED tool: SURFACE it (never DROP it from the live feed) with its short scalar
+        # fields, so a rare/future tool renders a meaningful row instead of vanishing. Bulky payload
+        # fields (raw/preview/spec/hits/…) are dropped by _scalar_fields.
+        return _ev("detection.tool", {"tool": tool, "ok": p.get("ok"), "fields": _scalar_fields(p)})
 
-    return None  # unknown type / unsurfaced tool — skip
+    return None  # unknown event type — skip
 
 
 def _ev(name: str, data: dict) -> dict[str, Any]:

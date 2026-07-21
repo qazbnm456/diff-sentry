@@ -5,6 +5,33 @@ malicious intent — the diff held as **untrusted data** in a sandboxed REPL, a 
 and deterministic indicator evidence unioned on read into a SIEM signal — as a traced, improvable RLM
 framework on [`rlm-kit`](https://github.com/qazbnm456/rlm-kit) (a BewAIre-style detector).
 
+## 0.3.0
+
+### Added
+- **An ungroundable input yields a principled `inconclusive`, never a confident verdict.** A content-free
+  / unfetchable / not-actually-a-change input (an empty `{}` payload normalizes to `(no textual content)`)
+  used to still ship a confident `benign, confidence 0.9`. Now `inconclusive` is a SANCTIONED SUBMIT
+  outcome — a 4th `verdict` value (`schema.INCONCLUSIVE_VERDICT`, `SUBMIT_VERDICTS`): the classifier
+  prompt sanctions it explicitly (only for a change with no assessable content — NOT an escape hatch for a
+  hard-but-real change), and the second-stage `deep_classify` enum validator accepts it. `response` maps
+  it to `status="inconclusive"` + `RefusalInfo(reason="insufficient_evidence")` (the pre-existing
+  inconclusive envelope, previously unreachable). A host-side deterministic BACKSTOP
+  (`normalize.has_groundable_content` over the run's normalized `event`) DOWNGRADES even a confident
+  verdict to inconclusive when there is no groundable content — defense-in-depth, read-time. It rides the
+  reward-free trajectory as an `inconclusive` OUTCOME label (`rl_export.run_labels`, mirroring the
+  clean-negative idea) — a FACT, never a score/reward. The DETERMINISTIC SIEM half is untouched:
+  `inconclusive` is not in `emit_on`, so a real high/critical indicator still forces a signal on its own.
+- **Studio: an unrecognized `tool_call` renders its short scalar fields instead of an empty step, and the
+  future harness swap keeps its child-rollout link.** The drawer mapper (`iterations._tool_entry`), the
+  SSE mapper (`mapper.to_event` — which previously DROPPED an unknown tool from the live feed, now emits a
+  generic `detection.tool` event), and the frontend fallback (`trajectory.js` detail + a generic
+  icon/`fam-tool` family) all surface an unknown tool's short scalar payload fields (tool, ok, and any
+  short string/number fields; bulky raw/preview/spec/hits dropped) as kv rows — never a bare "no detail
+  recorded" when fields exist. And `deep_classify.record_tool_call` now attaches `child_run_id` /
+  `child_trace` / `child_meta` when the second-stage result carries them (guarded — a NO-OP for today's
+  `self` backend, correct for the documented future `make_harness_tool` swap so the parent→child rollout
+  link survives the recording step).
+
 ## 0.2.1
 
 ### Fixed

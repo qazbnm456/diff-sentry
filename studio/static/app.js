@@ -21,6 +21,7 @@
     skill: '<svg viewBox="0 0 24 24"><path d="M5 4h9a2 2 0 012 2v14H7a2 2 0 01-2-2z"/><path d="M9 4v12"/></svg>',
     flag: '<svg viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>',
     shield: '<svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/></svg>',
+    tool: '<svg viewBox="0 0 24 24"><path d="M14 6a3.5 3.5 0 00-4.7 4.3L4 15.5 8.5 20l5.2-5.3A3.5 3.5 0 0018 10l-2.3 2.3-2-2z"/></svg>',
   };
 
   const feedEl = $("#feed"), stageEl = $("#stage-col"), metaEl = $("#meta-col"), layoutEl = $(".layout");
@@ -63,6 +64,10 @@
     "detection.fetch": (d) => ({ icon: "fetch", fam: d.ok ? "fam-signal" : "fam-bad", label: d.ok ? "Fetch" : "Fetch failed",
       meta: d.status != null ? `${d.status}${d.bytes != null ? " · " + fmtBytes(d.bytes) : ""}` : "", detail: d.ok ? d.url : d.note }),
     "detection.skill.read": (d) => ({ icon: "skill", fam: "fam-skill", label: "Read skill", meta: d.name }),
+    // An unrecognized tool: a generic row (never dropped from the feed). Its short scalar fields ride the
+    // Trajectory drawer; the feed shows the tool name + ok state.
+    "detection.tool": (d) => ({ icon: "tool", fam: d.ok === false ? "fam-bad" : "fam-tool",
+      label: d.tool || "Tool", meta: d.ok == null ? "" : (d.ok ? "ok" : "failed") }),
     "detection.run.created": () => ({ icon: "flag", fam: "fam-signal", label: "Classification started" }),
     "detection.run.completed": (d) => ({ icon: "flag", fam: d._error ? "fam-bad" : "fam-signal", label: d._error ? "Stream error" : "Finalized", detail: d._error }),
   };

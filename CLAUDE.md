@@ -59,6 +59,18 @@ One companion rule ships under `.claude/rules/`:
   EVIDENCE; a cited id with no recorded hit lands in `cited_unknown_ids` (a fabrication tell). This
   assembly runs at EVERY read path — live (`cli`), re-render, and `rl_export` — so labels are facts.
   Do NOT add a hits/severity/signal field to the SUBMIT type or a second signal derivation.
+- **An ungroundable input yields a principled `inconclusive`, never a confident verdict.** A content-free
+  / unfetchable / not-actually-a-change input (an empty payload normalizes to `(no textual content)`)
+  must NOT ship a confident `benign`/`malicious`. `inconclusive` is a SANCTIONED SUBMIT outcome
+  (`schema.INCONCLUSIVE_VERDICT`, a 4th `verdict` value in `SUBMIT_VERDICTS` — the classifier prompt
+  sanctions it, the `deep_classify` enum accepts it) mapped by `response` to `status="inconclusive"` +
+  `RefusalInfo(reason="insufficient_evidence")`. A host-side deterministic BACKSTOP
+  (`normalize.has_groundable_content` over the run's normalized `event`) DOWNGRADES even a confident
+  verdict to inconclusive when no groundable content exists — defense-in-depth, read-time. It is a
+  reward-free NEGATIVE OUTCOME (`rl_export.run_labels['inconclusive']`), NOT a score/reward, and NOT an
+  escape hatch for a hard-but-real change (which still gets a decisive call). The DETERMINISTIC SIEM half
+  is untouched — `inconclusive` is not in `emit_on`, so hard indicator evidence still forces a signal on
+  its own.
 - **MF1 — the metadata sandwich in `normalize_event`.** dspy surfaces a ~1000-char head+tail PREVIEW
   of the input into the prompt, so the derived-metadata header AND identical footer deny the attacker
   the preview edges, and attacker-authored fields inside the metadata (title, filenames) are BOUNDED

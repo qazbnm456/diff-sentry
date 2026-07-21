@@ -31,6 +31,13 @@ CRITERION_CATEGORIES = ("TF", "TA", "TG", "PA")
 # The allowed verdict labels + the ranked severities, kept as plain data so deterministic code
 # (assemble/response) can compare them without importing an enum machinery the model must satisfy.
 VERDICTS = ("benign", "suspicious", "malicious")
+# The SANCTIONED "cannot ground a confident call" outcome — a principled negative OUTCOME, NOT a reward.
+# A content-free / unfetchable / not-actually-a-change input lands here instead of a confident verdict;
+# `response` maps it to `status="inconclusive"` + `RefusalInfo(reason="insufficient_evidence")`. It is
+# NOT in the default `emit_on`, so it never forces a SIEM signal (hard indicator evidence still can).
+INCONCLUSIVE_VERDICT = "inconclusive"
+# The full set of legitimate SUBMIT / second-stage verdict labels (the 3 DECISIVE verdicts + inconclusive).
+SUBMIT_VERDICTS = VERDICTS + (INCONCLUSIVE_VERDICT,)
 SEVERITIES = ("info", "low", "medium", "high", "critical")
 _SEV_RANK = {s: i for i, s in enumerate(SEVERITIES)}
 
@@ -85,7 +92,9 @@ class ChangeVerdict(BaseModel):
 
     summary: str = Field(..., description="One or two sentences: what the change is and the call you made.")
     verdict: str = Field(
-        ..., description="benign | suspicious | malicious — your classification of INTENT.")
+        ..., description="benign | suspicious | malicious | inconclusive — your classification of INTENT. "
+        "Use `inconclusive` ONLY when the change carries no assessable content (empty / unfetchable / not "
+        "an actual change) — a real, groundable change (even a hard one) gets a decisive call.")
     confidence: float = Field(
         0.5, ge=0.0, le=1.0, description="0..1 confidence in the verdict.")
     rationale: str = Field(

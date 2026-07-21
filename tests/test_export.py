@@ -31,6 +31,21 @@ def test_labels_none_when_no_result(make_trace):
     runs = load_runs(make_trace(run_id="pr-9", with_result=False))
     labels = export_dataset(runs)["labels"]["pr-9"]
     assert labels["verdict"] == "none" and labels["signal"] is False
+    assert labels["inconclusive"] is False
+
+
+def test_inconclusive_label_is_a_reward_free_fact(make_trace):
+    """The `inconclusive` OUTCOME label — True when a content-free change reached the insufficient-evidence
+    outcome (mirrors the response backstop), False on a normal malicious run. A reward-free FACT."""
+    from diff_sentry.ingest import event_from_payload
+
+    empty = event_from_payload({})
+    benign = {"summary": "s", "verdict": "benign", "confidence": 0.9, "rationale": "r", "techniques": [],
+              "suspect_files": [], "indicator_ids": [], "recommended_action": "allow"}
+    content_free = export_dataset(load_runs(make_trace(event=empty, verdict=benign, run_id="e1")))
+    assert content_free["labels"]["e1"]["inconclusive"] is True
+    normal = export_dataset(load_runs(make_trace(run_id="m1")))
+    assert normal["labels"]["m1"]["inconclusive"] is False
 
 
 def test_export_carries_the_reward_free_rubric_signal(make_trace):
