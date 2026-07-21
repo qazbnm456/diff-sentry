@@ -43,19 +43,30 @@ def load_runs(*trace_paths: str) -> dict[str, list[dict]]:
 
 def run_labels(events: list[dict]) -> dict:
     """Intrinsic OUTCOME labels for one run — facts, NOT a reward. Derived from the ASSEMBLED verdict so
-    `signal` reads the deterministic union (never the planner's self-report)."""
+    `signal` reads the deterministic union (never the planner's self-report).
+
+    `inconclusive` is a reward-free NEGATIVE OUTCOME fact (mirroring the clean-negative idea): True when
+    the finalized run reached the sanctioned insufficient-evidence outcome — the planner submitted
+    `inconclusive`, or the normalized change carried no groundable content (the response backstop). It is
+    a FACT for a downstream trainer to weigh, never a score."""
     from .assemble import verdict_from_events
+    from .normalize import has_groundable_content
+    from .schema import INCONCLUSIVE_VERDICT
 
     assembled = verdict_from_events(events)
     if assembled is None:
         return {"verdict": "none", "signal": False, "indicator_count": 0,
-                "max_indicator_severity": "info", "cited_unknown": 0}
+                "max_indicator_severity": "info", "cited_unknown": 0, "inconclusive": False}
+    ev = _meta(events).get("event")
+    groundable = has_groundable_content(ev) if isinstance(ev, str) else True
+    inconclusive = (assembled.verdict or "").strip().lower() == INCONCLUSIVE_VERDICT or not groundable
     return {
         "verdict": assembled.verdict,
         "signal": bool(assembled.signal),
         "indicator_count": len(assembled.indicators),
         "max_indicator_severity": assembled.max_indicator_severity,
         "cited_unknown": len(assembled.cited_unknown_ids),
+        "inconclusive": bool(inconclusive),
     }
 
 

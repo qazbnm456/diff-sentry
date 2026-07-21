@@ -29,7 +29,8 @@
     if (t.label === "scan") return "fam-scan";
     if (t.label === "classify") return t.circuit_broken || t.error ? "fam-bad" : (t.ok === false ? "fam-warn" : "fam-ok");
     if (t.ok === false || t.error) return "fam-bad";   // a failed analyst carries `error` but no `ok` key
-    return { fetch: "fam-signal", skill: "fam-skill", analyst: "fam-analyst" }[t.label] || "fam-signal";
+    // Unknown tools fall to a neutral generic family (never blank) — see the detailTool kv fallback.
+    return { fetch: "fam-signal", skill: "fam-skill", analyst: "fam-analyst" }[t.label] || "fam-tool";
   }
   const secs = (s) => s == null ? "" : s < 1 ? `${Math.round(s * 1000)}ms` : s < 60 ? `${s.toFixed(1)}s` : formatElapsed(s);
 
@@ -134,7 +135,7 @@
       const title = `${t.label} · +${secs(t.rel_s)} · took ${secs(t.duration_s)}`;
       parts.push(`<button class="seg ${toolFam(t)}" role="listitem" data-tool="${t.seq}" ` +
         `data-turn-index="${ti != null ? ti : ""}" style="flex:${Math.max(dur, 0.01).toFixed(3)} 0 ${w}px" title="${esc(title)}">` +
-        `<span class="seg-ic">${ICONS[TOOL_ICON[t.label]] || ""}</span>` +
+        `<span class="seg-ic">${ICONS[TOOL_ICON[t.label]] || ICONS.tool || ""}</span>` +
         `<span class="seg-lab">${esc(t.label)}</span><span class="seg-dur">${esc(secs(t.duration_s))}</span></button>`);
     });
     trajEl.timeline.innerHTML = parts.join("");
@@ -266,7 +267,12 @@
         (failed && t.note ? `<div class="det-bad">${esc(t.note)}</div>` : "") +
         (t.content ? `<div class="block"><div class="block-head">${failed ? "response" : "fetched (head)"}</div><pre class="src-well">${esc(t.content)}</pre></div>` : "");
     }
+    // Generic fallback (an unrecognized tool): render ok + the short scalar fields as kv rows, so an
+    // unknown tool_call is never a bare "no detail recorded" when the payload carried fields.
     const rows = [];
+    if (t.ok != null) rows.push(kv("ok", esc(t.ok)));
+    const fields = t.fields || {};
+    Object.keys(fields).forEach((k) => rows.push(kv(k, esc(fields[k]))));
     if (t.target) rows.push(kv("target", _linkify(String(t.target))));
     if (t.note) rows.push(kv("note", esc(t.note)));
     return head + (rows.join("") || `<div class="det-muted">no detail recorded</div>`);

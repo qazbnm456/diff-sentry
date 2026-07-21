@@ -20,6 +20,27 @@ from __future__ import annotations
 from typing import Any, Optional
 
 _CAP = 16000   # per-field char cap — generous (rarely hit); bounds a pathological output/blob
+_MAX_SCALAR = 200   # a payload scalar longer than this is treated as bulky and dropped from `fields`
+
+# Payload keys a bespoke tool renderer already surfaces (or that are bulky) — dropped from the generic
+# `fields` fallback so an unrecognized tool_call surfaces its SHORT scalar fields, never a raw blob.
+_SCALAR_DROP = frozenset({"tool", "ok", "raw", "preview", "spec", "hits", "args", "result",
+                          "output", "findings", "content", "errors", "reasoning"})
+
+
+def _scalar_fields(p: dict) -> dict:
+    """The payload's SHORT scalar fields (str/int/float/bool) for a tool with no bespoke renderer — the
+    already-surfaced tool/ok and every bulky key (raw/preview/spec/hits/args/…) are dropped. Keeps an
+    unrecognized tool_call from rendering as an empty step."""
+    out: dict = {}
+    for k, v in (p or {}).items():
+        if k in _SCALAR_DROP:
+            continue
+        if isinstance(v, bool) or isinstance(v, (int, float)):
+            out[k] = v
+        elif isinstance(v, str) and len(v) <= _MAX_SCALAR:
+            out[k] = v
+    return out
 
 
 def _step_key(e: dict) -> int:
@@ -64,7 +85,9 @@ def _tool_entry(p: dict, gap: Optional[float]) -> dict:
     elif tool == "list_skills":
         e.update(label="skill", target="(catalog)", content=_preview(p.get("result")))
     else:
-        e.update(label=tool or "tool", target=_preview(args))
+        # An UNRECOGNIZED tool: surface its short scalar fields (tool + ok ride on `e` already) so the
+        # drawer renders meaningful kv rows instead of a bare `str(args)` blob / "no detail recorded".
+        e.update(label=tool or "tool", fields=_scalar_fields(p))
     return e
 
 

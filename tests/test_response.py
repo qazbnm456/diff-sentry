@@ -7,8 +7,10 @@ import json
 from rlm_kit.trace import load_events
 
 from diff_sentry.assemble import verdict_from_events
+from diff_sentry.ingest import event_from_payload
 from diff_sentry.response import build_failed_response, build_response
 from diff_sentry.schema import CRITERION_CATEGORIES
+from tests.conftest import BENIGN_EVENT, MALICIOUS_VERDICT
 
 
 def test_build_response_classified(make_trace):
@@ -38,6 +40,44 @@ def test_inconclusive_when_no_result(make_trace):
     events = load_events(make_trace(with_result=False))
     a = verdict_from_events(events)
     assert a is None
+
+
+# ---- inconclusive: an ungroundable input must not ship a CONFIDENT verdict ----
+
+def test_empty_payload_yields_inconclusive_not_a_confident_verdict(make_trace):
+    """The core gap: a content-free change (empty payload → '(no textual content)') must NOT ship a
+    confident verdict. Even a confident benign SUBMIT is DOWNGRADED to status=inconclusive (the
+    defense-in-depth backstop) — never a 'benign, confidence 0.9'."""
+    empty = event_from_payload({})
+    confident_benign = {**MALICIOUS_VERDICT, "verdict": "benign", "confidence": 0.9,
+                        "techniques": [], "suspect_files": [], "indicator_ids": []}
+    events = load_events(make_trace(event=empty, verdict=confident_benign, run_id="empty-1"))
+    resp = build_response(verdict_from_events(events), events, "empty-1")
+    assert resp.status == "inconclusive"
+    assert resp.verdict is None                                     # NOT a confident benign
+    assert resp.refusal and resp.refusal.reason == "insufficient_evidence"
+    assert resp.signal is False                                     # no groundable content → no indicators
+
+
+def test_inconclusive_verdict_maps_to_refusal(make_trace):
+    """The sanctioned `inconclusive` SUBMIT over a GROUNDABLE change maps to status=inconclusive +
+    RefusalInfo(reason='insufficient_evidence')."""
+    inc = {**MALICIOUS_VERDICT, "verdict": "inconclusive", "techniques": [], "suspect_files": [],
+           "indicator_ids": []}
+    events = load_events(make_trace(event=BENIGN_EVENT, verdict=inc, run_id="inc-1"))
+    resp = build_response(verdict_from_events(events), events, "inc-1")
+    assert resp.status == "inconclusive"
+    assert resp.refusal and resp.refusal.reason == "insufficient_evidence"
+    assert resp.verdict is None
+
+
+def test_groundable_benign_stays_classified(make_trace):
+    """Regression: a real, groundable benign change is UNCHANGED — status classified, verdict carried."""
+    benign = {**MALICIOUS_VERDICT, "verdict": "benign", "confidence": 0.8, "techniques": [],
+              "suspect_files": [], "indicator_ids": []}
+    events = load_events(make_trace(event=BENIGN_EVENT, verdict=benign, run_id="ben-1"))
+    resp = build_response(verdict_from_events(events), events, "ben-1")
+    assert resp.status == "classified" and resp.verdict == "benign"
 
 
 # ---- ATLAS rubric (a reward-free LABEL surface, surfaced in the response) ----

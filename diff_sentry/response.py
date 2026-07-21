@@ -12,8 +12,10 @@ from typing import Optional
 from rlm_kit.trace import EVENT_RUN_START
 
 from .indicators import hits_from_events
+from .normalize import has_groundable_content
 from .rubric import criteria_facts, default_rubric, rubric_from_meta
 from .schema import (
+    INCONCLUSIVE_VERDICT,
     AssembledVerdict,
     DetectionResponse,
     ProcessInfo,
@@ -87,13 +89,34 @@ def _rubric(events: list[dict]) -> RubricReport:
     return RubricReport(criteria=criteria)
 
 
-def _status(assembled: AssembledVerdict) -> str:
-    return "classified" if (assembled.verdict or "").strip() else "inconclusive"
+def _has_groundable_content(events: list[dict]) -> bool:
+    """Whether the run's normalized change carried real untrusted content — read from the `event` string
+    in run_start meta. Absent/unparseable → True, so a normal run is never mis-downgraded."""
+    ev = _meta(events).get("event")
+    return has_groundable_content(ev) if isinstance(ev, str) else True
+
+
+def _resolve_outcome(assembled: AssembledVerdict, events: list[dict]) -> tuple[str, str, str]:
+    """The response status for a FINALIZED run + the refusal (reason, detail) when it is not `classified`.
+    A finalized run is `classified` UNLESS the planner submitted no verdict (legacy empty), submitted the
+    sanctioned `inconclusive` outcome, OR the normalized change carried NO groundable content — in which
+    case a confident verdict is DOWNGRADED to inconclusive (defense-in-depth: an ungroundable input must
+    never ship a confident verdict)."""
+    verdict = (assembled.verdict or "").strip().lower()
+    if not verdict:
+        return "inconclusive", "inconclusive", "The run finalized without a usable verdict."
+    if verdict == INCONCLUSIVE_VERDICT:
+        return ("inconclusive", "insufficient_evidence",
+                "The classifier judged the change not assessable — insufficient evidence to ground a verdict.")
+    if not _has_groundable_content(events):
+        return ("inconclusive", "insufficient_evidence",
+                "The change carried no groundable content to assess; no confident verdict was warranted.")
+    return "classified", "", ""
 
 
 def build_response(assembled: AssembledVerdict, events: list[dict], run_id: str) -> DetectionResponse:
     """Serialize a completed run as a `DetectionResponse`."""
-    status = _status(assembled)
+    status, reason, detail = _resolve_outcome(assembled, events)
     ts = [e["ts"] for e in events if isinstance(e.get("ts"), (int, float))]
     created = int(min(ts)) if ts else 0
     common = dict(
@@ -104,8 +127,7 @@ def build_response(assembled: AssembledVerdict, events: list[dict], run_id: str)
     if status != "classified":
         return DetectionResponse(
             status="inconclusive",
-            refusal=RefusalInfo(reason="inconclusive", detail="The run finalized without a usable verdict.",
-                                indicators=assembled.indicators),
+            refusal=RefusalInfo(reason=reason, detail=detail, indicators=assembled.indicators),
             indicators=assembled.indicators, max_indicator_severity=assembled.max_indicator_severity,
             signal=assembled.signal, **common,
         )

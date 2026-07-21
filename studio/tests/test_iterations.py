@@ -53,6 +53,17 @@ def test_cited_unknown_ids_empty_when_no_result():
     assert cited_unknown_ids(trace) == []
 
 
+def test_unrecognized_tool_surfaces_its_scalar_fields():
+    # an unknown tool_call must render its SHORT scalar fields (never an empty step / a bare str(args)).
+    trace = [{"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {}}},
+             {"type": "tool_call", "step_id": 1, "ts": 2.0, "payload": {
+                 "tool": "mystery_tool", "ok": True, "count": 2, "label_hint": "did work",
+                 "raw": "x" * 5000, "args": {"region": "r"}, "hits": [{"id": "a"}]}}]
+    entry = build_iterations(trace)["timeline"][0]
+    assert entry["label"] == "mystery_tool" and entry["tool"] == "mystery_tool" and entry["ok"] is True
+    assert entry["fields"] == {"count": 2, "label_hint": "did work"}   # scalars only; raw/args/hits dropped
+
+
 def test_per_turn_timing_off_when_main_steps_cluster():
     # older-style trace: main_steps flushed at finalize (ts cluster) → no per-turn timing, no fake durations
     trace = [{"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {}}},

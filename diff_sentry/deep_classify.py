@@ -24,7 +24,7 @@ from rlm_kit.tools import make_model_tool
 from rlm_kit.trace import record_tool_call
 
 from .config import DetectConfig
-from .schema import VERDICTS
+from .schema import SUBMIT_VERDICTS
 
 
 @dataclass
@@ -56,8 +56,10 @@ def _parse_classifier_json(raw: str) -> ClassifyValidation:
     except ValueError as exc:
         return ClassifyValidation(ok=False, errors=[f"invalid JSON: {exc}"])
     verdict = str(obj.get("verdict", "")).strip().lower()
-    if verdict not in VERDICTS:
-        return ClassifyValidation(ok=False, errors=[f"verdict {verdict!r} not in {VERDICTS}"])
+    # SUBMIT_VERDICTS = the 3 decisive verdicts + the sanctioned `inconclusive` outcome, so a deep
+    # escalation on a content-free / ungroundable change can also decline to a confident call.
+    if verdict not in SUBMIT_VERDICTS:
+        return ClassifyValidation(ok=False, errors=[f"verdict {verdict!r} not in {SUBMIT_VERDICTS}"])
     try:
         confidence = float(obj.get("confidence", 0.5))
     except (TypeError, ValueError):
@@ -123,9 +125,16 @@ def make_deep_classify_tool(config: DetectConfig, chat_fn: Optional[Callable[[st
             record_tool_call("deep_classify", args={"findings": findings[:400]}, error=r.endpoint_error)
             return f"DEEP_CLASSIFY ENDPOINT ERROR: {r.endpoint_error}. Decide from the indicators yourself."
         v: ClassifyValidation = r.validated
+        # Future SEAM swap: when the second-stage backend is a delegated rlm-kit HARNESS
+        # (make_harness_tool) rather than the `self` model, its result carries
+        # child_run_id/child_trace/child_meta linking THIS parent run to the child's OWN rollout. Attach
+        # them here IFF present, so the child link survives the recording step. The current backend's
+        # ModelToolResult has none, so `child` is empty → a NO-OP today, correct for the swap.
+        child = {k: getattr(r, k) for k in ("child_run_id", "child_trace", "child_meta")
+                 if getattr(r, k, None) is not None}
         record_tool_call("deep_classify", args={"findings": findings[:400]}, ok=v.ok, raw=r.raw,
                          verdict=v.verdict, confidence=v.confidence, techniques=v.techniques,
-                         errors=v.errors)
+                         errors=v.errors, **child)
         if not v.ok:
             return ("DEEP_CLASSIFY returned an unusable (non-JSON / off-schema) reply — errors: "
                     + "; ".join(v.errors) + ". Decide from the deterministic indicators and your reading.")

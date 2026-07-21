@@ -64,10 +64,12 @@ WORKFLOW — triage → decode/scan → (escalate if ambiguous) → verdict
    `scan_indicators` the decoded value. A base64 filename that decodes to `curl … | bash` is malicious.
 3. If the change is obvious (a clean refactor; or a plain download-and-execute), decide now. If it is
    genuinely ambiguous, escalate ONCE — `deep_classify` for a second verdict, or `llm_query` for a
-   subtle source→sink — then decide. Do NOT thrash; one focused escalation, then commit.
+   subtle source→sink — then decide. Do NOT thrash; one focused escalation, then commit. If the change
+   has NO assessable content at all (empty payload, unfetchable, not actually a change), emit
+   `inconclusive` — see the HARD RULES.
 4. SUBMIT the `verdict` (JUDGEMENT only):
    - `summary`             — what the change is and the call you made.
-   - `verdict`             — benign | suspicious | malicious (your read of INTENT).
+   - `verdict`             — benign | suspicious | malicious | inconclusive (your read of INTENT).
    - `confidence`          — 0..1.
    - `rationale`           — grounded in the change + the indicators, not a vibe.
    - `techniques`          — the attack techniques you saw (empty for benign).
@@ -84,8 +86,16 @@ HARD RULES — do not violate:
 - The deterministic indicators reach the SIEM whatever your verdict — you cannot down-vote hard evidence
   away. Be HONEST: if a high/critical indicator fired, say so; a `benign` over clear evidence is a lie
   the assemble step will contradict.
+- INSUFFICIENT EVIDENCE is a legitimate call — but ONLY for an UNGROUNDABLE change. If the change carries
+  no assessable content (an empty/malformed payload, unfetchable content, or something that is not
+  actually a change), SUBMIT `verdict=inconclusive` (techniques + suspect_files empty): a principled
+  "insufficient evidence" is CORRECT, not a failure, and forcing a `benign`/`malicious` here would be a
+  guess. This is NOT an escape hatch — a REAL, groundable change (even a hard one) gets a decisive
+  benign/suspicious/malicious call. Distinguish a content-free input (`inconclusive`) from a hard-but-real
+  one (decide).
 - Reach a verdict in budget. You have a HARD iteration cap; a run that analyses forever and never
-  SUBMITs ships nothing — the worst outcome. Triage, escalate at most once on a genuine ambiguity, decide."""
+  SUBMITs ships nothing — the worst outcome. Triage, escalate at most once on a genuine ambiguity, then
+  commit to a decisive verdict (or a principled `inconclusive` on a content-free input)."""
 
 
 def _maybe_subscription_lm(model: str):

@@ -93,9 +93,19 @@ def test_result_and_run_end_and_final():
     assert to_event({"type": "final", "payload": {}}) is None
 
 
-def test_unknown_type_and_unsurfaced_tool_are_skipped():
+def test_unknown_event_type_is_skipped():
     assert to_event({"type": "something_else", "payload": {}}) is None
-    assert to_event({"type": "tool_call", "payload": {"tool": "mystery_tool", "args": {}}}) is None
+
+
+def test_unrecognized_tool_is_surfaced_with_its_scalar_fields():
+    # a rare/future tool must NOT be dropped from the feed — it surfaces as a generic `detection.tool`
+    # event carrying its short scalar fields (bulky raw/preview/spec/hits dropped).
+    ev = to_event({"type": "tool_call", "payload": {
+        "tool": "mystery_tool", "ok": True, "count": 3, "note": "did a thing",
+        "raw": "x" * 5000, "hits": [{"id": "a"}], "args": {"region": "r"}}})
+    assert ev["event"] == "detection.tool"
+    assert ev["data"]["tool"] == "mystery_tool" and ev["data"]["ok"] is True
+    assert ev["data"]["fields"] == {"count": 3, "note": "did a thing"}   # scalars only; raw/hits/args dropped
 
 
 def test_worst_severity_ranks_and_tolerates_junk():
