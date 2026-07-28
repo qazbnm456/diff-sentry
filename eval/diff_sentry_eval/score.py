@@ -24,8 +24,8 @@ and not a fake 0.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from statistics import fmean
-from typing import Callable, Optional
 
 from diff_sentry import AssembledVerdict, run_labels, run_metrics, verdict_from_events
 
@@ -52,7 +52,7 @@ def _trace_facts(events: list[dict]) -> dict:
     return {**run_labels(events), **run_metrics(events)}
 
 
-def _assembled(events: list[dict]) -> Optional[AssembledVerdict]:
+def _assembled(events: list[dict]) -> AssembledVerdict | None:
     """The assembled verdict, or None if the run never finalized. `verdict_from_events` RETURNS None on a
     trace with no result event; the caller turns None into an `unscored` row."""
     return verdict_from_events(events)
@@ -80,8 +80,8 @@ def _verdict_block(a: AssembledVerdict) -> str:
     techniques = ", ".join(a.techniques) or "(none)"
     suspects = ", ".join(a.suspect_files) or "(none)"
     return "\n".join([
-        f"Verdict: {a.verdict} (confidence {a.confidence}) · recommended action: {a.recommended_action} "
-        f"· SIEM signal: {a.signal}",
+        (f"Verdict: {a.verdict} (confidence {a.confidence}) · recommended action: "
+         f"{a.recommended_action} · SIEM signal: {a.signal}"),
         f"Summary: {a.summary}",
         f"Rationale: {a.rationale}",
         f"Techniques: {techniques}",
@@ -113,16 +113,16 @@ def _execution_summary(events: list[dict]) -> str:
     f = _trace_facts(events)
     return "\n".join([
         f"assembled verdict: {f.get('verdict')} · derived SIEM signal: {f.get('signal')}",
-        f"deterministic indicators: {f.get('indicator_count', 0)} (max severity "
-        f"{f.get('max_indicator_severity', 'info')}); cited-but-unrecorded: {f.get('cited_unknown', 0)}",
-        f"tools: {f.get('scan_calls', 0)} scan(s), {f.get('deep_classify_calls', 0)} deep-classify "
-        f"({f.get('deep_classify_circuit_breaks', 0)} circuit-broken), {f.get('analyst_calls', 0)} "
-        f"analyst escalation(s), {f.get('fetches', 0)} fetch(es), {f.get('skill_reads', 0)} skill read(s)",
+        (f"deterministic indicators: {f.get('indicator_count', 0)} (max severity "
+         f"{f.get('max_indicator_severity', 'info')}); cited-but-unrecorded: {f.get('cited_unknown', 0)}"),
+        (f"tools: {f.get('scan_calls', 0)} scan(s), {f.get('deep_classify_calls', 0)} deep-classify "
+         f"({f.get('deep_classify_circuit_breaks', 0)} circuit-broken), {f.get('analyst_calls', 0)} "
+         f"analyst escalation(s), {f.get('fetches', 0)} fetch(es), {f.get('skill_reads', 0)} skill read(s)"),
     ])
 
 
 def build_judge_inputs(events: list[dict], eval_task: EvalTask,
-                       assembled: Optional[AssembledVerdict] = None) -> Optional[dict]:
+                       assembled: AssembledVerdict | None = None) -> dict | None:
     """Reconstruct the ATLAS judge's inputs from the trace, or None for a run with no usable verdict.
 
     `assembled` may be passed when the caller already built it (`score_run` does); otherwise it is

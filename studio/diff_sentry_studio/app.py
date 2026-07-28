@@ -57,7 +57,7 @@ class _RevalidateStatic(StaticFiles):
     zero-build `app.js`/`style.css` cache indefinitely, so a shipped frontend change silently shows the
     OLD UI until a manual hard-refresh."""
 
-    async def get_response(self, path: str, scope):  # noqa: ANN001 — Starlette's Scope type
+    async def get_response(self, path: str, scope):
         resp = await super().get_response(path, scope)
         resp.headers["Cache-Control"] = "no-cache"
         return resp
@@ -86,7 +86,7 @@ def _sse(event: str, data: dict) -> str:
 _SUBSCRIPTION_PREFIX = "claude-agent-sdk/"  # mirrors diff_sentry.config.SUBSCRIPTION_PREFIX
 
 
-def _role_or_none(explicit: "str | None", fallback: "str | None") -> "str | None":
+def _role_or_none(explicit: str | None, fallback: str | None) -> str | None:
     """`explicit or fallback`, EXCEPT a role that can't run on a subscription (the second-stage
     classifier — a separate make_model_tool endpoint, not the Agent SDK) must not surface a
     subscription-sentinel fallback: `from_env` REJECTS a `claude-agent-sdk/…` classifier, so showing the
@@ -255,7 +255,7 @@ class ClassifyRequest(BaseModel):
     overwrite: bool = False
 
 
-def _derive_run_id(req: "ClassifyRequest") -> str:
+def _derive_run_id(req: ClassifyRequest) -> str:
     """The run id, sanitized (it becomes a file path). Mirrors `cli.py`: pr → `<repo->-pr-<n>`, issue →
     `<repo->-issue-<n>`, classify → `<repo->-<number>` (from the payload)."""
     if req.run_id and req.run_id.strip():

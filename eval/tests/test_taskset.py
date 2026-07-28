@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from diff_sentry_eval.taskset import demo_taskset, load_taskset
 
 

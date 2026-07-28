@@ -61,6 +61,35 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 110
 
+# ruff's DEFAULT rule set is not a stable contract — 0.16 expanded it far past the
+# pycodestyle/pyflakes baseline, which is why CI pins the version. The handful of default rules that
+# fight this project's design are ignored BY NAME here, with the reason.
+#
+# Deliberately no `select` list: curating one is a real policy decision, and this codebase leans on
+# lazy imports (keeping modules SDK-free, deferring optional extras) that a broader selection would
+# immediately argue with.
+#
+# `S110`/`BLE001` are deliberately NOT here. A best-effort swallow IS the design at several
+# boundaries — but every such site already carries a `# noqa` naming why, which is more precise than
+# a blanket ignore and keeps a NEW one from arriving unexamined.
+[tool.ruff.lint]
+ignore = [
+    # `__all__` is grouped by concern (config/schema, scan, normalize, assemble, response, emit),
+    # which tells a reader the package's shape. Alphabetical order would lose that.
+    "RUF022",
+    # Would swap ValueError for TypeError at two taskset validation sites. That is a PUBLIC
+    # behaviour change — callers and tests catch ValueError — bought for a lint preference.
+    "TRY004",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test idiom, not debt: a mutable class attribute on a throwaway fixture needs no `ClassVar`, and a
+# `subprocess.run` whose exit code the test asserts on itself does not want `check=True` (it would
+# raise before the assertion that reports WHY it failed).
+"tests/**" = ["RUF012", "S101", "PLW1510"]
+"eval/tests/**" = ["RUF012", "S101", "PLW1510"]
+"studio/tests/**" = ["RUF012", "S101", "PLW1510"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

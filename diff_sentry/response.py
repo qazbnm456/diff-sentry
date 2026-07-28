@@ -7,8 +7,6 @@ Pure stdlib + pydantic; no dspy.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from rlm_kit.trace import EVENT_RUN_START
 
 from .indicators import hits_from_events
@@ -32,7 +30,7 @@ def _meta(events: list[dict]) -> dict:
     return {}
 
 
-def _source(events: list[dict]) -> Optional[dict]:
+def _source(events: list[dict]) -> dict | None:
     src = _meta(events).get("source")
     return src if isinstance(src, dict) else None
 
@@ -42,7 +40,7 @@ def _models(events: list[dict]) -> dict:
     return {k: m.get(k) for k in ("planner", "analyst", "classifier") if m.get(k)}
 
 
-def _elapsed_s(events: list[dict]) -> Optional[float]:
+def _elapsed_s(events: list[dict]) -> float | None:
     ts = [e["ts"] for e in events if isinstance(e.get("ts"), (int, float))]
     return round(max(ts) - min(ts), 3) if len(ts) >= 2 else None
 
@@ -119,11 +117,11 @@ def build_response(assembled: AssembledVerdict, events: list[dict], run_id: str)
     status, reason, detail = _resolve_outcome(assembled, events)
     ts = [e["ts"] for e in events if isinstance(e.get("ts"), (int, float))]
     created = int(min(ts)) if ts else 0
-    common = dict(
-        id=run_id, created=created, model=_models(events), source=_source(events),
-        process=_process(events),
-        rubric=_rubric(events),   # ATLAS TF/TA/TG/PA reward-free labels (surfaced, not judged)
-    )
+    common = {
+        "id": run_id, "created": created, "model": _models(events), "source": _source(events),
+        "process": _process(events),
+        "rubric": _rubric(events),  # ATLAS TF/TA/TG/PA reward-free labels (surfaced, not judged)
+    }
     if status != "classified":
         return DetectionResponse(
             status="inconclusive",

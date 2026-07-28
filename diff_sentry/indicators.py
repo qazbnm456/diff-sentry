@@ -23,7 +23,7 @@ import binascii
 import hashlib
 import math
 import re
-from typing import Callable
+from collections.abc import Callable
 
 from .schema import IndicatorHit
 

@@ -14,7 +14,7 @@ three. `sub_call` carries `input`/`processed`/`raw` (rlm-kit's sub-LM), not ques
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 _ROLES = ("planner", "analyst", "classifier")
 _SEV_ORDER = ("info", "low", "medium", "high", "critical")
@@ -34,14 +34,12 @@ def _scalar_fields(p: dict) -> dict:
     for k, v in (p or {}).items():
         if k in _SCALAR_DROP:
             continue
-        if isinstance(v, bool) or isinstance(v, (int, float)):
-            out[k] = v
-        elif isinstance(v, str) and len(v) <= _MAX_SCALAR:
+        if isinstance(v, (bool, int, float)) or (isinstance(v, str) and len(v) <= _MAX_SCALAR):
             out[k] = v
     return out
 
 
-def _worst_severity(hits) -> Optional[str]:
+def _worst_severity(hits) -> str | None:
     """The highest severity across recorded indicator hits (a list of dicts), or None when empty."""
     best, best_rank = None, -1
     for h in hits or []:
@@ -55,7 +53,7 @@ def _worst_severity(hits) -> Optional[str]:
     return best
 
 
-def to_event(trace_event: dict) -> Optional[dict[str, Any]]:
+def to_event(trace_event: dict) -> dict[str, Any] | None:
     """Return `{"event": <name>, "data": {...}}` for a surfaced trace event, else None."""
     t = trace_event.get("type")
     p = trace_event.get("payload") or {}

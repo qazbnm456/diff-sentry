@@ -7,7 +7,7 @@ artifacts, so the suite runs on a fresh clone / in CI. The facts are driven thro
 
 from __future__ import annotations
 
-from diff_sentry.rl_export import run_labels, run_metrics, rubric_signal
+from diff_sentry.rl_export import rubric_signal, run_labels, run_metrics
 from diff_sentry.rubric import (
     CATEGORY_MEANING,
     criteria_facts,

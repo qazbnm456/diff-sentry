@@ -31,7 +31,7 @@ def test_pr_event_via_injected_api():
             return [{"commit": {"verification": {"verified": False, "reason": "unknown_key"},
                                 "author": {"name": "mallory"}}},
                     {"commit": {"verification": {"verified": True}, "author": {"name": "mallory"}}}]
-        if path.startswith("user/") or path.startswith("users/"):
+        if path.startswith(("user/", "users/")):
             return {"created_at": "2025-07-01T00:00:00Z", "name": "Mallory Q"}
         return {"user": {"login": "mallory", "type": "User", "id": 4242},
                 "author_association": "FIRST_TIME_CONTRIBUTOR", "title": "add ci", "body": "b"}
@@ -58,7 +58,7 @@ def test_pr_event_404_author_becomes_a_fact_transient_does_not():
     def api404(path):
         if path.endswith("/files"):
             return []
-        if path.startswith("user/") or path.startswith("users/"):
+        if path.startswith(("user/", "users/")):
             raise GhApiError("not found", status=404)
         return {"user": {"login": "gone", "type": "User", "id": 9}, "author_association": "NONE"}
     assert pr_event("a/b", 7, api=api404)["provenance"]["author_not_found"] is True
@@ -66,7 +66,7 @@ def test_pr_event_404_author_becomes_a_fact_transient_does_not():
     def api_transient(path):
         if path.endswith("/files"):
             return []
-        if path.startswith("user/") or path.startswith("users/"):
+        if path.startswith(("user/", "users/")):
             raise GhApiError("network", status=None)
         return {"user": {"login": "x", "type": "User"}, "author_association": "NONE"}
     assert "author_not_found" not in pr_event("a/b", 7, api=api_transient)["provenance"]
@@ -74,7 +74,7 @@ def test_pr_event_404_author_becomes_a_fact_transient_does_not():
     def api_500(path):                                           # a non-404 HTTP error is NOT a deletion fact
         if path.endswith("/files"):
             return []
-        if path.startswith("user/") or path.startswith("users/"):
+        if path.startswith(("user/", "users/")):
             raise GhApiError("server error", status=500)
         return {"user": {"login": "x", "type": "User"}, "author_association": "NONE"}
     assert "author_not_found" not in pr_event("a/b", 7, api=api_500)["provenance"]

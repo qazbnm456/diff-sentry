@@ -19,8 +19,6 @@ Pure stdlib + pydantic; no dspy.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from rlm_kit.trace import EVENT_RESULT, EVENT_RUN_START
 
 from .indicators import hits_from_events
@@ -74,8 +72,8 @@ def assemble_verdict(
     )
 
 
-def verdict_from_events(events: list[dict], *, emit_on: Optional[tuple[str, ...]] = None
-                        ) -> Optional[AssembledVerdict]:
+def verdict_from_events(events: list[dict], *, emit_on: tuple[str, ...] | None = None
+                        ) -> AssembledVerdict | None:
     """Reconstruct the assembled verdict from a saved trace's result event, or None if the run produced
     no result (never finalized). `emit_on` defaults to the value recorded in the run's meta, so an
     offline re-render/export re-derives the SAME `signal` the live run emitted (finding 5)."""

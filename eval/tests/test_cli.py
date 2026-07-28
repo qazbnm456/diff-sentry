@@ -7,7 +7,6 @@ import json
 from types import SimpleNamespace
 
 from conftest import MALICIOUS_CHANGE, record_run
-
 from diff_sentry_eval.cli import main
 
 

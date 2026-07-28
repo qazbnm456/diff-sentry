@@ -20,8 +20,8 @@ import asyncio
 import glob
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 from . import __version__
 from .config import DetectConfig
@@ -32,9 +32,9 @@ async def detect_from_event(
     event: dict,
     config: DetectConfig,
     *,
-    trace_path: Optional[str] = None,
+    trace_path: str | None = None,
     run_id: str = "change",
-    on_event: Optional[Callable[[dict], None]] = None,
+    on_event: Callable[[dict], None] | None = None,
     extra_tools=(),
 ):
     """Run the classifier on one change event and return the planner's JUDGEMENT (`ChangeVerdict`).
@@ -111,7 +111,7 @@ def _reset_trace(trace_path: str) -> None:
 
 @dataclass
 class RunArtifacts:
-    assembled: Optional[AssembledVerdict]
+    assembled: AssembledVerdict | None
     events: list
     run_id: str
     trace_path: str
@@ -125,8 +125,8 @@ def run(
     *,
     run_id: str = "change",
     outdir: str = "./output",
-    config: Optional[DetectConfig] = None,
-    on_event: Optional[Callable[[dict], None]] = None,
+    config: DetectConfig | None = None,
+    on_event: Callable[[dict], None] | None = None,
     extra_tools=(),
     emit: bool = True,
     poster=None,

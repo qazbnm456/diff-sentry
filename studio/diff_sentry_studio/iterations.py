@@ -17,7 +17,7 @@ diff_sentry import). This mirrors `assemble.assemble_verdict` (the union is base
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 _CAP = 16000   # per-field char cap — generous (rarely hit); bounds a pathological output/blob
 _MAX_SCALAR = 200   # a payload scalar longer than this is treated as bulky and dropped from `fields`
@@ -36,9 +36,7 @@ def _scalar_fields(p: dict) -> dict:
     for k, v in (p or {}).items():
         if k in _SCALAR_DROP:
             continue
-        if isinstance(v, bool) or isinstance(v, (int, float)):
-            out[k] = v
-        elif isinstance(v, str) and len(v) <= _MAX_SCALAR:
+        if isinstance(v, (bool, int, float)) or (isinstance(v, str) and len(v) <= _MAX_SCALAR):
             out[k] = v
     return out
 
@@ -48,18 +46,18 @@ def _step_key(e: dict) -> int:
     return int(s) if s.lstrip("-").isdigit() else 1 << 30
 
 
-def _preview(s: Any) -> Optional[str]:
+def _preview(s: Any) -> str | None:
     if s is None:
         return None
     s = str(s)
     return s if len(s) <= _CAP else s[:_CAP] + "\n…[truncated — full text in the trace]"
 
 
-def _gap(ts: Optional[float], prev: Optional[float]) -> Optional[float]:
+def _gap(ts: float | None, prev: float | None) -> float | None:
     return round(ts - prev, 3) if (ts is not None and prev is not None) else None
 
 
-def _tool_entry(p: dict, gap: Optional[float]) -> dict:
+def _tool_entry(p: dict, gap: float | None) -> dict:
     """One tool_call → a UI-ready entry: a label, the input it was given, the output it returned."""
     tool = p.get("tool")
     args = p.get("args") or {}
@@ -91,7 +89,7 @@ def _tool_entry(p: dict, gap: Optional[float]) -> dict:
     return e
 
 
-def _sub_entry(p: dict, gap: Optional[float]) -> dict:
+def _sub_entry(p: dict, gap: float | None) -> dict:
     """One sub_call (an analyst escalation) → the distilled question + the answer it returned."""
     return {"kind": "analyst", "label": "analyst", "model": p.get("name") or p.get("model"),
             "duration_s": gap, "input": _preview(p.get("input")),
@@ -148,13 +146,13 @@ def build_iterations(events: list[dict]) -> dict:
     """
     evs = sorted(events, key=_step_key)
     meta: dict = {}
-    ts0: Optional[float] = None
+    ts0: float | None = None
     for e in evs:
         if e.get("type") == "run_start":
             meta = (e.get("payload") or {}).get("meta") or {}
             ts0 = e.get("ts")
             break
-    ts_end: Optional[float] = None
+    ts_end: float | None = None
     for e in reversed(evs):
         if e.get("type") in ("run_end", "result", "final"):
             ts_end = e.get("ts")

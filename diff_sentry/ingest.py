@@ -16,7 +16,9 @@ Pure stdlib; no dspy. `event_from_payload` is the offline path (a payload you al
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from datetime import UTC
+from typing import Any
 
 # An `api` maps a `gh api <path>` argument to parsed JSON. Injectable for tests; default uses `gh`.
 GhApi = Callable[[str], Any]
@@ -31,7 +33,7 @@ class GhApiError(Exception):
     reported (a POSITIVELY-confirmed 404 vs a transient/network error, which leaves `status=None`) — so an
     enrichment caller can turn a real 404 into a fact while still omitting on any transient failure."""
 
-    def __init__(self, message: str, *, status: Optional[int] = None):
+    def __init__(self, message: str, *, status: int | None = None):
         super().__init__(message)
         self.status = status
 
@@ -40,7 +42,10 @@ def _gh_cli_api(timeout: float = 30.0) -> GhApi:
     def call(path: str) -> Any:
         import subprocess  # host-side only; NEVER reached from inside the RLM
 
-        out = subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=timeout)
+        # check=False is the INTENT, stated rather than defaulted: the returncode is inspected
+        # below because `gh` prints the HTTP error body on failure, and raising would discard it.
+        out = subprocess.run(["gh", "api", path], capture_output=True, text=True,
+                             timeout=timeout, check=False)
         if out.returncode != 0:
             # gh prints the HTTP error BODY (JSON, with a `"status"`) to stdout on an HTTP failure; stdout is
             # empty on a network/transport failure. So a confirmed 404 is distinguishable from a transient.
@@ -63,19 +68,21 @@ def _gh_cli_api(timeout: float = 30.0) -> GhApi:
     return call
 
 
-def _age_days(created_at: str) -> Optional[int]:
+def _age_days(created_at: str) -> int | None:
     """Account age in whole days from an ISO-8601 `created_at`. Host-side only (uses the wall clock — never
     reached from the RLM/replay path, so it does not break trace determinism)."""
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        created = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
-        return max(0, (datetime.now(timezone.utc) - created).days)
+        # No "Z" -> "+00:00" rewrite: `fromisoformat` has parsed a trailing "Z" since 3.11, which
+        # is this project's `requires-python` floor.
+        created = datetime.fromisoformat(str(created_at))
+        return max(0, (datetime.now(UTC) - created).days)
     except (ValueError, TypeError):
         return None
 
 
-def _provenance(repo: str, number: Optional[int], user: Optional[dict], association: Any,
+def _provenance(repo: str, number: int | None, user: dict | None, association: Any,
                 call: GhApi, *, fetch_commits: bool) -> dict:
     """Best-effort HOST-SIDE source/provenance facts for a change — author identity/association, account
     age, and (PRs) commit signature counts, from `gh api`. Every enrichment call is guarded: a `gh` hiccup
@@ -100,7 +107,7 @@ def _provenance(repo: str, number: Optional[int], user: Optional[dict], associat
         except GhApiError as e:
             if e.status == 404:
                 prov["author_not_found"] = True                         # POSITIVE 404 → a fact
-        except Exception:  # noqa: BLE001 — transient failure: omit, never sink the ingest
+        except Exception:  # noqa: BLE001,S110 — transient failure: omit, never sink the ingest
             pass
     if fetch_commits and number is not None:
         try:
@@ -167,7 +174,7 @@ def event_from_payload(payload: dict) -> dict:
     return out
 
 
-def pr_event(repo: str, number: int, *, api: Optional[GhApi] = None) -> dict:
+def pr_event(repo: str, number: int, *, api: GhApi | None = None) -> dict:
     """Fetch a PR + its files from GitHub (host-side) into a change-event dict. `api` is injectable."""
     call = api or _gh_cli_api()
     pr = call(f"repos/{repo}/pulls/{number}")
@@ -190,7 +197,7 @@ def pr_event(repo: str, number: int, *, api: Optional[GhApi] = None) -> dict:
     }
 
 
-def issue_event(repo: str, number: int, *, api: Optional[GhApi] = None) -> dict:
+def issue_event(repo: str, number: int, *, api: GhApi | None = None) -> dict:
     """Fetch an issue from GitHub (host-side) into a change-event dict — the issue body is the untrusted
     content (the hackerbot-claw prompt-injection issues came in this shape)."""
     call = api or _gh_cli_api()

@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from .mapper import to_event
 
@@ -49,7 +49,7 @@ def _quiet_litellm_aiohttp() -> None:
     try:
         import litellm
         litellm.disable_aiohttp_transport = True
-    except Exception:  # noqa: BLE001 — litellm absent (replay-only) or attribute gone; nothing to quiet
+    except Exception:  # noqa: BLE001,S110 — litellm absent (replay-only) or attribute gone
         pass
 
 
@@ -113,7 +113,7 @@ def _final_response(arts, run_id: str, build_failed_response) -> dict:
     if path and os.path.exists(path):
         try:
             return json.loads(Path(path).read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 — unreadable/partial file; fall through to a failed dict
+        except Exception:  # noqa: BLE001,S110 — unreadable/partial file; fall to a failed dict
             pass
     return _failed_dict(run_id, "The run finalized without a readable response artifact.",
                         build_failed_response)
@@ -138,7 +138,7 @@ def _failed_dict(run_id: str, detail: str, build_failed_response: Callable | Non
     try:
         bfr = build_failed_response
         if bfr is None:
-            from diff_sentry.response import build_failed_response as bfr  # noqa: PLC0414
+            from diff_sentry.response import build_failed_response as bfr
         return bfr(run_id, [], detail).model_dump()
     except Exception:  # noqa: BLE001 — diff_sentry missing; emit a self-contained failure
         return {

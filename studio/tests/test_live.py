@@ -7,7 +7,6 @@ import types
 from pathlib import Path
 
 import pytest
-
 from diff_sentry_studio.live import (
     _build_event,
     _describe_exc,
@@ -15,7 +14,6 @@ from diff_sentry_studio.live import (
     run_live,
     trace_event_sink,
 )
-
 
 # ---- trace_event_sink: the sandbox-invoked tools + analyst, from the recorder's on_event ----
 

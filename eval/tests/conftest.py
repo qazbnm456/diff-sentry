@@ -10,7 +10,6 @@ from __future__ import annotations
 import base64
 
 import pytest
-
 from diff_sentry_eval.taskset import EvalTask
 
 # A hackerbot-claw-style filename payload: base64 of a pipe-to-shell command, smuggled with ${IFS}

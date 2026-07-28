@@ -14,7 +14,7 @@ this module owns the allowlist + the httpx provider + tracing. Sync (dspy invoke
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 from rlm_kit.tools import is_safe_url, parse_cidrs, resolved_host_is_safe

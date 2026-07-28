@@ -25,7 +25,7 @@ from rlm_kit import (
     render_skills_manifest,
 )
 
-from .config import DetectConfig, SUBSCRIPTION_PREFIX
+from .config import SUBSCRIPTION_PREFIX, DetectConfig
 from .indicators import make_indicator_tool
 from .schema import ChangeVerdict
 

@@ -13,8 +13,8 @@ SIEM / Splunk-HEC / generic-webhook consumer builds detection rules on it. Pure 
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 from .config import DetectConfig
 from .schema import DetectionResponse
@@ -27,9 +27,9 @@ Poster = Callable[[str, dict, dict], int]
 @dataclass
 class EmitResult:
     emitted: bool                     # a POST was actually sent
-    status_code: Optional[int] = None
-    skipped_reason: Optional[str] = None   # why nothing was sent (no signal / no webhook / disabled)
-    error: Optional[str] = None       # a transport error (the run still stands; this is best-effort)
+    status_code: int | None = None
+    skipped_reason: str | None = None   # why nothing was sent (no signal / no webhook / disabled)
+    error: str | None = None       # a transport error (the run still stands; this is best-effort)
 
 
 def signal_payload(response: DetectionResponse) -> dict:
@@ -61,7 +61,7 @@ def _httpx_poster(timeout: float) -> Poster:
 
 
 def emit_signal(
-    response: DetectionResponse, config: DetectConfig, *, poster: Optional[Poster] = None,
+    response: DetectionResponse, config: DetectConfig, *, poster: Poster | None = None,
     timeout: float = 15.0,
 ) -> EmitResult:
     """Emit the SIEM signal for a finished run, if the response says to and a webhook is configured.

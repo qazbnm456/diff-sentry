@@ -17,8 +17,8 @@ invokes tools synchronously.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
 from rlm_kit.tools import make_model_tool
 from rlm_kit.trace import record_tool_call
@@ -98,7 +98,7 @@ def _selfclassify_chat(config: DetectConfig) -> Callable[[str], str]:
     return chat
 
 
-def make_deep_classify_tool(config: DetectConfig, chat_fn: Optional[Callable[[str], str]] = None
+def make_deep_classify_tool(config: DetectConfig, chat_fn: Callable[[str], str] | None = None
                             ) -> Callable[[str], str]:
     """Build the `deep_classify` tool. The generic chat→retry→validate→circuit-break loop is rlm-kit's
     `make_model_tool`; this wrapper plugs in the backend, the JSON validator, the result message, and

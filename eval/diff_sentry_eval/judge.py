@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any
 
 from rlm_kit.tools import make_model_tool
 
@@ -96,15 +97,15 @@ class EvalJudgeConfig:
     """The judge endpoint, role-based via DSEVAL_* env — never a hardcoded model name."""
 
     model: str = ""                 # DSEVAL_MODEL — empty means "no live judge configured" (use the stub)
-    base_url: Optional[str] = None  # DSEVAL_BASE_URL — any OpenAI-compatible endpoint
+    base_url: str | None = None  # DSEVAL_BASE_URL — any OpenAI-compatible endpoint
     api_key: str = ""               # DSEVAL_API_KEY
     timeout: float = 60.0           # DSEVAL_TIMEOUT (seconds) — a HARD ceiling per call
     max_tokens: int = 1024
     transient_retries: int = 1
-    max_consecutive_invalid: Optional[int] = 4  # batch-scoped circuit breaker (make_model_tool)
+    max_consecutive_invalid: int | None = 4  # batch-scoped circuit breaker (make_model_tool)
 
     @classmethod
-    def from_env(cls) -> "EvalJudgeConfig":
+    def from_env(cls) -> EvalJudgeConfig:
         return cls(
             model=os.getenv("DSEVAL_MODEL", ""),
             base_url=os.getenv("DSEVAL_BASE_URL") or None,
@@ -121,7 +122,7 @@ class JudgeVerdict:
     """
 
     ok: bool
-    score: Optional[EvalScore] = None
+    score: EvalScore | None = None
     reason: str = ""
 
 
@@ -198,8 +199,8 @@ def _judge_chat(config: EvalJudgeConfig) -> Callable[[str], str]:
     return chat
 
 
-def make_eval_judge(config: Optional[EvalJudgeConfig] = None, *,
-                    chat_fn: Optional[Callable[[str], Any]] = None) -> Callable[[dict], JudgeVerdict]:
+def make_eval_judge(config: EvalJudgeConfig | None = None, *,
+                    chat_fn: Callable[[str], Any] | None = None) -> Callable[[dict], JudgeVerdict]:
     """Build the batch judge: `judge(inputs) -> JudgeVerdict` over `make_model_tool`.
 
     `inputs` is the dict `score.build_judge_inputs` produces (change / reference / verdict / indicators /

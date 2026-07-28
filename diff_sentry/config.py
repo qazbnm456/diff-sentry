@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -51,14 +50,14 @@ class DetectConfig:
     # `from_env` requires them. Empty defaults are only for direct construction in tests.
     main_model: str = ""   # planner: a cheap, injection-resistant orchestrator driving the REPL loop
     sub_model: str = ""    # analyst: an expensive brain for a subtle case (reached via llm_query)
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
+    api_key: str | None = None
+    base_url: str | None = None
 
     # ── The second-stage classifier SEAM ─────────────────────────────────────────────────────────
     classify_backend: str = "self"          # "self" now (a general model); a dedicated backend later
     classifier_model: str = ""
-    classifier_base_url: Optional[str] = None
-    classifier_api_key: Optional[str] = None
+    classifier_base_url: str | None = None
+    classifier_api_key: str | None = None
     classifier_system_prompt: str = _DEFAULT_CLASSIFIER_SYSTEM_PROMPT
     classifier_timeout: float = 60.0
     classifier_max_tokens: int = 2048
@@ -71,7 +70,7 @@ class DetectConfig:
     observe: bool = False
     adapter: str = "json"
     # Generous, NOT None: a reasoning planner truncated before its answer returns empty content.
-    planner_max_tokens: Optional[int] = 16384
+    planner_max_tokens: int | None = 16384
     # HARD ceiling on the single RLM episode. No outer multi-run loop (max_retries=1) — one change =
     # one trajectory, so the trace stays valid training data. RLMTaskError is INFRA, not a schema bug.
     max_iterations: int = 25
@@ -105,7 +104,7 @@ class DetectConfig:
             raise ValueError(f"classify_backend must be 'self' (only backend wired), got {self.classify_backend!r}")
 
     @classmethod
-    def from_env(cls) -> "DetectConfig":
+    def from_env(cls) -> DetectConfig:
         planner = os.getenv("DS_ROOT_LM")
         analyst = os.getenv("DS_SUB_LM")
         if not planner or not analyst:

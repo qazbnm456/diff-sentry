@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from diff_sentry_eval.schema import CATEGORIES, EvalReport, EvalRow, EvalScore
+from pydantic import ValidationError
 
 
 def test_categories_are_the_four_atlas_codes():

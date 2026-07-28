@@ -12,8 +12,6 @@ Pure pydantic; no dspy — trivially unit-testable.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 # reward-free rubric TYPES — now rlm-kit's shared, taxonomy-agnostic primitives, re-exported here so
@@ -78,7 +76,7 @@ class IndicatorHit(BaseModel):
     title: str = Field(..., description="One-line human summary of what fired.")
     evidence: str = Field("", description="A BOUNDED snippet of the matched region (never the whole diff).")
     location: str = Field("", description="Where it fired — a filename, `filename:` prefix, or region label.")
-    decoded: Optional[str] = Field(default=None, description="Decoded payload when the rule de-obfuscated one.")
+    decoded: str | None = Field(default=None, description="Decoded payload when the rule de-obfuscated one.")
 
 
 # ── the planner's SUBMIT: JUDGEMENT only (the RLMTask output_model) ───────────────────────────────
@@ -116,7 +114,7 @@ class ChangeVerdict(BaseModel):
         "allow", description="allow | flag-for-review | block-merge — your recommended gate.")
 
     @classmethod
-    def from_payload(cls, out: dict) -> "ChangeVerdict":
+    def from_payload(cls, out: dict) -> ChangeVerdict:
         """Coerce a stored result-event `output` into a ChangeVerdict, healing legacy/loose shapes.
         Extra keys a stray planner emitted (e.g. an `indicators` list it tried to author) are ignored
         by pydantic — `assemble_verdict` re-sources the real hits from the trace."""
@@ -171,7 +169,7 @@ class ProcessInfo(BaseModel):
     deep_classify_circuit_breaks: int = 0
     analyst_calls: int = 0
     fetches: int = 0
-    elapsed_s: Optional[float] = None
+    elapsed_s: float | None = None
     hit_iteration_cap: bool = False
 
 
@@ -216,20 +214,20 @@ class DetectionResponse(BaseModel):
     created: int = 0
     model: dict = Field(default_factory=dict, description="The roles used: planner / analyst / classifier.")
     status: str
-    verdict: Optional[str] = None
-    confidence: Optional[float] = None
+    verdict: str | None = None
+    confidence: float | None = None
     signal: bool = False
     summary: str = ""
     rationale: str = ""
     techniques: list[str] = Field(default_factory=list)
     suspect_files: list[str] = Field(default_factory=list)
-    recommended_action: Optional[str] = None
+    recommended_action: str | None = None
     indicators: list[IndicatorHit] = Field(default_factory=list)
     max_indicator_severity: str = "info"
-    source: Optional[dict] = Field(default=None, description="Echoed change metadata (repo/kind/number).")
-    refusal: Optional[RefusalInfo] = None
+    source: dict | None = Field(default=None, description="Echoed change metadata (repo/kind/number).")
+    refusal: RefusalInfo | None = None
     process: ProcessInfo = Field(default_factory=ProcessInfo)
-    rubric: Optional[RubricReport] = Field(
+    rubric: RubricReport | None = Field(
         default=None,
         description="ATLAS TF/TA/TG/PA reward-free LABELS for this run's trajectory (deterministic facts, never a score).",
     )

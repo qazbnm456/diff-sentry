@@ -12,8 +12,6 @@ Pure pydantic; no dspy, no openai, no diff_sentry import.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 # The four ATLAS judge categories, change-analysis domain: Classification Fulfillment (the primary metric),
@@ -47,7 +45,7 @@ class EvalRow(BaseModel):
 
     task_id: str
     run_id: str
-    score: Optional[EvalScore] = None
+    score: EvalScore | None = None
     metrics: dict = Field(default_factory=dict, description="run_metrics (steps, scan/deep_classify/analyst calls…)")
     verdict: str = Field("", description="the assembled verdict (benign/suspicious/malicious/none) — a fact")
     signal: bool = Field(False, description="the deterministically DERIVED SIEM signal — a fact, not the judge's")
