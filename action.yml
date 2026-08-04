@@ -35,12 +35,16 @@ inputs:
     default: ''
   version:
     description: >-
-      The diff-sentry version to run: a git ref while the package is pre-PyPI, so
-      pin it for reproducible CI. The special value `local` installs from the
-      current checkout instead, which is what this repo's own CI uses so that a PR
-      is scanned by the rules IN that PR rather than by the ones already on main.
+      The diff-sentry release to install from PyPI. Defaults to the version that
+      ships with this action tag, so `uses: …@vX.Y.Z` and the package it runs stay
+      in step. The special value `local` installs from the current checkout instead,
+      which is what this repo's own CI uses so that a PR is scanned by the rules IN
+      that PR rather than by the ones already on main.
     required: false
-    default: 'main'
+    # KEEP IN STEP WITH [project].version. release.yml fails the build if this drifts
+    # from the tag being released, because a stale default here would silently run an
+    # old scanner under a new action tag.
+    default: '0.4.0'
 
 outputs:
   failed:
@@ -120,7 +124,7 @@ runs:
         if [ "$IN_VERSION" = "local" ]; then
           SENTRY=(uvx --from "$GITHUB_WORKSPACE" diff-sentry)
         else
-          SENTRY=(uvx --from "git+https://github.com/qazbnm456/diff-sentry@${IN_VERSION}" diff-sentry)
+          SENTRY=(uvx "diff-sentry==${IN_VERSION}")
         fi
 
         set +e

