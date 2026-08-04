@@ -92,8 +92,14 @@ One companion rule ships under `.claude/rules/`:
   Severities are TUNED, not monotone-paranoid: a plain workflow-file edit is `medium` — BELOW the
   signal floor — ON PURPOSE (a benign workflow PR must not force a SIEM signal; a real payload inside
   the workflow fires the high/critical shell/obfuscation rules itself), while a CODEOWNERS
-  reassignment is `high` (the hackerbot-claw move). The corpus pins this hit/miss behavior. Hit
-  evidence is a BOUNDED snippet (`_MAX_EVIDENCE`), never the whole diff.
+  reassignment is `high` (the hackerbot-claw move). The same split governs the Miasma-family rules: a
+  bare `pull_request_target` is the ordinary label-bot shape → `medium`, but the SAME trigger checking
+  out the PR head is `pwn-request`/`critical` (untrusted code with the base repo's secrets — Miasma's
+  root cause); `dev-tunnel-endpoint` / `content-addressed-host` (IPFS) / `dynamic-code-eval` are
+  sub-floor CORROBORATORS, while the pairs that have no innocent reading — `child_process` + `detached`,
+  network-fetch + file-write — are `high`. A rule that needs BOTH halves is how a common primitive
+  becomes evidence without becoming noise. The corpus pins this hit/miss behavior, and every rule ships
+  with its NEGATIVE case. Hit evidence is a BOUNDED snippet (`_MAX_EVIDENCE`), never the whole diff.
 - **The indicator tool registers as exactly `scan_indicators`.** dspy registers a tool under its
   `__name__` and the prompt says `scan_indicators(region)` — a rename makes every sandbox call a
   NameError (a shipped regression; see the `fix(detect)` commit). The inner callable is renamed on

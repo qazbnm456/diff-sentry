@@ -5,12 +5,15 @@
     python -m diff_sentry classify event.json             # classify a payload you already hold
     python -m diff_sentry render traces/pr-7.jsonl pr-7   # re-render the response from a trace (offline)
     python -m diff_sentry export "traces/*.jsonl" ds.json # reward-free dataset export (offline)
+    git diff main...HEAD | python -m diff_sentry scan -   # indicators only, exit 1 at/above the floor
 
 `run()` is the programmatic entry. It records `traces/{run_id}.jsonl`, writes `responses/{run_id}.json`,
 and — host-side, AFTER the run — emits a SIEM signal when the assembled verdict warrants it. A host-side
 BASELINE indicator scan runs at ingest and rides in the run_start meta, so the deterministic evidence is
-in the trace before the planner takes a turn (MF3). `render`/`export` work offline; `pr`/`issue`/`classify`
-need model creds (DS_* env) + a Deno sandbox (`classify` only *ingests* offline).
+in the trace before the planner takes a turn (MF3). `scan`/`render`/`export` work offline;
+`pr`/`issue`/`classify` need model creds (DS_* env) + a Deno sandbox (`classify` only *ingests* offline).
+`scan` exposes that deterministic baseline on its own — the half we can run in our own CI on an untrusted
+fork PR, where no creds exist and none may be handed over (see `_cmd_scan`).
 """
 
 from __future__ import annotations
@@ -20,12 +23,13 @@ import asyncio
 import glob
 import json
 import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from . import __version__
 from .config import DetectConfig
-from .schema import AssembledVerdict
+from .schema import SEVERITIES, SIGNAL_SEVERITY_FLOOR, AssembledVerdict
 
 
 async def detect_from_event(
@@ -216,6 +220,50 @@ def _cmd_classify(args) -> int:
     return 0 if arts.assembled is not None else 1
 
 
+def _cmd_scan(args) -> int:
+    """The deterministic HALF of the pipeline, standalone: run the indicator suite over text and exit
+    non-zero on a hit at/above the floor. No LLM, no network, no creds, no Deno — just `indicators`.
+
+    This is what makes the detector safe to dogfood in our OWN CI. The full `pr`/`classify` path needs
+    `DS_*` creds, and the only way to hand creds to a fork PR's run is `pull_request_target` — the exact
+    misconfiguration that opened the AsyncAPI "Miasma" supply-chain compromise. `scan` needs nothing, so
+    it runs under the same read-only `contents: read` token an untrusted fork PR already gets."""
+    from .indicators import scan_indicators
+    from .schema import severity_rank
+
+    threshold = severity_rank(args.fail_on)
+    hits = []
+    for path in args.path:
+        if path == "-":
+            text, label = sys.stdin.read(), "<stdin>"
+        else:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+            label = path
+        hits.extend(scan_indicators(text, location=label))
+
+    worst = max((severity_rank(h.severity) for h in hits), default=-1)
+    failed = worst >= threshold
+
+    if args.json:
+        print(json.dumps({"hits": [h.model_dump() for h in hits], "count": len(hits),
+                          "max_severity": SEVERITIES[worst] if worst >= 0 else None,
+                          "fail_on": args.fail_on, "failed": failed}, indent=2))
+        return 1 if failed else 0
+
+    if not hits:
+        print("scan: no indicators fired.")
+        return 0
+    print(f"scan: {len(hits)} indicator(s), max severity={SEVERITIES[worst]} (fail-on={args.fail_on})")
+    for h in sorted(hits, key=lambda h: -severity_rank(h.severity)):
+        where = f" ({h.location})" if h.location else ""
+        print(f"  [{h.severity:8}] {h.rule}{where}: {h.title}")
+        print(f"             evidence: {h.evidence[:160]}")
+    print(f"FAIL — a hit at/above `{args.fail_on}`." if failed
+          else f"OK — every hit is below `{args.fail_on}`.")
+    return 1 if failed else 0
+
+
 def _cmd_render(args) -> int:
     from rlm_kit.trace import load_events
 
@@ -275,6 +323,14 @@ def build_parser() -> argparse.ArgumentParser:
     cl.add_argument("--out", default="./output")
     cl.add_argument("--no-emit", action="store_true", help="do not emit a SIEM signal")
     cl.set_defaults(func=_cmd_classify)
+
+    sc = sub.add_parser("scan", help="deterministic indicator scan over text/diff (offline, no creds)")
+    sc.add_argument("path", nargs="+", help="file(s) to scan; `-` reads stdin")
+    sc.add_argument("--fail-on", default=SIGNAL_SEVERITY_FLOOR, choices=SEVERITIES,
+                    help=f"exit 1 on a hit at/above this severity (default: {SIGNAL_SEVERITY_FLOOR}, "
+                         "the SIEM signal floor)")
+    sc.add_argument("--json", action="store_true", help="machine-readable output")
+    sc.set_defaults(func=_cmd_scan)
 
     r = sub.add_parser("render", help="re-render the response from a trace (offline)")
     r.add_argument("trace")
