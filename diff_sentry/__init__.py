@@ -1,6 +1,6 @@
 """diff-sentry — classify a GitHub change for malicious intent, as a traced RLM harness.
 
-A downstream *consumer* of rlm-kit (editable path dep) reproducing Datadog's BewAIre defense shape:
+A downstream *consumer* of rlm-harness (editable path dep) reproducing Datadog's BewAIre defense shape:
 ingest a GitHub PR/issue/push → analyze the diff as UNTRUSTED data in a sandboxed REPL → produce a
 judgement-only structured verdict (benign/suspicious/malicious) → union the deterministic indicator
 evidence on read → emit a SIEM signal host-side → export reward-free trajectories.

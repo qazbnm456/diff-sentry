@@ -518,7 +518,7 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
-    { name = "rlm-kit" },
+    { name = "rlm-harness" },
 ]
 
 [package.optional-dependencies]
@@ -550,7 +550,7 @@ requires-dist = [
     { name = "openai", marker = "extra == 'classify'", specifier = ">=1.0" },
     { name = "openinference-instrumentation-dspy", marker = "extra == 'observe'", specifier = ">=0.1.36" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "rlm-kit", git = "https://github.com/qazbnm456/rlm-kit.git?branch=main" },
+    { name = "rlm-harness", specifier = "==1.0.0" },
 ]
 provides-extras = ["classify", "observe", "subscription"]
 
@@ -2331,12 +2331,16 @@ wheels = [
 ]
 
 [[package]]
-name = "rlm-kit"
-version = "0.2.0"
-source = { git = "https://github.com/qazbnm456/rlm-kit.git?branch=main#e4e67da421e8740a17ce8f9fd9a6314fc040b958" }
+name = "rlm-harness"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dspy" },
     { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2f/33/049a51b502f93528ecae311404a904c3e9f8d302db628c7a5d9710d1c107/rlm_harness-1.0.0.tar.gz", hash = "sha256:ed401fd21d3950712cd0a45eb1d21b48fcdb9344432794e156fbece9e77e551c", size = 403045, upload-time = "2026-08-04T08:00:04.693Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/0b/58022e5fff93328ed136b0ebdc3a724a933ade15ab16a1adb7a04da6f634/rlm_harness-1.0.0-py3-none-any.whl", hash = "sha256:9449eec6db74d60c94e81a87139a56e1df4d8af70f9c31fc06c81f59a55b2e2f", size = 129987, upload-time = "2026-08-04T08:00:03.351Z" },
 ]
 
 [[package]]

@@ -1,8 +1,8 @@
 name: CI
 
 # Offline suite only: no live LLM, no network calls in tests, no Deno sandbox — dspy-bearing paths use
-# DummyLM / rlm-kit's ScriptedInterpreter, transports are injected fakes, and the corpus pins the
-# indicator suite's hit/miss behavior (see CLAUDE.md "Verify"). `uv sync` pulls rlm-kit from GitHub
+# DummyLM / rlm-harness's ScriptedInterpreter, transports are injected fakes, and the corpus pins the
+# indicator suite's hit/miss behavior (see CLAUDE.md "Verify"). `uv sync` pulls rlm-harness from GitHub
 # (uv.lock pins the exact commit).
 on:
   push:

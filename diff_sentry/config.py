@@ -1,6 +1,6 @@
 """Configuration for diff-sentry — model ROLES, never hardcoded model names.
 
-Three ROLES (the rlm-kit-consumer convention): the RLM PLANNER (root LM) drives the triage loop and
+Three ROLES (the rlm-harness-consumer convention): the RLM PLANNER (root LM) drives the triage loop and
 holds the diff in the REPL; the ANALYST (sub LM, reached via `llm_query`) is an expensive brain for a
 subtle case the planner can't call alone; and the CLASSIFIER (reached through the `deep_classify` tool)
 is the swappable second-stage that returns a structured verdict on an ambiguous change. Referred to by
@@ -19,7 +19,7 @@ from dataclasses import dataclass
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 # The sentinel model-string prefix that routes a ROLE onto the user's Claude Pro/Max SUBSCRIPTION via
-# rlm-kit's ClaudeAgentLM (see detect._maybe_subscription_lm). A config-level naming convention, so
+# rlm-harness's ClaudeAgentLM (see detect._maybe_subscription_lm). A config-level naming convention, so
 # it lives in this dspy-free module; detect.py imports it for the actual (lazy, dspy-bearing) wiring.
 SUBSCRIPTION_PREFIX = "claude-agent-sdk/"
 
@@ -62,7 +62,7 @@ class DetectConfig:
     classifier_timeout: float = 60.0
     classifier_max_tokens: int = 2048
     classifier_transient_retries: int = 1
-    # After this many CONSECUTIVE invalid classifications the tool short-circuits (rlm-kit make_model_tool).
+    # After this many CONSECUTIVE invalid classifications the tool short-circuits (rlm-harness make_model_tool).
     classifier_circuit_break: int = 4
 
     # ── RLM runtime knobs ────────────────────────────────────────────────────────────────────────
@@ -82,7 +82,7 @@ class DetectConfig:
     fetch_timeout: float = 20.0
     fetch_max_bytes: int = 400_000
     github_hosts: tuple[str, ...] = _DEFAULT_GITHUB_HOSTS
-    # Escape hatch for a host behind a fake-IP proxy / split-DNS VPN (see rlm-kit fetch guard).
+    # Escape hatch for a host behind a fake-IP proxy / split-DNS VPN (see rlm-harness fetch guard).
     fetch_allow_cidrs: tuple[str, ...] = ()
 
     # ── Skills KB (progressive disclosure) ───────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ class DetectConfig:
         api_key = os.getenv("DS_API_KEY")
         classifier = os.getenv("DS_CLASSIFIER_LM") or analyst
         # The classifier is a SEPARATE OpenAI-compatible client (deep_classify._selfclassify_chat →
-        # rlm-kit make_model_tool), NOT the subscription Agent SDK adapter — so its model can NEVER be
+        # rlm-harness make_model_tool), NOT the subscription Agent SDK adapter — so its model can NEVER be
         # a `claude-agent-sdk/…` sentinel. Two ways the sentinel could reach it, both config errors:
         # an EXPLICIT DS_CLASSIFIER_LM set to a sentinel, or the DEFAULT inheriting a subscription
         # DS_SUB_LM when DS_CLASSIFIER_LM is unset. `deep_classify` is ALWAYS registered, so a sentinel

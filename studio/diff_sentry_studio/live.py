@@ -6,7 +6,7 @@ read them — WITHOUT any change to the harness (a consumer extends, it never fo
 `main_step` reasoning flushes post-hoc (as a trailing burst through the SAME `on_event`), so the live
 feed carries the tool/analyst ACTION stream (scan / classify / analyst / fetch / skill), not live
 reasoning. Reasoning is available in the Trajectory drawer (replay over the stored trace). Streaming live
-reasoning would need a rlm-kit change (forward the main-step preview to `on_event` as each turn parses),
+reasoning would need a rlm-harness change (forward the main-step preview to `on_event` as each turn parses),
 promoted into the kit for every consumer — NOT a consumer-side callbacks passthrough.
 
 `run_live` is SYNCHRONOUS — call it in a worker thread; the FastAPI layer wires `sink`/`on_done` to a
@@ -41,7 +41,7 @@ def trace_event_sink(sink: Callable[[dict], None]) -> Callable[[dict], None]:
 
 
 def _quiet_litellm_aiohttp() -> None:
-    """litellm (dspy's LM backend, via rlm-kit) defaults to an aiohttp transport whose pooled
+    """litellm (dspy's LM backend, via rlm-harness) defaults to an aiohttp transport whose pooled
     ClientSession is bound to the per-run `asyncio.run` loop; when that loop closes — run finished — aiohttp
     logs a noisy "Unclosed connector" through the loop's exception handler. Force litellm onto httpx: no
     aiohttp session is created, so nothing dangles. One process-global flag, best-effort — a replay-only

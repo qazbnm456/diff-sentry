@@ -67,7 +67,7 @@ def test_fetch_tool_wired_when_enabled(configure_dummy):
 
 
 def test_build_rlm_resolves_custom_output_type(configure_dummy):
-    """ChangeVerdict must resolve via dspy custom_types, not call-stack walking (rlm-kit invariant)."""
+    """ChangeVerdict must resolve via dspy custom_types, not call-stack walking (rlm-harness invariant)."""
     import dspy
 
     task = ClassifyChange(config=_cfg())
@@ -87,7 +87,7 @@ def test_extra_tools_are_wired(configure_dummy):
 
 
 def test_setup_passes_max_output_chars_through():
-    from rlm_kit import get_config
+    from rlm_harness import get_config
 
     from diff_sentry.detect import setup
 

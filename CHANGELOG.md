@@ -3,7 +3,7 @@
 All notable changes to diff-sentry. This project classifies ONE GitHub change (PR/issue/push) for
 malicious intent — the diff held as **untrusted data** in a sandboxed REPL, a judgement-only verdict,
 and deterministic indicator evidence unioned on read into a SIEM signal — as a traced, improvable RLM
-framework on [`rlm-kit`](https://github.com/qazbnm456/rlm-kit) (a BewAIre-style detector).
+framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIre-style detector).
 
 ## 0.3.0
 
@@ -35,14 +35,14 @@ framework on [`rlm-kit`](https://github.com/qazbnm456/rlm-kit) (a BewAIre-style 
 ## 0.2.1
 
 ### Fixed
-- **The studio launches on a subscription with the SAME command as every rlm-kit sibling.** The studio
+- **The studio launches on a subscription with the SAME command as every rlm-harness sibling.** The studio
   member (`diff-sentry-studio`) was missing a forwarding `subscription` extra, so
   `uv run --package diff-sentry-studio --extra live --extra subscription uvicorn …` was rejected — a
   studio-scoped `uv` command resolves extras against the MEMBER, not the root, and the Claude Agent SDK
   extra lived only on the root. Added `subscription = ["diff-sentry[subscription]"]` to
   `studio/pyproject.toml` (mirroring the sibling harnesses) + a "Subscription mode" section to the studio
   README. Closes a cross-downstream drift (same gap fixed in the siblings); the paired-extras convention
-  is documented in rlm-kit's "Building a consumer" guide.
+  is documented in rlm-harness's "Building a consumer" guide.
 - **`/v1/config` never surfaces a subscription analyst as the classifier (a config a run couldn't use).**
   The classifier falls back to the analyst (`DS_CLASSIFIER_LM or DS_SUB_LM`), but the classifier is a
   `make_model_tool` endpoint and `from_env` REJECTS a subscription classifier — so with `DS_CLASSIFIER_LM`
@@ -56,13 +56,13 @@ framework on [`rlm-kit`](https://github.com/qazbnm456/rlm-kit) (a BewAIre-style 
 ### Added
 - **Run the planner + analyst on a Claude Pro/Max SUBSCRIPTION** (no API key). Give `DS_ROOT_LM` /
   `DS_SUB_LM` a `claude-agent-sdk/<model>` value and that role runs on your personal Claude login
-  through rlm-kit's `rlm_kit.ClaudeAgentLM` (a `dspy.BaseLM` over `claude-agent-sdk`), injected via
-  rlm-kit's `configure(main_lm=, sub_lm=)` seam. Each call is a pure completion — no tools, no
+  through rlm-harness's `rlm_harness.ClaudeAgentLM` (a `dspy.BaseLM` over `claude-agent-sdk`), injected via
+  rlm-harness's `configure(main_lm=, sub_lm=)` seam. Each call is a pure completion — no tools, no
   filesystem, no settings leakage — so the sandbox stays the only place code runs. Opt-in extra:
   `uv sync --extra subscription` (installs the Claude Agent SDK the adapter needs); requires the Claude
   Code CLI logged in and `ANTHROPIC_API_KEY` unset (the adapter refuses to start otherwise). The adapter
-  ships in the rlm-kit wheel behind its own `[subscription]` extra (promoted out of `examples/` —
-  diff-sentry no longer vendors it). Imported lazily via `from rlm_kit import ClaudeAgentLM` (only in
+  ships in the rlm-harness wheel behind its own `[subscription]` extra (promoted out of `examples/` —
+  diff-sentry no longer vendors it). Imported lazily via `from rlm_harness import ClaudeAgentLM` (only in
   `detect.setup()`'s sentinel branch) so `import diff_sentry` stays dspy-free and a proxy-only install
   never pulls the extra. A sentinel-configured run in an env that never installed the extra fails LOUD
   with an actionable error naming `uv sync --extra subscription` (`uv lock` records the extra; only sync

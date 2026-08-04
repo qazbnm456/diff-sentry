@@ -84,7 +84,7 @@ def _score_and_emit(rows, *, taskset: str, judge_model: str, prompt_version: str
 
 def _cmd_score(args) -> int:
     """Score EXISTING traces: glob → load_events → group_by_run → pair by run_id == task id → judge."""
-    from rlm_kit.trace import group_by_run, load_events
+    from rlm_harness.trace import group_by_run, load_events
 
     tasks = {t.id: t for t in _load_tasks(args.taskset)}
     paths = sorted(glob.glob(args.traces))

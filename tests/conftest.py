@@ -1,6 +1,6 @@
-"""Shared fixtures — a dummy rlm-kit config (no live model) and realistic change events + a trace builder.
+"""Shared fixtures — a dummy rlm-harness config (no live model) and realistic change events + a trace builder.
 
-Uses rlm-kit's public injection seam: configure with a DummyLM + mock interpreter so a task builds
+Uses rlm-harness's public injection seam: configure with a DummyLM + mock interpreter so a task builds
 through the real dspy.RLM constructor with no network/Deno, and record a realistic trajectory (run_start
 meta with a deterministic baseline scan + a scan_indicators tool call + a judgement-only result) through
 the real TraceRecorder so the assemble/response/export paths run on genuine JSONL.
@@ -85,10 +85,10 @@ BENIGN_SELF_REPORT = {
 
 @pytest.fixture
 def configure_dummy():
-    """Configure rlm-kit with a DummyLM + mock interpreter; returns the dummy LM."""
+    """Configure rlm-harness with a DummyLM + mock interpreter; returns the dummy LM."""
     pytest.importorskip("dspy")
     from dspy.utils.dummies import DummyLM
-    from rlm_kit import RLMConfig, configure
+    from rlm_harness import RLMConfig, configure
 
     dummy = DummyLM([{"reasoning": "r", "verdict": "{}"}])
     cfg = RLMConfig(main_model="x", sub_model="x", interpreter="mock", observe=False)
@@ -100,7 +100,7 @@ def configure_dummy():
 def make_trace(tmp_path):
     """builder(event=MALICIOUS_EVENT, verdict=MALICIOUS_VERDICT, run_id="pr-7", with_result=True) ->
     a real JSONL trace path (baseline scan in meta + a scan_indicators tool call + result)."""
-    from rlm_kit import TraceRecorder, record_tool_call
+    from rlm_harness import TraceRecorder, record_tool_call
 
     from diff_sentry.indicators import scan_indicators
     from diff_sentry.normalize import event_metadata, normalize_event, raw_content

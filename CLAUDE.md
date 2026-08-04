@@ -1,14 +1,14 @@
 # diff-sentry — agent guide
 
-A **BewAIre-style malicious-change detector** built on `rlm-kit` — a downstream consumer of the RLM
+A **BewAIre-style malicious-change detector** built on `rlm-harness` — a downstream consumer of the RLM
 scaffold. It classifies ONE GitHub change (PR/issue/push)
 for malicious intent: the diff is UNTRUSTED DATA held in a sandboxed REPL, the planner SUBMITs a
 judgement-only verdict, and the deterministic indicator EVIDENCE is unioned on read into a SIEM signal.
-rlm-kit is consumed as a **commit-pinned git source** (`[tool.uv.sources]` → GitHub, `uv.lock` pins the
-commit — like the siblings); never pip-install it, and overlay `uv pip install -e ../rlm-kit` only when
-co-developing the kit locally. See
+rlm-harness is consumed as an **exact PyPI pin** (`rlm-harness==1.0.0`, resolved from the index and
+recorded in `uv.lock`); overlay `uv pip install -e ../rlm-harness` only when co-developing the kit
+locally, and bump the pin once the change ships. See
 `README.md` for the pipeline table + the honest caveats (prompt-injection residual, deep-tier scale),
-and rlm-kit's **"Building a consumer"** for the extension contract this project lives within.
+and rlm-harness's **"Building a consumer"** for the extension contract this project lives within.
 
 One companion rule ships under `.claude/rules/`:
 
@@ -17,7 +17,7 @@ One companion rule ships under `.claude/rules/`:
 ## Verify
 
 - `uv run pytest` — the full offline suite (`uv sync --group dev` first). No live LLM, no network, no
-  Deno: dspy-bearing paths use DummyLM / rlm-kit's `ScriptedInterpreter` (the offline forward path),
+  Deno: dspy-bearing paths use DummyLM / rlm-harness's `ScriptedInterpreter` (the offline forward path),
   transports are injected fakes, and the detection-quality corpus (`tests/corpus/`) pins the indicator
   suite's hit/miss behavior.
 - The **eval** member (`eval/`, the `diff-sentry-eval` workspace package) has its OWN offline suite —
@@ -111,7 +111,7 @@ One companion rule ships under `.claude/rules/`:
   one trajectory, so the trace stays valid training data. An `RLMTaskError` is almost always infra (a
   planner-endpoint hiccup / an adapter parse failure), NOT a schema bug — check the endpoint first.
 - **A second model-judgement is a TOOL, never the sub-LM.** `deep_classify` is the swappable
-  second-stage SEAM, built on rlm-kit's `make_model_tool` (chat → transient-retry → validate →
+  second-stage SEAM, built on rlm-harness's `make_model_tool` (chat → transient-retry → validate →
   circuit-break) — the planner CHOOSES to consult it, so the decision is a `tool_call` in the
   trajectory. The analyst intercept (`intercept_sub_lm`) is tracing-only, ZERO transforms — never
   smuggle a judgement into it. Swapping the backend touches ONLY `classify_backend` /
@@ -164,8 +164,8 @@ One companion rule ships under `.claude/rules/`:
   `run` / `detect_from_event` are lazy PEP 562 re-exports). `rubric.py` imports only `.schema` at top; its
   `rl_export` reuse (for `trace_facts`) is a FUNCTION-LEVEL import — that call path (rl_export → assemble →
   indicators) is itself dspy-free, so `response.py` importing `rubric` at top stays clean. The Claude-subscription adapter is now
-  `rlm_kit.ClaudeAgentLM` (promoted INTO the rlm-kit wheel — no longer vendored here); it is
-  dspy/SDK-bearing BY DESIGN and imported LAZILY (`from rlm_kit import ClaudeAgentLM`, only inside
+  `rlm_harness.ClaudeAgentLM` (promoted INTO the rlm-harness wheel — no longer vendored here); it is
+  dspy/SDK-bearing BY DESIGN and imported LAZILY (`from rlm_harness import ClaudeAgentLM`, only inside
   `detect.setup()`'s `claude-agent-sdk/` sentinel branch, via `_maybe_subscription_lm`) and never from
   `__init__.py`, so `import diff_sentry` stays dspy-free.
   The classifier NEVER runs on the subscription (its model may not carry the `claude-agent-sdk/`
@@ -179,11 +179,11 @@ One companion rule ships under `.claude/rules/`:
 
 ## Layout / promotion
 
-- Base/wrap split: the generic chat→retry→validate→circuit-break core is rlm-kit's `make_model_tool`
+- Base/wrap split: the generic chat→retry→validate→circuit-break core is rlm-harness's `make_model_tool`
   (`deep_classify` is the project wrapper: backend + JSON validator + messages + tracing); the SSRF
   primitives (`is_safe_url`, `resolved_host_is_safe`, `parse_cidrs`) are the kit's (`fetch_tool` owns
   the GitHub allowlist + the httpx provider + tracing).
-- When this consumer forces a workaround, log the **reusable** gap and fix it in rlm-kit generically —
+- When this consumer forces a workaround, log the **reusable** gap and fix it in rlm-harness generically —
   never special-case diff-sentry there. Consumer values (`DS_*` roles, the verdict schema, indicator
   rules, the SIEM payload shape) stay HERE.
 - The cheap pre-filter tier (deterministic indicators + one small single-shot call in front of the

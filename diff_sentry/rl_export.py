@@ -3,7 +3,7 @@
 diff-sentry is the ROLLOUT source (rollout → reward → training), NOT the trainer. This module emits raw
 materials only: the trajectory splits (sft_turns / classifier / orchestrator), per-run intrinsic LABELS
 (verdict / signal / indicator counts — facts, never a reward), and per-run objective METRICS. No reward
-scalar is attached (`reward=None` to rlm-kit's exporters); reward/credit-assignment/GRPO live elsewhere.
+scalar is attached (`reward=None` to rlm-harness's exporters); reward/credit-assignment/GRPO live elsewhere.
 
 Usage: python -m diff_sentry.rl_export "traces/*.jsonl" dataset.json
 """
@@ -14,8 +14,8 @@ import glob
 import json
 import sys
 
-from rlm_kit.dataset import export_actions, export_sft_turns, run_label_bundle
-from rlm_kit.trace import group_by_run, load_events
+from rlm_harness.dataset import export_actions, export_sft_turns, run_label_bundle
+from rlm_harness.trace import group_by_run, load_events
 
 # The second-stage classifier is reached through exactly this tool; every OTHER tool is the PLANNER's own.
 CLASSIFIER_TOOL = "deep_classify"
@@ -128,7 +128,7 @@ def export_dataset(runs: dict[str, list[dict]]) -> dict:
         "orchestrator_tools": [a for a in tool_acts if a.get("tool") != CLASSIFIER_TOOL],
         "planner": [a for a in actions if a["kind"] == "planner"],
         "sft_turns": export_sft_turns(runs),
-        # The three per-run LABEL surfaces ride via rlm-kit's shared run_label_bundle (the canonical
+        # The three per-run LABEL surfaces ride via rlm-harness's shared run_label_bundle (the canonical
         # {surface: {run_id: fn(events)}} seam) — one bundle shape across consumers, and `reward` is a
         # refused surface name (it raises), so the reward-free invariant is structural at the transport.
         # Output is byte-identical to the old comprehensions. `rubric_signal` is the ATLAS 4-category

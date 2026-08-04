@@ -62,8 +62,8 @@ def test_deep_classify_record_has_no_child_fields_today(tmp_path):
     """The child_* harness-link fields are GUARDED — a no-op for today's `self` backend (its
     ModelToolResult carries none), so the recorded tool_call must NOT carry child_run_id/child_trace/
     child_meta. Correct for the future make_harness_tool swap; inert now."""
-    from rlm_kit import TraceRecorder
-    from rlm_kit.trace import load_events
+    from rlm_harness import TraceRecorder
+    from rlm_harness.trace import load_events
 
     tool = make_deep_classify_tool(_cfg(), chat_fn=lambda f: '{"verdict": "benign", "confidence": 0.3}')
     path = str(tmp_path / "dc.jsonl")

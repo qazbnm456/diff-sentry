@@ -136,7 +136,7 @@ def build_iterations(events: list[dict]) -> dict:
     TWO views:
     - `iterations` — the planner's REPL turns (reasoning + code + its output), in turn order. CONTENT is
       always reliable; each turn's `output` already contains its tools' results inline. Per-turn timing
-      (`rel_s`/`duration_s`) is attached WHEN the trace carries live `main_step` ts (rlm-kit backfills
+      (`rel_s`/`duration_s`) is attached WHEN the trace carries live `main_step` ts (rlm-harness backfills
       them as each turn is parsed → `per_turn_timing=True`). An OLDER trace flushed every `main_step` at
       finalize, so their ts cluster at one instant; we detect that, set `per_turn_timing=False`, and skip
       per-turn durations rather than fake them.
@@ -166,7 +166,7 @@ def build_iterations(events: list[dict]) -> dict:
                                "code": _preview(p.get("code")), "output": _preview(p.get("output")),
                                "_ts": e.get("ts")})
     iterations.sort(key=lambda it: it["turn"] if it["turn"] is not None else 1 << 30)
-    # Per-turn timing is available IFF the trace carries live main_step ts (rlm-kit backfills them as each
+    # Per-turn timing is available IFF the trace carries live main_step ts (rlm-harness backfills them as each
     # turn is parsed). An older trace flushed every main_step at finalize, so their ts cluster at one
     # instant (span ~0) — detect that and skip per-turn timing (the tool timeline still carries the real
     # where-did-time-go signal). A >1s span over ≥2 turns can only be live (an LM turn is seconds+).

@@ -16,28 +16,28 @@ deterministic, dspy-free halves:
    criterion's `observed` dict can never drift from the `labels`/`metrics` a trainer reads from the same
    export bundle. `met`/`unmet`/reward is the trainer's (or a downstream judge's) call — never computed here.
 
-This holds ATLAS (a TRAINING/RFT paper) inside rlm-kit's "trajectories, never reward" invariant: emit the
+This holds ATLAS (a TRAINING/RFT paper) inside rlm-harness's "trajectories, never reward" invariant: emit the
 rubric + per-criterion facts as data; scoring stays downstream. The rubric is a trainer/eval-side artifact
 the planner NEVER sees at inference (it lives only in run_start meta, not in INSTRUCTIONS or any tool).
-dspy-free at module top (imports only `.schema` + `rlm_kit.rubric`, both dspy-free) — the rl_export reuse
+dspy-free at module top (imports only `.schema` + `rlm_harness.rubric`, both dspy-free) — the rl_export reuse
 is a function-level import, and its call path (rl_export → assemble → indicators) is itself dspy-free.
 """
 
 from __future__ import annotations
 
-from rlm_kit.rubric import (  # the reward-free rubric PRIMITIVES (category-agnostic); wrapped below
+from rlm_harness.rubric import (  # the reward-free rubric PRIMITIVES (category-agnostic); wrapped below
     Criterion,
     CriterionFact,
     RubricCriteria,
     rubric_to_meta,  # noqa: F401 — re-exported (cli/rl_export do `from .rubric import rubric_to_meta`)
 )
-from rlm_kit.rubric import (
+from rlm_harness.rubric import (
     criteria_facts as _kit_criteria_facts,
 )
-from rlm_kit.rubric import (
+from rlm_harness.rubric import (
     rubric_from_meta as _kit_rubric_from_meta,
 )
-from rlm_kit.rubric import (
+from rlm_harness.rubric import (
     validate_rubric as _kit_validate_rubric,
 )
 
@@ -80,7 +80,7 @@ def default_rubric(task: str = "") -> RubricCriteria:
 
 def rubric_from_meta(events: list[dict]) -> RubricCriteria:
     """Recover the rubric stored in a run's run_start meta (empty if none), filtered to diff-sentry's
-    ATLAS categories. Thin wrapper over rlm-kit's taxonomy-agnostic primitive."""
+    ATLAS categories. Thin wrapper over rlm-harness's taxonomy-agnostic primitive."""
     return _kit_rubric_from_meta(events, categories=CRITERION_CATEGORIES)
 
 
@@ -92,7 +92,7 @@ def trace_facts(events: list[dict]) -> dict:
     counts, circuit-breaks, cap). Their key-sets are DISJOINT, so the merge drops nothing; sourcing them
     here rather than re-deriving keeps `criteria_facts` provably consistent with the export's labels/metrics
     (no second facts derivation to drift). The import is LAZY so this module's top stays dspy-free (it
-    imports only `.schema` + the dspy-free `rlm_kit.rubric`) — the rl_export call path
+    imports only `.schema` + the dspy-free `rlm_harness.rubric`) — the rl_export call path
     (→ assemble.verdict_from_events → indicators) is itself dspy-free."""
     from .rl_export import run_labels, run_metrics  # lazy: keeps rubric's module top dspy-free
 
@@ -120,7 +120,7 @@ _OBSERVABLE_VOCAB = ("verdict", "change", "classify", "classification", "benign"
 
 def validate_rubric(rubric: RubricCriteria) -> list[str]:
     """A DETERMINISTIC structural lint of a rubric (NOT a semantic-quality judge) — diff-sentry's ATLAS
-    category coverage + the observability heuristic. Thin wrapper over rlm-kit's primitive."""
+    category coverage + the observability heuristic. Thin wrapper over rlm-harness's primitive."""
     return _kit_validate_rubric(rubric, categories=CRITERION_CATEGORIES, observable_vocab=_OBSERVABLE_VOCAB)
 
 
@@ -129,7 +129,7 @@ def criteria_facts(events: list[dict], criteria: list[Criterion] | None = None) 
     falling back to `default_rubric()` when a trace carries none — SAFE because the skeleton is constant.
 
     Sources the facts from diff-sentry's OWN `trace_facts` and slices them through `_CATEGORY_LENS` via
-    rlm-kit's pure `criteria_facts` primitive. NEVER decides met/unmet or a score."""
+    rlm-harness's pure `criteria_facts` primitive. NEVER decides met/unmet or a score."""
     if criteria is None:
         criteria = rubric_from_meta(events).criteria or default_rubric().criteria
     return _kit_criteria_facts(criteria, trace_facts(events), _CATEGORY_LENS)

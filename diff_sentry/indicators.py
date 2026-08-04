@@ -10,10 +10,10 @@ returns structured `IndicatorHit`s — FACTS, never a model opinion. It is used 
    double-checked; each call records a `tool_call` carrying the FULL structured hits.
 
 Why pure-Python and no subprocess: a subprocess spawned from inside the live dspy.RLM/asyncio process
-reliably hangs (a hard-won rlm-kit-consumer lesson). Any heavier external scanner belongs host-side,
+reliably hangs (a hard-won rlm-harness-consumer lesson). Any heavier external scanner belongs host-side,
 post-run — never as an in-loop tool.
 
-No dspy import; the tool wrapper imports only `rlm_kit.trace.record_tool_call`.
+No dspy import; the tool wrapper imports only `rlm_harness.trace.record_tool_call`.
 """
 
 from __future__ import annotations
@@ -531,7 +531,7 @@ def make_indicator_tool() -> Callable[[str], str]:
     """Build the sync `scan_indicators` RLM tool. It scans a region the planner passes and RECORDS the
     full structured hits into the trace (so the evidence is a fact, re-sourced on read), then returns a
     compact text summary + the hit ids the planner may cite. Sync — dspy.RLM invokes tools synchronously."""
-    from rlm_kit.trace import record_tool_call
+    from rlm_harness.trace import record_tool_call
 
     def scan_indicators_tool(region: str) -> str:
         """Scan a snippet of the change (or a value you decoded) for malicious indicators — shell

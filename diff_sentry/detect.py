@@ -1,6 +1,6 @@
 """ClassifyChange — the RLM task that classifies ONE GitHub change (PR/issue/push) for malicious intent.
 
-A BewAIre-style detector re-expressed as an rlm-kit declaration. Model roles (configured, not fixed):
+A BewAIre-style detector re-expressed as an rlm-harness declaration. Model roles (configured, not fixed):
 - planner (main): a cheap, injection-resistant orchestrator that holds the diff in the REPL and triages.
 - analyst (sub_lm, via llm_query): an expensive brain for a subtle case — short distilled questions only.
 - deep_classify tool: the swappable SECOND-STAGE classifier (a model the planner CHOOSES to consult on
@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import os
 
-import rlm_kit
-from rlm_kit import (
+import rlm_harness
+from rlm_harness import (
     RLMConfig,
     RLMTask,
     get_sub_lm,
@@ -101,7 +101,7 @@ HARD RULES — do not violate:
 def _maybe_subscription_lm(model: str):
     """A `ClaudeAgentLM` when a role's model uses the `claude-agent-sdk/` sentinel, else None.
 
-    Imports rlm-kit's `ClaudeAgentLM` LAZILY, inside the sentinel branch ONLY, so `import diff_sentry`
+    Imports rlm-harness's `ClaudeAgentLM` LAZILY, inside the sentinel branch ONLY, so `import diff_sentry`
     stays dspy-free and a proxy-only install (no sentinel) never touches it. `claude-agent-sdk` is the
     optional `[subscription]` extra; the kit defers that import to construction, so a missing SDK
     surfaces as an `ImportError` at build time HERE — re-raised as our uv-workflow-specific actionable
@@ -110,7 +110,7 @@ def _maybe_subscription_lm(model: str):
     """
     if not model.startswith(SUBSCRIPTION_PREFIX):
         return None
-    from rlm_kit import ClaudeAgentLM
+    from rlm_harness import ClaudeAgentLM
 
     try:
         return ClaudeAgentLM(model[len(SUBSCRIPTION_PREFIX):])
@@ -125,17 +125,17 @@ def _maybe_subscription_lm(model: str):
 
 
 def setup(config: DetectConfig) -> DetectConfig:
-    """Configure rlm-kit (planner + analyst) for this process.
+    """Configure rlm-harness (planner + analyst) for this process.
 
     A role whose model is `claude-agent-sdk/<id>` runs on the user's Claude Pro/Max SUBSCRIPTION
-    (rlm-kit's `ClaudeAgentLM`, injected through configure's public seam); every other role is built from
+    (rlm-harness's `ClaudeAgentLM`, injected through configure's public seam); every other role is built from
     the DS_* proxy, byte-identical to before. Mixed auth is by design — the classifier (a separate tool)
     always stays on its own OpenAI-compatible endpoint, never routed through the subscription.
     """
     # None → configure builds a dspy.LM from the proxy config (the pre-existing behavior).
     main_lm = _maybe_subscription_lm(config.main_model)
     sub_lm = _maybe_subscription_lm(config.sub_model)
-    rlm_kit.configure(
+    rlm_harness.configure(
         RLMConfig(
             # Inert once an LM is injected (configure builds from config ONLY for un-supplied seats),
             # but still labels the trace + log; on the proxy path it is the real model built.

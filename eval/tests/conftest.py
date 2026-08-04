@@ -49,8 +49,8 @@ def record_run(tmp_path, *, run_id, with_result=True, verdict=None, change=None,
     load_events → group_by_run path is exercised against the actual wire format. `with_result=False` → the
     run never finalized; `verdict` defaults to a malicious verdict (pass `_EMPTY_VERDICT` for an
     inconclusive run). Returns the run's events."""
-    from rlm_kit import TraceRecorder, record_tool_call
-    from rlm_kit.trace import load_events
+    from rlm_harness import TraceRecorder, record_tool_call
+    from rlm_harness.trace import load_events
 
     from diff_sentry.indicators import scan_indicators
     from diff_sentry.normalize import event_metadata, normalize_event, raw_content

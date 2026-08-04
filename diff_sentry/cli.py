@@ -43,7 +43,7 @@ async def detect_from_event(
 ):
     """Run the classifier on one change event and return the planner's JUDGEMENT (`ChangeVerdict`).
     Call `assemble.assemble_verdict(verdict, events)` to attach the deterministic indicators + signal."""
-    import rlm_kit
+    import rlm_harness
 
     from .detect import ClassifyChange, setup
     from .normalize import event_metadata, normalize_event
@@ -60,7 +60,7 @@ async def detect_from_event(
         return await task.arun(event=event_str)
 
     if trace_path:
-        with rlm_kit.TraceRecorder(trace_path, run_id=run_id, on_event=on_event, meta={
+        with rlm_harness.TraceRecorder(trace_path, run_id=run_id, on_event=on_event, meta={
             # The run's INITIAL STATE (the untrusted event is a REPL variable, not a chat turn) + prompt.
             "event": event_str,
             "instructions": task.instructions,
@@ -138,7 +138,7 @@ def run(
     """THE programmatic entry: classify one change, write the response, and (host-side, after the run)
     emit a SIEM signal when warranted. Never raises on a run failure — a failed run still writes an
     informative response and returns result-less RunArtifacts."""
-    from rlm_kit.trace import load_events
+    from rlm_harness.trace import load_events
 
     from .assemble import assemble_verdict
     from .emit import emit_signal
@@ -284,7 +284,7 @@ def _cmd_scan(args) -> int:
 
 
 def _cmd_render(args) -> int:
-    from rlm_kit.trace import load_events
+    from rlm_harness.trace import load_events
 
     from .assemble import verdict_from_events
     from .response import build_failed_response, build_response

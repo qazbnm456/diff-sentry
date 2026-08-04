@@ -3,7 +3,7 @@ so a benign self-report cannot suppress hard deterministic evidence."""
 
 from __future__ import annotations
 
-from rlm_kit.trace import load_events
+from rlm_harness.trace import load_events
 
 from diff_sentry.assemble import _emit_on_from_meta, verdict_from_events
 from tests.conftest import BENIGN_EVENT, BENIGN_SELF_REPORT, MALICIOUS_EVENT, MALICIOUS_VERDICT

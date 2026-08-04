@@ -5,7 +5,7 @@ description = "Offline, reward-free evaluation harness for diff-sentry — score
 requires-python = ">=3.11"  # matches the sibling diff-sentry (>=3.11); keeps `uv run` resolvable
 # diff-sentry is a CORE dependency (unlike studio, which gates it behind a `live` extra): the score path
 # imports `diff_sentry.verdict_from_events` / `run_labels` / `run_metrics` / `AssembledVerdict` (the PUBLIC
-# surface, same rule the studio follows) for every mode, so it must always resolve. pydantic + rlm-kit
+# surface, same rule the studio follows) for every mode, so it must always resolve. pydantic + rlm-harness
 # (trace readers, make_model_tool) arrive as diff-sentry deps.
 dependencies = [
     "diff-sentry",
@@ -16,7 +16,7 @@ dependencies = [
 judge = ["openai>=1.0"]
 dev = ["pytest>=8"]
 
-# In-repo: diff-sentry is the workspace ROOT package (eval/ is a member of it). External sources (rlm-kit)
+# In-repo: diff-sentry is the workspace ROOT package (eval/ is a member of it). Third-party deps (rlm-harness)
 # are declared at the workspace root's pyproject and apply here transitively.
 [tool.uv.sources]
 diff-sentry = { workspace = true }

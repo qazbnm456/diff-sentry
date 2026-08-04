@@ -195,6 +195,6 @@ uvx ruff@0.16.0 check .
 CI runs the published Action against this repository's own pull requests (`uses: ./`), so a change that
 breaks the Action fails here before it reaches anyone's install.
 
-Detection engine and RLM harness: [`rlm-kit`](https://github.com/qazbnm456/rlm-kit).
+Detection engine and RLM harness: [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
 MIT.

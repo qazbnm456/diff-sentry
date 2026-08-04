@@ -25,8 +25,8 @@ So a handoff summary should carry the *in-flight session state* those files miss
    `rejected`; move durable ones to the issue tracker.
 5. **The seams' status.** (a) `classify_backend` — still `"self"` (a general model) or a dedicated
    second-stage backend in progress; (b) the cheap host-side pre-filter tier + live GitHub/SIEM wiring
-   (the README's "next increments"); (c) the rlm-kit dep — still the editable `../rlm-kit` path or
-   switched to a commit-pinned git source. A resumed session must not re-open a seam that moved.
+   (the README's "next increments"); (c) the rlm-harness dep — still the editable `../rlm-harness` path or
+   switched to an exact PyPI pin. A resumed session must not re-open a seam that moved.
 6. **In-flight user intent + acceptance criteria** for this session. Without it a resumed session drifts.
 
 **Do NOT preserve** (reconstructable / already durable):
@@ -41,7 +41,7 @@ So a handoff summary should carry the *in-flight session state* those files miss
 ## Session state
 - Goal: <one sentence>
 - Status: <what passes the suite, what doesn't, last command + result>
-- Seams: <classify backend | pre-filter/live wiring | rlm-kit dep — one line each if touched>
+- Seams: <classify backend | pre-filter/live wiring | rlm-harness dep — one line each if touched>
 
 ## Decisions
 - <decision> — <why>   (→ promote to CLAUDE.md invariant / the commit message)

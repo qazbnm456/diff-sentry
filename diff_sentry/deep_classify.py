@@ -1,8 +1,8 @@
 """The second-stage classifier tool — the SEAM designed to be swapped to a stronger/dedicated backend.
 
-`make_deep_classify_tool` builds the `deep_classify` tool from a `chat_fn` via rlm-kit's `make_model_tool`
+`make_deep_classify_tool` builds the `deep_classify` tool from a `chat_fn` via rlm-harness's `make_model_tool`
 (chat + transient-retry + validate + circuit-breaker). The planner CHOOSES to consult it on an ambiguous
-change, so the call lands in the trajectory as a `tool_call` — the correct rlm-kit shape for a second
+change, so the call lands in the trajectory as a `tool_call` — the correct rlm-harness shape for a second
 model-JUDGEMENT (it must be a tool, not the sub-LM: a model grading the change is an agentic decision).
 
 - `classify_backend="self"` (now, default): a general model returns a structured verdict as JSON.
@@ -20,8 +20,8 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from rlm_kit.tools import make_model_tool
-from rlm_kit.trace import record_tool_call
+from rlm_harness.tools import make_model_tool
+from rlm_harness.trace import record_tool_call
 
 from .config import DetectConfig
 from .schema import SUBMIT_VERDICTS
@@ -100,7 +100,7 @@ def _selfclassify_chat(config: DetectConfig) -> Callable[[str], str]:
 
 def make_deep_classify_tool(config: DetectConfig, chat_fn: Callable[[str], str] | None = None
                             ) -> Callable[[str], str]:
-    """Build the `deep_classify` tool. The generic chat→retry→validate→circuit-break loop is rlm-kit's
+    """Build the `deep_classify` tool. The generic chat→retry→validate→circuit-break loop is rlm-harness's
     `make_model_tool`; this wrapper plugs in the backend, the JSON validator, the result message, and
     the tracing."""
     chat = chat_fn if chat_fn is not None else _selfclassify_chat(config)
@@ -125,7 +125,7 @@ def make_deep_classify_tool(config: DetectConfig, chat_fn: Callable[[str], str] 
             record_tool_call("deep_classify", args={"findings": findings[:400]}, error=r.endpoint_error)
             return f"DEEP_CLASSIFY ENDPOINT ERROR: {r.endpoint_error}. Decide from the indicators yourself."
         v: ClassifyValidation = r.validated
-        # Future SEAM swap: when the second-stage backend is a delegated rlm-kit HARNESS
+        # Future SEAM swap: when the second-stage backend is a delegated rlm-harness HARNESS
         # (make_harness_tool) rather than the `self` model, its result carries
         # child_run_id/child_trace/child_meta linking THIS parent run to the child's OWN rollout. Attach
         # them here IFF present, so the child link survives the recording step. The current backend's

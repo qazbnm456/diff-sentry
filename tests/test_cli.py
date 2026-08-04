@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from rlm_kit import TraceRecorder, record_tool_call
+from rlm_harness import TraceRecorder, record_tool_call
 
 from diff_sentry import cli
 from diff_sentry.config import DetectConfig
@@ -77,7 +77,7 @@ def test_run_writes_response_and_emits(tmp_path, monkeypatch):
     stale.parent.mkdir(parents=True)
     # A stale event for THIS run_id — load_events would keep it (it filters on run_id), so it only
     # disappears if _reset_trace actually removes the file. This makes the assertion below able to fail.
-    stale.write_text('{"schema": "rlm-kit/trace/v1", "run_id": "pr-7", "step_id": 0, "ts": 0, '
+    stale.write_text('{"schema": "rlm-harness/trace/v1", "run_id": "pr-7", "step_id": 0, "ts": 0, '
                      '"type": "stale", "payload": {"stale": "garbage from a previous run"}}\n')
     monkeypatch.setattr(cli, "detect_from_event", _classify_fake(MALICIOUS_EVENT))
     sent = {}

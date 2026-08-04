@@ -1,6 +1,6 @@
 """Output models for diff-sentry (the RLMTask's validated output + the assembled result + the API shape).
 
-The load-bearing convention (inherited from the rlm-kit consumers): the planner SUBMITs JUDGEMENT only.
+The load-bearing convention (inherited from the rlm-harness consumers): the planner SUBMITs JUDGEMENT only.
 The authoritative EVIDENCE — the deterministic indicator hits a signal is built on — is NEVER the
 planner's to write. `scan_indicators` records its structured hits into the trace (and a host-side
 BASELINE scan lands in the run_start meta), and the SYSTEM re-sources the FULL UNION of those hits on
@@ -14,13 +14,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-# reward-free rubric TYPES — now rlm-kit's shared, taxonomy-agnostic primitives, re-exported here so
+# reward-free rubric TYPES — now rlm-harness's shared, taxonomy-agnostic primitives, re-exported here so
 # diff-sentry's own `from .schema import Criterion, ...` call sites are unchanged.
-from rlm_kit.rubric import Criterion, CriterionFact, RubricCriteria  # noqa: F401 (re-export, back-compat)
+from rlm_harness.rubric import Criterion, CriterionFact, RubricCriteria  # noqa: F401 (re-export, back-compat)
 
 # ─── ATLAS rubric (a rollout LABEL surface, never a reward) ────────────────────────────────────
 # The four ATLAS criterion categories: Task Fulfillment, Tool Appropriateness, Tool Grounding,
-# Parameter Accuracy. The rubric TYPES above are rlm-kit's (category is opaque to the kit); diff-sentry
+# Parameter Accuracy. The rubric TYPES above are rlm-harness's (category is opaque to the kit); diff-sentry
 # owns only this ATLAS category set + the criterion descriptions + the lens (see rubric.py). The rubric is
 # carried in run_start meta as LABELS; scoring (dᵢ∈[0,1]) is the downstream TRAINER's job, never here.
 CRITERION_CATEGORIES = ("TF", "TA", "TG", "PA")

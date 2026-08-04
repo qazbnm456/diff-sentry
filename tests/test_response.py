@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from rlm_kit.trace import load_events
+from rlm_harness.trace import load_events
 
 from diff_sentry.assemble import verdict_from_events
 from diff_sentry.ingest import event_from_payload

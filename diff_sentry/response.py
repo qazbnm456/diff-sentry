@@ -7,7 +7,7 @@ Pure stdlib + pydantic; no dspy.
 
 from __future__ import annotations
 
-from rlm_kit.trace import EVENT_RUN_START
+from rlm_harness.trace import EVENT_RUN_START
 
 from .indicators import hits_from_events
 from .normalize import has_groundable_content

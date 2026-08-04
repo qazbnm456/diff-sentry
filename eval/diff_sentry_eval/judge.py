@@ -1,7 +1,7 @@
 """The external eval judge — ATLAS's 4-category 0-10 LLM-as-judge of the assembled VERDICT, on
-`rlm_kit.tools.make_model_tool`.
+`rlm_harness.tools.make_model_tool`.
 
-Same base/wrap split as diff-sentry's `deep_classify` (and the sibling evals' judges): rlm-kit owns the
+Same base/wrap split as diff-sentry's `deep_classify` (and the sibling evals' judges): rlm-harness owns the
 generic chat → transient-retry → validate → circuit-breaker core; this module supplies the chat closure,
 the generic ATLAS change-analysis-eval prompt, and the strict 0-10 validator. Properties that keep the
 measure honest and separate from any training reward:
@@ -27,7 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from rlm_kit.tools import make_model_tool
+from rlm_harness.tools import make_model_tool
 
 from .schema import CATEGORIES, EvalScore
 
