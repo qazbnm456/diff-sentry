@@ -22,3 +22,7 @@ output/
 
 # Claude Code local overrides (never commit)
 .claude/settings.local.json
+
+# Build artifacts. `uv build` is now a normal local step (release.yml runs it), so an
+# accidental `git add .` must not sweep a wheel into the repo.
+dist/
