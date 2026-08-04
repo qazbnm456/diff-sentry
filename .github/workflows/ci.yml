@@ -61,78 +61,46 @@ jobs:
         run: |
           for f in studio/tests/*.test.js; do echo "▸ $f"; node "$f"; done
 
-  # Dogfood: run our OWN deterministic detector over the change this CI run is reviewing.
+  # Dogfood: this repo's own CI runs the ACTION this repo publishes (`uses: ./`), not a copy of it.
+  # So every PR here is also an integration test of the thing users install — a drifted action.yml
+  # fails our own build before it reaches anyone's Marketplace install.
   #
-  # DELIBERATELY the `scan` subcommand and not `pr`/`classify`. The full pipeline needs DS_* model
-  # creds, and the only mechanism that hands creds to a fork PR's run is `pull_request_target` — which
-  # is precisely the misconfiguration that opened the AsyncAPI "Miasma" compromise (a fork PR executing
-  # in a privileged context, harvesting the runner's token). `scan` is pure-Python with no creds, no
-  # network and no Deno, so it runs happily under the workflow's read-only `contents: read` token.
-  # NO fork guard here, also deliberately: this job is read-only with no side effects outside its own
-  # repo, so a fork running it is correct and useful (contrast the guarded jobs in awesome-web-security
-  # and rlm-kit's release.yml, which write or publish).
+  # DELIBERATELY the deterministic scan and not the full `classify` pipeline. `classify` needs DS_*
+  # model creds, and the only mechanism that hands creds to a fork PR's run is `pull_request_target`,
+  # precisely the misconfiguration that opened the AsyncAPI "Miasma" compromise. The scan needs no
+  # creds, no network and no Deno, so it runs under this workflow's read-only `contents: read` token.
+  # NO fork guard here, also deliberately: the job is read-only with no side effects outside its own
+  # repo, so a fork running it is correct and useful.
   self-scan:
     name: self-scan (dogfood)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0        # need the base commit to diff against
+          fetch-depth: 0        # the action needs the base commit to diff against
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - uses: ./
         with:
-          enable-cache: true
-
-      # Event data goes through `env:`, never interpolated into the `run:` body — a `${{ github.event.* }}`
-      # expanded straight into a shell script is the classic Actions script-injection sink.
-      - name: Derive the change under review
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BEFORE_SHA: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = "pull_request" ]; then base="$BASE_SHA"; else base="${BEFORE_SHA:-}"; fi
-          # A branch's first push reports an all-zero `before`; fall back to the parent commit.
-          case "$base" in ''|0000000000000000000000000000000000000000) base="$(git rev-parse HEAD~1)" ;; esac
-          echo "base=$base head=$(git rev-parse HEAD)"
-
-          # The change splits in two, because this is a DETECTOR repo: some of our files carry attack
-          # patterns as their JOB (the rule bodies, the planner prompt, the attack skills, the test
-          # fixtures, the eval taskset, and the docs that tabulate all of the above). Scanning those
-          # against our own rules is a guaranteed self-hit — verified: the `curl … | bash` in
-          # detect.INSTRUCTIONS and the `${IFS}` in README's pipeline table both fire `critical`/`high`.
-          # So they are reported but not gated, and everything else — the actual machinery plus the
-          # build/CI/dependency surface where a supply-chain payload would really land — IS gated.
-          # Checked against all 32 commits of history: zero false gate failures.
-          git diff "$base...HEAD" -- . \
-            ':(exclude)diff_sentry/indicators.py' \
-            ':(exclude)diff_sentry/detect.py' \
-            ':(exclude)diff_sentry/skills/**' \
-            ':(exclude)tests/**' ':(exclude)eval/tests/**' ':(exclude)studio/tests/**' \
-            ':(exclude)eval/taskset.example.json' ':(exclude)eval/diff_sentry_eval/taskset.py' \
-            ':(exclude)*.md' > "$RUNNER_TEMP/gated.diff"
-          git diff "$base...HEAD" -- \
-            diff_sentry/indicators.py diff_sentry/detect.py 'diff_sentry/skills/**' \
-            'tests/**' 'eval/tests/**' 'studio/tests/**' \
-            eval/taskset.example.json eval/diff_sentry_eval/taskset.py '*.md' \
-            > "$RUNNER_TEMP/pattern-bearing.diff"
-          wc -l "$RUNNER_TEMP/gated.diff" "$RUNNER_TEMP/pattern-bearing.diff"
-
-      - name: Scan the machinery + supply-chain surface (GATING)
-        run: uv run python -m diff_sentry scan "$RUNNER_TEMP/gated.diff"
-
-      # Reported in the log, never blocking — so the blind spot above is explicit rather than silent.
-      # `|| true` rather than `continue-on-error:` on purpose: this surface fires on nearly every docs
-      # or fixture change, and a step that is permanently yellow just teaches everyone to ignore it.
-      # Teaching the suite to tell "prose describing a pattern" from "the pattern itself" would remove
-      # the need for this split; until then a human reads this block when reviewing the PR.
-      - name: Scan the pattern-bearing surface (report only, never gates)
-        run: |
-          echo "::group::pattern-bearing surface (rules, prompt, skills, fixtures, docs)"
-          uv run python -m diff_sentry scan "$RUNNER_TEMP/pattern-bearing.diff" || true
-          echo "::endgroup::"
+          # Scan this PR with the rules IN this PR, not the ones already on main. Without it the
+          # dogfood would grade a rule change against the previous rule set and always pass.
+          version: local
+          # This is a DETECTOR repo, so some files carry attack patterns as their JOB: the rule bodies,
+          # the planner prompt, the attack skills, the fixtures, the eval taskset, and the docs that
+          # tabulate all of the above. Scanning those against our own rules is a guaranteed self-hit
+          # (the pipe-to-shell example inside detect.INSTRUCTIONS and the field-separator token quoted
+          # in README's rule table both fire), so they are reported without gating while the machinery
+          # and the build/CI/dependency surface stay enforced. Note this file is in the GATED half:
+          # describe a payload shape here, never quote one.
+          report-only-paths: |
+            diff_sentry/indicators.py
+            diff_sentry/detect.py
+            diff_sentry/skills/**
+            tests/**
+            eval/tests/**
+            studio/tests/**
+            eval/taskset.example.json
+            eval/diff_sentry_eval/taskset.py
+            *.md
 
   lint:
     name: ruff

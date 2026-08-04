@@ -1,0 +1,148 @@
+name: 'diff-sentry malicious change scan'
+description: 'Scan a pull request diff for malicious-change indicators: pwn-request workflows, obfuscated payloads, secret exfiltration, dropper shapes and diff-viewport evasion. No API key required.'
+author: 'qazbnm456'
+
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  fail-on:
+    description: >-
+      Exit non-zero when an indicator at or above this severity fires.
+      One of: info, low, medium, high, critical. The default matches the
+      severity floor that a SIEM signal derives from, so a plain workflow edit
+      (medium, on purpose) does not fail your build.
+    required: false
+    default: 'high'
+  report-only-paths:
+    description: >-
+      Newline-separated paths or globs that are scanned but NEVER fail the build.
+      Use this for files whose job is to carry attack patterns: rule bodies,
+      security test fixtures, prompt templates, and docs that tabulate payloads.
+      Scanning those against the rules is a guaranteed self-hit, so they are
+      reported for a human to read instead of gating.
+    required: false
+    default: ''
+  base-sha:
+    description: >-
+      Override the commit to diff against. Leave empty to derive it from the
+      event (the PR base for pull_request, the previous tip for push).
+    required: false
+    default: ''
+  version:
+    description: >-
+      The diff-sentry version to run: a git ref while the package is pre-PyPI, so
+      pin it for reproducible CI. The special value `local` installs from the
+      current checkout instead, which is what this repo's own CI uses so that a PR
+      is scanned by the rules IN that PR rather than by the ones already on main.
+    required: false
+    default: 'main'
+
+outputs:
+  failed:
+    description: 'true when an indicator at or above `fail-on` fired in the gated scan.'
+    value: ${{ steps.scan.outputs.failed }}
+  hit-count:
+    description: 'Number of indicators that fired in the gated scan.'
+    value: ${{ steps.scan.outputs.hit-count }}
+  max-severity:
+    description: 'Highest severity that fired in the gated scan, or empty when nothing fired.'
+    value: ${{ steps.scan.outputs.max-severity }}
+  report:
+    description: >-
+      Path to the JSON scan report. Upload it as an artifact and read it from a
+      separate privileged job if you want to post results back to the PR — see
+      the README on why that job must not be a `pull_request_target`.
+    value: ${{ steps.scan.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      # SHA-pinned: a moving major tag on a third-party action could be repointed at code that runs
+      # with the calling workflow's token. Bump the SHA and the trailing version comment together.
+      uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      with:
+        enable-cache: true
+
+    - name: Scan the change
+      id: scan
+      shell: bash
+      # Event data is read from `env:`, never interpolated into the script body. A
+      # `${{ github.event.* }}` expanded straight into a shell command is the classic Actions
+      # script-injection sink, and this action exists to catch that class of mistake.
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PUSH_BEFORE_SHA: ${{ github.event.before }}
+        IN_BASE_SHA: ${{ inputs.base-sha }}
+        IN_FAIL_ON: ${{ inputs.fail-on }}
+        IN_REPORT_ONLY: ${{ inputs.report-only-paths }}
+        IN_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        if [ -n "$IN_BASE_SHA" ]; then
+          base="$IN_BASE_SHA"
+        elif [ "$EVENT_NAME" = "pull_request" ] || [ "$EVENT_NAME" = "pull_request_target" ]; then
+          base="$PR_BASE_SHA"
+        else
+          base="${PUSH_BEFORE_SHA:-}"
+        fi
+        # A branch's first push reports an all-zero `before`; fall back to the parent commit.
+        case "$base" in
+          ''|0000000000000000000000000000000000000000) base="$(git rev-parse HEAD~1)" ;;
+        esac
+
+        if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+          echo "::error::base commit ${base} is not in this checkout. Use actions/checkout with fetch-depth: 0."
+          exit 1
+        fi
+        echo "diffing ${base}...$(git rev-parse HEAD)"
+
+        # Split the change into a gated half and a report-only half. Anything the caller listed as
+        # pattern-bearing is excluded from the gate and scanned separately, so a repo that legitimately
+        # ships attack samples is not permanently red while the rest of it stays enforced.
+        gated_ex=()
+        report_inc=()
+        while IFS= read -r p; do
+          [ -z "${p// }" ] && continue
+          gated_ex+=(":(exclude)${p}")
+          report_inc+=("$p")
+        done <<< "$IN_REPORT_ONLY"
+
+        git diff "${base}...HEAD" -- . "${gated_ex[@]+"${gated_ex[@]}"}" > "$RUNNER_TEMP/gated.diff"
+
+        if [ "$IN_VERSION" = "local" ]; then
+          SENTRY=(uvx --from "$GITHUB_WORKSPACE" diff-sentry)
+        else
+          SENTRY=(uvx --from "git+https://github.com/qazbnm456/diff-sentry@${IN_VERSION}" diff-sentry)
+        fi
+
+        set +e
+        "${SENTRY[@]}" scan "$RUNNER_TEMP/gated.diff" --fail-on "$IN_FAIL_ON"
+        rc=$?
+        "${SENTRY[@]}" scan "$RUNNER_TEMP/gated.diff" --fail-on "$IN_FAIL_ON" --json \
+          > "$RUNNER_TEMP/diff-sentry-report.json"
+        set -e
+
+        {
+          echo "report=$RUNNER_TEMP/diff-sentry-report.json"
+          python3 - "$RUNNER_TEMP/diff-sentry-report.json" <<'PY'
+        import json, sys
+        d = json.load(open(sys.argv[1]))
+        print(f"failed={str(bool(d['failed'])).lower()}")
+        print(f"hit-count={d['count']}")
+        print(f"max-severity={d['max_severity'] or ''}")
+        PY
+        } >> "$GITHUB_OUTPUT"
+
+        if [ ${#report_inc[@]} -gt 0 ]; then
+          git diff "${base}...HEAD" -- "${report_inc[@]}" > "$RUNNER_TEMP/report-only.diff"
+          echo "::group::pattern-bearing paths (reported, never gated)"
+          "${SENTRY[@]}" scan "$RUNNER_TEMP/report-only.diff" --fail-on "$IN_FAIL_ON" || true
+          echo "::endgroup::"
+        fi
+
+        exit $rc
