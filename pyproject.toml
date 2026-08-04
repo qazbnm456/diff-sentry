@@ -1,7 +1,7 @@
 [project]
 name = "diff-sentry"
 version = "0.3.0"
-description = "Classify a GitHub change (PR/issue/push) for malicious intent via an RLM harness — a BewAIre-style detector (rlm-kit consumer)."
+description = "Catch malicious pull requests before they merge: scan a diff for supply-chain attack patterns with deterministic evidence a model cannot suppress."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -13,6 +13,12 @@ dependencies = [
     "pydantic>=2.0",
     "httpx>=0.27",      # the GitHub-allowlisted enrichment fetcher + the host-side SIEM emitter
 ]
+
+# The console entry point. `python -m diff_sentry` still works and is what the repo's own docs use for
+# local runs, but a `diff-sentry` command is what makes the tool installable-and-runnable in one step
+# (`uvx diff-sentry scan …`) — which is how the GitHub Action invokes it.
+[project.scripts]
+diff-sentry = "diff_sentry.cli:main"
 
 [project.optional-dependencies]
 # The swappable second-stage classifier's default `self` backend talks an OpenAI-compatible API.

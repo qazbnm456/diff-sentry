@@ -220,6 +220,23 @@ def _cmd_classify(args) -> int:
     return 0 if arts.assembled is not None else 1
 
 
+def drop_deleted_lines(text: str) -> str:
+    """Strip a unified diff's `-` deletion lines, keeping additions and context.
+
+    A diff carries the code being REMOVED as well as the code being added, and the detectors read plain
+    text — so scanning a raw diff flags a change for a payload it is DELETING. That turns every
+    remediation commit red, which is the worst possible failure mode for a security gate: it penalises
+    exactly the change you wanted. `---` (the file header) is kept; only true `-` deletion lines go.
+
+    Non-diff input is returned untouched — the check is per line, so a plain source file has no `-`-
+    prefixed lines to lose. `scan --include-deletions` opts back in when you want to audit what a change
+    removed (a payload can also be hidden by deleting a check)."""
+    if not text:
+        return text
+    return "\n".join(ln for ln in text.split("\n")
+                     if not (ln.startswith("-") and not ln.startswith("---")))
+
+
 def _cmd_scan(args) -> int:
     """The deterministic HALF of the pipeline, standalone: run the indicator suite over text and exit
     non-zero on a hit at/above the floor. No LLM, no network, no creds, no Deno — just `indicators`.
@@ -240,6 +257,8 @@ def _cmd_scan(args) -> int:
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
             label = path
+        if not args.include_deletions:
+            text = drop_deleted_lines(text)
         hits.extend(scan_indicators(text, location=label))
 
     worst = max((severity_rank(h.severity) for h in hits), default=-1)
@@ -330,6 +349,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"exit 1 on a hit at/above this severity (default: {SIGNAL_SEVERITY_FLOOR}, "
                          "the SIEM signal floor)")
     sc.add_argument("--json", action="store_true", help="machine-readable output")
+    sc.add_argument("--include-deletions", action="store_true",
+                    help="also scan a diff's `-` lines (default: skip them, so removing a payload "
+                         "does not flag the change that removes it)")
     sc.set_defaults(func=_cmd_scan)
 
     r = sub.add_parser("render", help="re-render the response from a trace (offline)")
