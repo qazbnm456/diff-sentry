@@ -5,6 +5,71 @@ malicious intent — the diff held as **untrusted data** in a sandboxed REPL, a 
 and deterministic indicator evidence unioned on read into a SIEM signal — as a traced, improvable RLM
 framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIre-style detector).
 
+## 0.4.0
+
+The first release, and a repositioning: the front door is now a GitHub Action anyone installs in fifteen
+lines, with the trajectory/studio/fine-tuning half kept as the second goal for people who run the
+infrastructure themselves.
+
+### Added
+- **Ships as a GitHub Action** (`action.yml`, a composite action at the repo root, which is what
+  Marketplace requires). Inputs `fail-on` / `report-only-paths` / `base-sha` / `version`; outputs
+  `failed` / `hit-count` / `max-severity` / `report`. It runs the DETERMINISTIC scan, never the model
+  pipeline, and that is the load-bearing choice: `classify` needs `DS_*` creds, and the only mechanism
+  that puts creds into a fork PR's run is `pull_request_target` — the exact misconfiguration that opened
+  the AsyncAPI "Miasma" compromise and that this action reports as `critical`. The scan needs no creds,
+  no network and no Deno, so it runs under the read-only token a fork PR already gets. `report-only-paths`
+  is an input rather than a fixed list because the paths that legitimately carry attack patterns differ
+  per repo. The README documents the safe way to comment back on a fork PR (artifact plus a `workflow_run`
+  job that never checks out the PR head), because shipping a detector whose own docs recommend the hole it
+  detects would distribute that hole at scale.
+- **`scan` subcommand** (`cli._cmd_scan`) — the deterministic half standalone, with no model, network,
+  creds or Deno. `--fail-on` defaults to `SIGNAL_SEVERITY_FLOOR`, so the CI gate honours the same tuning a
+  SIEM signal derives from and a plain workflow edit (`medium`, on purpose) does not fail a build.
+  `--json` for machine consumption, `--include-deletions` to audit what a change removed.
+- **A `diff-sentry` console entry point** (`[project.scripts]`). There was none, so `uvx diff-sentry` —
+  the exact command the Action runs — could not have worked at all.
+- **Ten indicator rules covering the Miasma families.** Reconstructing that chain stage by stage found
+  seven of its eight stages passing the suite silently, because the rules were shell- and YAML-shaped
+  while the attack was Node end to end. Added: `pwn-request` (critical) and `privileged-fork-trigger`
+  (medium) for workflow CONFIGURATION as distinct from `workflow-tamper`'s "was a workflow touched";
+  `diff-viewport-evasion` and `invisible-unicode` for payloads aimed at the human reading the diff;
+  `detached-process-spawn`, `inline-code-exec` and `remote-fetch-to-disk` for Node execution primitives;
+  `obfuscated-identifiers` for `_0x…` mangling that base64 detection cannot see; `dynamic-code-eval` and
+  `content-addressed-host` (IPFS/permaweb) as sub-floor corroborators. The tuning is the load-bearing
+  part: rules that would be noisy alone require two halves to fire, and every rule ships with its negative
+  case. Corpus grows by nine entries (six malicious families, three benigns pinning the sub-floor tiers).
+- **`self-scan` CI job** — this repo runs the Action it publishes (`uses: ./`, `version: local`), so every
+  PR is an integration test of what users install, scanned by the rules in that PR rather than the ones
+  already on main. It caught a real defect on its first run.
+- **`release.yml`** — PyPI publish over OIDC Trusted Publishing, no API token, with a fork guard on the
+  publish job. It verifies the ARTIFACT rather than the checkout: the built wheel is installed into a
+  clean environment, the console script must actually flag a known-malicious diff, and the tag, the wheel
+  filename and the installed `__version__` must all agree before an irreversible upload.
+
+### Changed
+- **`rlm-kit` → `rlm-harness`, pinned to `==1.0.0` from PyPI.** The `[tool.uv.sources]` git pointer is
+  gone, so nothing in the dependency closure resolves outside PyPI any more — which is what made
+  publishing this package possible at all. Imports move to `rlm_harness`.
+- **The rubric adopts the harness's own primitives** (`rlm_harness.rubric`), with `schema` re-exporting
+  `Criterion` / `CriterionFact` / `RubricCriteria` for back-compat.
+- **README and package description lead with the Action**, and the local pipeline, studio console,
+  trajectory export and fine-tuning path are framed as the second goal rather than the premise.
+- **`uv sync` default-installs the `subscription-sdk` dev group**, so a bare sync stops pruning the Claude
+  Agent SDK out of the shared dev venv.
+- **ruff pinned to `0.16.0`** in CI. `uvx ruff` resolves the latest release at run time and ruff's default
+  rule set is not a stable contract, so an unpinned lint job goes red overnight with no code change.
+
+### Fixed
+- **`scan` no longer flags what a diff deletes.** A unified diff carries removed code as well as added
+  code, and the detectors read plain text, so scanning a raw diff flagged a change for the payload it was
+  DELETING — the worst failure mode a security gate can have, since it turns every remediation commit red.
+  `-` lines are dropped by default; `---` file headers survive and non-diff input is untouched.
+- **The CI self-scan no longer fails on its own explanatory comment.** The comment describing "our files
+  carry attack patterns as their job" quoted two payload shapes verbatim, and `.github/` is in the gated
+  half, so the commit that introduced the gate failed it. Confirmed as a real red CI run, not a
+  hypothetical.
+
 ## 0.3.0
 
 ### Added
