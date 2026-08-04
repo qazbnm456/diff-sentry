@@ -1,5 +1,8 @@
 name: 'diff-sentry malicious change scan'
-description: 'Scan a pull request diff for malicious-change indicators: pwn-request workflows, obfuscated payloads, secret exfiltration, dropper shapes and diff-viewport evasion. No API key required.'
+# Marketplace hard-caps this at 124 characters (the publish form rejects 125+), and it is the one line
+# shown on the listing card and in search results. Keep it under the cap and keep it concrete; the long
+# form lives in the README.
+description: 'Catch malicious pull requests before they merge: obfuscated payloads, exfiltration, pwn-requests. No API key.'
 author: 'qazbnm456'
 
 branding:
