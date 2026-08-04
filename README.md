@@ -23,11 +23,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0          # the scan diffs against the PR base
-      - uses: qazbnm456/diff-sentry@main
+      - uses: qazbnm456/diff-sentry@v0.4.0
 ```
 
-That is the whole setup. The job fails when an indicator at or above `high` fires. Pin to a released
-tag rather than `main` once you depend on it.
+That is the whole setup. The job fails when an indicator at or above `high` fires.
 
 ## What it catches
 
@@ -58,7 +57,7 @@ payload does not flag the change that removes it.
 | `fail-on` | `high` | Severity that fails the build (`info`/`low`/`medium`/`high`/`critical`). |
 | `report-only-paths` | none | Newline-separated globs scanned but never gated. For files whose job is to carry attack patterns: rule bodies, security fixtures, prompt templates, docs that tabulate payloads. |
 | `base-sha` | derived | Override the commit to diff against. |
-| `version` | `main` | The diff-sentry ref to run. Pin it for reproducible CI. `local` installs from the current checkout, which is how this repo scans its own PRs with the rules in that PR. |
+| `version` | matches the action tag | The diff-sentry release to install from PyPI. `local` installs from the current checkout instead, which is how this repo scans its own PRs with the rules in that PR. |
 
 Outputs: `failed`, `hit-count`, `max-severity`, and `report` (a JSON path).
 
