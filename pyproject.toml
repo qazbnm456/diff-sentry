@@ -1,6 +1,6 @@
 [project]
 name = "diff-sentry"
-version = "0.3.0"
+version = "0.4.0"
 description = "Catch malicious pull requests before they merge: scan a diff for supply-chain attack patterns with deterministic evidence a model cannot suppress."
 readme = "README.md"
 requires-python = ">=3.11"
