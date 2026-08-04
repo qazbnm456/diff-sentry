@@ -118,6 +118,69 @@ _CI_BYPASS_RE = re.compile(
 # write-all (the recommended hardening after tj-actions) and prose mentions do NOT fire.
 _WRITE_ALL_RE = re.compile(r"^[+ ]?\s*permissions\s*:\s*write-all\b", re.IGNORECASE | re.MULTILINE)
 
+# ── Workflow-CONFIGURATION escalation (distinct from `workflow-tamper`, which only asks "was a workflow
+# file touched?"). This asks what the workflow BECOMES. `pull_request_target`/`workflow_run` run a fork
+# PR's workflow with the BASE repo's token and secrets; on their own that is a legitimate pattern (label
+# or comment bots that never touch the PR's code), so alone they are a sub-floor `medium`, consistent
+# with `workflow-tamper`'s tuning. The lethal pairing is that trigger PLUS an explicit checkout of the PR
+# HEAD — attacker-authored code executing inside the privileged context. That is the ROOT CAUSE of the
+# AsyncAPI "Miasma" supply-chain compromise (a fork PR harvested the org-admin token out of the runner),
+# and it has no safe reading → `critical`.
+_PRIV_TRIGGER_RE = re.compile(r"^[+ ]?\s*(?:pull_request_target|workflow_run)\s*:", re.MULTILINE)
+_PR_HEAD_REF_RE = re.compile(
+    r"github\.event\.pull_request\.head\.(?:sha|ref)|github\.event\.workflow_run\.head_(?:sha|branch)|"
+    r"refs/pull/[^\s\"']*/(?:head|merge)", re.IGNORECASE)
+
+# Diff-PRESENTATION evasion — attacks aimed at the human reading the diff, not at the runtime. Miasma
+# prepended ~700 spaces to shove its payload off the right edge of a standard diff viewer. No source
+# formatter indents past ~60 columns, so a 200-space run before real content is unambiguous.
+# NOT anchored to the line start. Miasma PREPENDED its ~700 spaces, but a run of that size sitting
+# mid-line shoves the tail of the line off the viewport just as effectively, and the concealment is the
+# thing being detected — not where it happens to sit. No formatter indents or aligns past ~60 columns.
+_WS_SHOVE_RE = re.compile(r"[ \t]{200,}(?=\S)")
+# Trojan Source: bidi overrides/isolates reorder rendered text away from what the compiler sees; ZWSP
+# hides content outright. Deliberately EXCLUDES U+200E/U+200F (LRM/RLM) and U+200C/U+200D (ZWNJ/ZWJ),
+# named here as CODEPOINTS rather than pasted literally — those carry real linguistic and emoji-
+# sequence use and would fire on ordinary prose, and a comment full of invisible characters is the
+# very thing this rule exists to catch (ruff PLE2502 rejects it, correctly).
+# those carry real linguistic and emoji-sequence use, and would fire on ordinary prose.
+_INVISIBLE_RE = re.compile("[\u202a-\u202e\u2066-\u2069\u200b]")  # escaped on purpose: literal
+# invisible characters in this file would be unreadable, un-reviewable, and would trip this very rule.
+
+# Node/npm execution primitives. Miasma's payload was JS end-to-end and our suite was shell/YAML-shaped,
+# so every stage of it ran silently past the deterministic floor. Tuned rather than uniformly paranoid:
+# `child_process` and `eval` appear in legitimate tooling constantly, so only the DETACHED spawn (a
+# process deliberately outliving the parent — the stage-1 loader shape) and inline `node -e` execution
+# reach the floor; a bare dynamic eval is a sub-floor corroborator.
+_JS_CHILD_PROC_RE = re.compile(
+    r"child_process|\b(?:execSync|spawnSync|execFileSync|execFile|spawn|fork)\s*\(", re.IGNORECASE)
+_JS_DETACHED_RE = re.compile(r"detached\s*:\s*true|\.unref\s*\(\s*\)")
+_NODE_INLINE_EXEC_RE = re.compile(
+    r"\bnode\s+-e\b|process\.execPath[^\n]{0,120}['\"]-e['\"]|['\"]-e['\"][^\n]{0,120}process\.execPath")
+_DYNAMIC_EVAL_RE = re.compile(r"\beval\s*\(|new\s+Function\s*\(")
+# The dropper shape: pull bytes off the network AND commit them to disk. Either half alone is ordinary
+# (every HTTP client fetches; every build writes files); together in one change they are a stage-2 loader.
+_JS_NET_FETCH_RE = re.compile(
+    r"\bfetch\s*\(|\baxios\b|require\s*\(\s*['\"]https?['\"]\s*\)|\bhttps?\.(?:get|request)\s*\(",
+    re.IGNORECASE)
+_FILE_WRITE_RE = re.compile(r"writeFileSync|createWriteStream|\bfs\.write", re.IGNORECASE)
+
+# Tier 3 — content-addressed / permaweb gateways. Miasma staged its second-stage binary on IPFS. Same
+# FP-safe reasoning as the dev tunnels: these have real mainstream use (web3 apps, NFT metadata), so a
+# reference alone is a sub-floor `medium`. When the change actually FETCHES from one and writes the
+# result to disk, `remote-fetch-to-disk` fires on its own and carries the signal.
+_CONTENT_HOST_DOMAINS = (
+    "ipfs.io", "dweb.link", "cloudflare-ipfs.com", "gateway.pinata.cloud", "ipfs.infura.io",
+    "nftstorage.link", "w3s.link", "arweave.net", "ipfs.dweb.link",
+)
+_CONTENT_HOST_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(d) for d in _CONTENT_HOST_DOMAINS) + r")\b", re.IGNORECASE)
+
+# javascript-obfuscator's signature identifier mangling (`_0x1dd48b`). Terser/uglify emit SHORT names
+# (`a`, `t`), never this form, so it is a strong obfuscation tell that base64 detection cannot see —
+# Miasma's 15k-char `validator.js` payload used exactly this and fired nothing in our suite.
+_HEX_IDENT_RE = re.compile(r"_0x[0-9a-fA-F]{4,}")
+
 # Prompt-injection phrases — the class of payload hackerbot-claw aimed at a claude-code-action workflow.
 _INJECTION_PHRASES = (
     "ignore previous instructions", "ignore all previous", "disregard the above",
@@ -166,7 +229,8 @@ def _scan_obfuscation(text: str) -> list[IndicatorHit]:
         # Only flag base64 that DECODES to something suspicious — a plain data blob isn't an indicator.
         # (Rescan shell/exfil/URL/callback-domain payloads; CI-skip and permission markers aren't usefully
         # base64-wrapped, so they're not in the inner set.)
-        inner = _scan_shell(decoded) + _scan_urls(decoded) + _scan_exfil(decoded) + _scan_exfil_domains(decoded)
+        inner = (_scan_shell(decoded) + _scan_urls(decoded) + _scan_exfil(decoded)
+                 + _scan_exfil_domains(decoded) + _scan_js_exec(decoded))
         if inner:
             worst = max((h.severity for h in inner), key=lambda s: _sev_rank(s))
             hits.append(_hit("obfuscated-payload", worst,
@@ -196,6 +260,10 @@ def _scan_exfil_domains(text: str) -> list[IndicatorHit]:
                   "references a dev-tunnel / API-mock service (abused as an exfil sink)",
                   _snip(text, m.start(), m.end()))
              for m in _TUNNEL_DOMAIN_RE.finditer(text)]
+    hits += [_hit("content-addressed-host", "medium",
+                  "references an IPFS / permaweb gateway (abused to host a stage-2 payload)",
+                  _snip(text, m.start(), m.end()))
+             for m in _CONTENT_HOST_RE.finditer(text)]
     return hits
 
 
@@ -211,6 +279,78 @@ def _scan_workflow_perms(text: str) -> list[IndicatorHit]:
                  "over-broad workflow permission grant (`write-all`)",
                  _snip(text, m.start(), m.end()))
             for m in _WRITE_ALL_RE.finditer(text)]
+
+
+def _scan_workflow_config(text: str) -> list[IndicatorHit]:
+    """What a workflow BECOMES, not merely that one was touched (`workflow-tamper`'s job)."""
+    trigger = _PRIV_TRIGGER_RE.search(text)
+    if not trigger:
+        return []
+    head = _PR_HEAD_REF_RE.search(text)
+    if head:
+        return [_hit("pwn-request", "critical",
+                     "privileged fork trigger checks out the PR HEAD — untrusted code with the base "
+                     "repo's token/secrets",
+                     _snip(text, head.start(), head.end()))]
+    return [_hit("privileged-fork-trigger", "medium",
+                 "`pull_request_target`/`workflow_run` — a fork PR runs in a privileged context",
+                 _snip(text, trigger.start(), trigger.end()))]
+
+
+def _scan_diff_evasion(text: str) -> list[IndicatorHit]:
+    """Payloads aimed at the human READING the diff rather than at the runtime."""
+    hits: list[IndicatorHit] = []
+    m = _WS_SHOVE_RE.search(text)
+    if m:
+        hits.append(_hit("diff-viewport-evasion", "high",
+                         "content shoved past the diff viewport by a long whitespace run",
+                         f"{m.end() - m.start()} leading whitespace chars before content: "
+                         f"{_snip(text, m.end(), m.end(), pad=80)}"))
+    inv = _INVISIBLE_RE.search(text)
+    if inv:
+        hits.append(_hit("invisible-unicode", "high",
+                         "bidi-override / zero-width characters (rendered text differs from real code)",
+                         f"U+{ord(inv.group(0)):04X} at offset {inv.start()}: "
+                         f"{_snip(text, inv.start(), inv.end())}"))
+    return hits
+
+
+def _scan_js_exec(text: str) -> list[IndicatorHit]:
+    """Node/npm execution primitives — the ecosystem our shell/YAML-shaped rules were blind to."""
+    hits: list[IndicatorHit] = []
+    detached = _JS_DETACHED_RE.search(text)
+    if detached and _JS_CHILD_PROC_RE.search(text):
+        hits.append(_hit("detached-process-spawn", "high",
+                         "spawns a DETACHED child process (outlives the parent — stage-1 loader shape)",
+                         _snip(text, detached.start(), detached.end())))
+    for m in _NODE_INLINE_EXEC_RE.finditer(text):
+        hits.append(_hit("inline-code-exec", "high",
+                         "executes code passed inline to node (`node -e`)",
+                         _snip(text, m.start(), m.end())))
+        break
+    fetch = _JS_NET_FETCH_RE.search(text)
+    write = _FILE_WRITE_RE.search(text)
+    if fetch and write:
+        hits.append(_hit("remote-fetch-to-disk", "high",
+                         "fetches from the network AND writes the result to disk (dropper shape)",
+                         _snip(text, fetch.start(), fetch.end())))
+    ev = _DYNAMIC_EVAL_RE.search(text)
+    if ev:
+        hits.append(_hit("dynamic-code-eval", "medium",
+                         "dynamic code evaluation (`eval` / `new Function`)",
+                         _snip(text, ev.start(), ev.end())))
+    return hits
+
+
+def _scan_hex_identifiers(text: str) -> list[IndicatorHit]:
+    """javascript-obfuscator's `_0x…` mangling — obfuscation that base64 detection cannot see."""
+    found = _HEX_IDENT_RE.findall(text)
+    if len(set(found)) >= 3 and len(found) >= 8:
+        return [_hit("obfuscated-identifiers", "high",
+                     "hex-mangled identifiers (`_0x…`) — machine-obfuscated JavaScript",
+                     f"{len(set(found))} distinct over {len(found)} uses: "
+                     f"{', '.join(sorted(set(found))[:6])}")]
+    return []
 
 
 def _scan_ci_paths(text: str) -> list[IndicatorHit]:
@@ -261,6 +401,8 @@ def scan_indicators(text: str, *, location: str = "") -> list[IndicatorHit]:
         _scan_shell(text) + _scan_obfuscation(text) + _scan_exfil(text) + _scan_urls(text)
         + _scan_exfil_domains(text) + _scan_ci_paths(text) + _scan_ci_bypass(text)
         + _scan_workflow_perms(text) + _scan_injection(text) + _scan_entropy(text)
+        + _scan_workflow_config(text) + _scan_diff_evasion(text) + _scan_js_exec(text)
+        + _scan_hex_identifiers(text)
     )
     deduped: dict[str, IndicatorHit] = {}
     for h in all_hits:
