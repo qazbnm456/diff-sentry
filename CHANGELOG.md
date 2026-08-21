@@ -5,6 +5,27 @@ malicious intent — the diff held as **untrusted data** in a sandboxed REPL, a 
 and deterministic indicator evidence unioned on read into a SIEM signal — as a traced, improvable RLM
 framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIre-style detector).
 
+## Unreleased
+
+### Fixed
+- **`pwn-request` no longer fires on a workflow that merely READS the PR head.** The rule paired a
+  privileged trigger with a PR-HEAD *mention* anywhere in the text and called that a checkout, so the
+  validating-publisher shape — `workflow_run`, head SHA in an env var, checkout pinned to the default
+  branch — was graded `critical`, identically to the attack. That is the shape README.md tells people to
+  use, next to the sentence "diff-sentry's own rules make the same distinction, so the safe shape does
+  not trip them"; it did trip them. Escalation now requires the expression to actually reach a checkout:
+  an `actions/checkout` `ref:` value, or a `git checkout`/`git fetch`/`gh pr checkout` command. A bare
+  mention keeps the sub-floor `medium` `privileged-fork-trigger`, cited at the reference rather than the
+  trigger line so a reviewer still lands on the spot worth reading. Found by running the action against
+  a real publisher workflow.
+- **`pwn-request` now follows one binding hop.** `HEAD: ${{ github.event.pull_request.head.sha }}`
+  followed by `ref: ${{ env.HEAD }}` is the same attack split across two lines. Requiring the expression
+  to sit on the `ref:` line would have turned the fix above into a free bypass, so a name bound to the
+  head expression is tracked and a `ref:` that reads it counts as the checkout.
+- **`refs/pull/…` matching tolerates interpolation.** `refs/pull/${{ github.event.number }}/head` — the
+  form that actually appears in the wild — was missed, because the character class stopped at the space
+  inside the expression. A hand-rolled `git fetch` of the PR head is caught now.
+
 ## 0.4.0
 
 The first release, and a repositioning: the front door is now a GitHub Action anyone installs in fifteen

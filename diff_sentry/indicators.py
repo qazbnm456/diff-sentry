@@ -127,9 +127,36 @@ _WRITE_ALL_RE = re.compile(r"^[+ ]?\s*permissions\s*:\s*write-all\b", re.IGNOREC
 # AsyncAPI "Miasma" supply-chain compromise (a fork PR harvested the org-admin token out of the runner),
 # and it has no safe reading → `critical`.
 _PRIV_TRIGGER_RE = re.compile(r"^[+ ]?\s*(?:pull_request_target|workflow_run)\s*:", re.MULTILINE)
-_PR_HEAD_REF_RE = re.compile(
-    r"github\.event\.pull_request\.head\.(?:sha|ref)|github\.event\.workflow_run\.head_(?:sha|branch)|"
-    r"refs/pull/[^\s\"']*/(?:head|merge)", re.IGNORECASE)
+
+# The PR-HEAD expressions themselves, shared by the two patterns below — which differ only in what they
+# require the expression to DO. A bare MENTION is not a checkout: the recommended `workflow_run`
+# publisher (the safe way to comment on a fork PR, since `pull_request` hands forks a read-only token)
+# reads `workflow_run.head_sha` precisely to VALIDATE the artifact it was given, and gating on the
+# mention alone failed that pattern exactly as hard as the attack it is meant to catch.
+_PR_HEAD_EXPR = (r"github\.event\.pull_request\.head\.(?:sha|ref)"
+                 r"|github\.event\.workflow_run\.head_(?:sha|branch)"
+                 # The interpolated form `refs/pull/${{ github.event.number }}/head` is the one that
+                 # actually appears in the wild; a bare `[^\s"']*` stops at the space inside the
+                 # expression, so the interpolation blob is spelled out as its own alternative.
+                 r"|refs/pull/(?:\$\{\{[^{}]*\}\}|[^\s\"'])*/(?:head|merge)")
+_PR_HEAD_REF_RE = re.compile(_PR_HEAD_EXPR, re.IGNORECASE)
+
+# The expression BECOMING a checkout: an `actions/checkout` `ref:` value, or a git/gh command that
+# fetches or checks it out.
+_PR_HEAD_CHECKOUT_RE = re.compile(
+    rf"^[+ ]?\s*ref\s*:[^\n]*(?:{_PR_HEAD_EXPR})"
+    rf"|(?:git\s+(?:checkout|fetch|pull)|gh\s+pr\s+checkout)[^\n]*(?:{_PR_HEAD_EXPR})",
+    re.IGNORECASE | re.MULTILINE)
+
+# One hop of indirection — the same lethal shape written as two lines:
+#     HEAD: ${{ github.event.pull_request.head.sha }}   …   ref: ${{ env.HEAD }}
+# Matching only the direct form would leave that as a trivial bypass, so a name bound to the head
+# expression is tracked and a `ref:` that reads it counts as the checkout.
+_HEAD_BINDING_RE = re.compile(
+    rf"^[+ ]?\s*([A-Za-z_][A-Za-z0-9_-]*)\s*[:=]\s*[^\n]*(?:{_PR_HEAD_EXPR})",
+    re.IGNORECASE | re.MULTILINE)
+_REF_VALUE_RE = re.compile(r"^[+ ]?\s*ref\s*:\s*([^\n]*)", re.IGNORECASE | re.MULTILINE)
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 # Diff-PRESENTATION evasion — attacks aimed at the human reading the diff, not at the runtime. Miasma
 # prepended ~700 spaces to shove its payload off the right edge of a standard diff viewer. No source
@@ -281,16 +308,40 @@ def _scan_workflow_perms(text: str) -> list[IndicatorHit]:
             for m in _WRITE_ALL_RE.finditer(text)]
 
 
+def _pr_head_checkout(text: str) -> re.Match[str] | None:
+    """Where a PR-HEAD expression actually reaches a checkout — directly, or through one binding."""
+    direct = _PR_HEAD_CHECKOUT_RE.search(text)
+    if direct:
+        return direct
+    # `ref:` is not a binding — a `ref:` holding the expression IS the direct case above.
+    bound = {m.group(1).lower() for m in _HEAD_BINDING_RE.finditer(text)} - {"ref"}
+    if not bound:
+        return None
+    for m in _REF_VALUE_RE.finditer(text):
+        if any(name.lower() in bound for name in _IDENT_RE.findall(m.group(1))):
+            return m
+    return None
+
+
 def _scan_workflow_config(text: str) -> list[IndicatorHit]:
     """What a workflow BECOMES, not merely that one was touched (`workflow-tamper`'s job)."""
     trigger = _PRIV_TRIGGER_RE.search(text)
     if not trigger:
         return []
-    head = _PR_HEAD_REF_RE.search(text)
-    if head:
+    checkout = _pr_head_checkout(text)
+    if checkout:
         return [_hit("pwn-request", "critical",
                      "privileged fork trigger checks out the PR HEAD — untrusted code with the base "
                      "repo's token/secrets",
+                     _snip(text, checkout.start(), checkout.end()))]
+    head = _PR_HEAD_REF_RE.search(text)
+    if head:
+        # Reads the head ref without checking it out. That is the validating-publisher shape, which is
+        # the RECOMMENDED way to comment on a fork PR — so it stays sub-floor, but it is cited rather
+        # than the trigger line, because this is the spot a reviewer should look at.
+        return [_hit("privileged-fork-trigger", "medium",
+                     "`pull_request_target`/`workflow_run` reads the PR HEAD without checking it out — "
+                     "confirm the ref never reaches a checkout",
                      _snip(text, head.start(), head.end()))]
     return [_hit("privileged-fork-trigger", "medium",
                  "`pull_request_target`/`workflow_run` — a fork PR runs in a privileged context",

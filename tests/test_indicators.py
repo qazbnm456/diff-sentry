@@ -104,6 +104,26 @@ _PWN = ("on:\n  pull_request_target:\n    types: [opened]\njobs:\n  p:\n    step
         "          ref: ${{ github.event.pull_request.head.sha }}\n")
 _LABEL_BOT = "on:\n  pull_request_target:\n    types: [opened]\njobs:\n  l:\n    steps:\n      - uses: actions/labeler@v5\n"
 
+# The RECOMMENDED way to comment on a fork PR: `pull_request` hands a fork a read-only token, so the
+# verdict is produced by an unprivileged run and published from `workflow_run`, which reads the head SHA
+# only to CHECK that the artifact belongs to the PR it claims. It checks out the default branch.
+_SAFE_PUBLISHER = (
+    "on:\n  workflow_run:\n    workflows: [\"PR auto-review\"]\n    types: [completed]\n"
+    "permissions:\n  pull-requests: write\njobs:\n  publish:\n    steps:\n"
+    "      - uses: actions/checkout@v4\n        with:\n"
+    "          ref: ${{ github.event.repository.default_branch }}\n"
+    "      - run: python3 scripts/publish.py\n        env:\n"
+    "          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}\n")
+# The same lethal shape as _PWN, written across two lines to dodge a single-line match.
+_PWN_INDIRECT = (
+    "on:\n  pull_request_target:\n    types: [opened]\nenv:\n"
+    "  HEAD_REF: ${{ github.event.pull_request.head.sha }}\njobs:\n  p:\n    steps:\n"
+    "      - uses: actions/checkout@v4\n        with:\n          ref: ${{ env.HEAD_REF }}\n")
+# Checkout by hand rather than through actions/checkout.
+_PWN_GIT_FETCH = (
+    "on:\n  pull_request_target:\n    types: [opened]\njobs:\n  p:\n    steps:\n"
+    "      - run: git fetch origin refs/pull/${{ github.event.number }}/head && git checkout FETCH_HEAD\n")
+
 
 def test_pwn_request_is_critical_but_bare_privileged_trigger_is_sub_floor():
     """The root cause of Miasma. `pull_request_target` PLUS a PR-head checkout runs attacker code with
@@ -116,6 +136,31 @@ def test_pwn_request_is_critical_but_bare_privileged_trigger_is_sub_floor():
     assert "pwn-request" not in _rules(bot)
     trig = [h for h in bot if h.rule == "privileged-fork-trigger"]
     assert trig and trig[0].severity == "medium"
+
+
+def test_pwn_request_needs_a_checkout_not_a_mention():
+    """Reading the PR head is not checking it out. The validating publisher — `workflow_run`, head SHA
+    in an env var, checkout pinned to the default branch — is the pattern GitHub recommends for fork
+    PRs, and it must not be graded as the attack it exists to avoid. It stays a sub-floor `medium`,
+    cited at the head reference so a reviewer still looks there."""
+    hits = scan_indicators(_SAFE_PUBLISHER)
+    assert "pwn-request" not in _rules(hits)
+    trig = [h for h in hits if h.rule == "privileged-fork-trigger"]
+    assert trig and trig[0].severity == "medium"
+    assert "workflow_run.head_sha" in trig[0].evidence
+
+
+def test_pwn_request_follows_one_binding_hop():
+    """`ref:` reading a name bound to the head expression elsewhere in the file is the same attack with
+    an extra line. Requiring the expression to sit ON the `ref:` line would make that a free bypass."""
+    hits = [h for h in scan_indicators(_PWN_INDIRECT) if h.rule == "pwn-request"]
+    assert hits and hits[0].severity == "critical"
+
+
+def test_pwn_request_catches_a_hand_rolled_checkout():
+    """The dangerous fetch does not have to go through actions/checkout."""
+    hits = [h for h in scan_indicators(_PWN_GIT_FETCH) if h.rule == "pwn-request"]
+    assert hits and hits[0].severity == "critical"
 
 
 def test_detects_whitespace_shove_wherever_it_sits():
