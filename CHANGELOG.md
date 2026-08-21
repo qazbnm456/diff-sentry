@@ -21,8 +21,9 @@ framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIr
 
 ### Changed
 - **`astral-sh/setup-uv` bumped to v10.0.1** (from v5.4.2) and **`actions/checkout` to v7**, both for
-  the Node 24 runtime — between them they clear GitHub's Node 20 deprecation warning, which every run
-  was carrying. (setup-uv alone did not: checkout@v4 kept the annotation alive.) Five majors in one
+  the Node 24 runtime — between them they clear GitHub's Node 20 deprecation warning. The setup-uv bump
+  covers `action.yml` too, so it reaches every repo running this action, not just this one's CI. Five
+  majors in one
   jump, so what actually applies here was checked: v8 stopped publishing major tags (this repo already
   SHA-pins), v9 flipped the `prune-cache` default, and v10 disables caching for `release` /
   `workflow_run` / `pull_request_target` events under `enable-cache: auto` — CI passes `enable-cache:
