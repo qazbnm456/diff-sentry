@@ -91,10 +91,10 @@ def _baseline_indicators(event: dict) -> list[dict]:
     """The host-side deterministic evidence recorded in run_start meta BEFORE the planner runs: the text
     detectors over the raw content ∪ the provenance detectors over the ingest facts. Both re-source into the
     evidence union on read (MF3), so a false-benign SUBMIT can skew the verdict but never suppress these."""
-    from .indicators import scan_indicators, scan_provenance
+    from .indicators import scan_diff, scan_provenance
     from .normalize import raw_content
 
-    return ([h.model_dump() for h in scan_indicators(raw_content(event))]
+    return ([h.model_dump() for h in scan_diff(raw_content(event))]
             + [h.model_dump() for h in scan_provenance(event.get("provenance") or {})])
 
 
@@ -245,7 +245,7 @@ def _cmd_scan(args) -> int:
     `DS_*` creds, and the only way to hand creds to a fork PR's run is `pull_request_target` — the exact
     misconfiguration that opened the AsyncAPI "Miasma" supply-chain compromise. `scan` needs nothing, so
     it runs under the same read-only `contents: read` token an untrusted fork PR already gets."""
-    from .indicators import scan_indicators
+    from .indicators import scan_diff
     from .schema import severity_rank
 
     threshold = severity_rank(args.fail_on)
@@ -259,7 +259,7 @@ def _cmd_scan(args) -> int:
             label = path
         if not args.include_deletions:
             text = drop_deleted_lines(text)
-        hits.extend(scan_indicators(text, location=label))
+        hits.extend(scan_diff(text, location=label))
 
     worst = max((severity_rank(h.severity) for h in hits), default=-1)
     failed = worst >= threshold

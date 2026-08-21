@@ -442,6 +442,55 @@ def _sev_rank(sev: str) -> int:
     return severity_rank(sev)
 
 
+# ── diff SCOPING ──────────────────────────────────────────────────────────────────────────────────────
+# A change is many files, and `scan_indicators` reads whatever it is handed as ONE string. That is right
+# for the rules that fire on a single match, but two of them require a PAIR of signals — `pwn-request`
+# (privileged trigger + PR-HEAD checkout) and `detached-process-spawn` (detached spawn + child_process).
+# Read as one blob, those pair ACROSS FILES: a `workflow_run:` added to one workflow and a
+# `ref: ${{ github.event.pull_request.head.sha }}` sitting in an unrelated file — a doc example, a test
+# fixture, or the very workflow the change is DELETING — compose into a `critical` that no single file
+# contains. Scoping the scan per file removes that class outright, and names the file in `location`
+# while it is there: evidence that used to read `gated.diff` for every hit now points at what to open.
+#
+# The trade is explicit: a payload deliberately split across two files no longer pairs. That is the
+# right way round — a detector that invents a critical out of two unrelated files trains people to
+# disable it, and the single-signal rules (which are most of them) are unaffected either way.
+_DIFF_FILE_RE = re.compile(r"^diff --git a/(?P<a>.+?) b/(?P<b>.+?)$", re.MULTILINE)
+
+
+def split_diff_by_file(text: str) -> list[tuple[str, str]]:
+    """Split a unified diff into `(path, segment)` pairs; `[]` when `text` is not a diff.
+
+    Anything BEFORE the first file header comes back first with an empty path. That chunk is not
+    padding — for `raw_content` it is the PR title and body, which is exactly where prompt injection
+    lives, so it has to keep being scanned rather than skipped as preamble."""
+    marks = list(_DIFF_FILE_RE.finditer(text or ""))
+    if not marks:
+        return []
+    out: list[tuple[str, str]] = []
+    head = text[:marks[0].start()]
+    if head.strip():
+        out.append(("", head))
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        out.append((m.group("b") or m.group("a"), text[m.start():end]))
+    return out
+
+
+def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
+    """`scan_indicators` with per-file scoping — a paired rule can only fire when ONE file carries both
+    halves. Non-diff input (a region the planner pulled out, a plain file) falls through to a single
+    whole-text scan, so this is safe as the entry point for either shape."""
+    segments = split_diff_by_file(text)
+    if not segments:
+        return scan_indicators(text, location=location)
+    deduped: dict[str, IndicatorHit] = {}
+    for path, segment in segments:
+        for h in scan_indicators(segment, location=path or location):
+            deduped.setdefault(h.id, h)
+    return list(deduped.values())
+
+
 def scan_indicators(text: str, *, location: str = "") -> list[IndicatorHit]:
     """Run every detector over `text` and return the DEDUPED union of hits (by deterministic id).
 
@@ -589,7 +638,11 @@ def make_indicator_tool() -> Callable[[str], str]:
         injection, obfuscated payloads, secret exfiltration, known exfil/OAST callback services,
         CI/CODEOWNERS tampering, workflow permission escalation, CI-skip bypass, prompt injection. Returns
         the hits found (id, rule, severity, title). Cite an id in your final `indicator_ids`."""
-        hits = scan_indicators(region or "")
+        # scan_diff, not scan_indicators: when the planner hands back a whole diff this scopes it per
+        # file exactly as the host-side baseline did, so the two scans of the same content still mint
+        # the same ids and de-duplicate to one union member (MF3). A sub-region is not a diff and falls
+        # through to the plain whole-text scan.
+        hits = scan_diff(region or "")
         record_tool_call("scan_indicators", args={"region": (region or "")[:200]}, ok=True,
                          hits=[h.model_dump() for h in hits], n=len(hits))
         if not hits:

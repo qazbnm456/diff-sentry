@@ -100,6 +100,13 @@ One companion rule ships under `.claude/rules/`:
   network-fetch + file-write — are `high`. A rule that needs BOTH halves is how a common primitive
   becomes evidence without becoming noise. The corpus pins this hit/miss behavior, and every rule ships
   with its NEGATIVE case. Hit evidence is a BOUNDED snippet (`_MAX_EVIDENCE`), never the whole diff.
+- **A paired rule only pairs WITHIN one file.** `scan_diff` splits a unified diff on its file headers
+  and scans each segment alone; `scan`, the host-side baseline and the in-loop tool all go through it.
+  Scanning the diff as one blob let the two halves come from different files — a `workflow_run:` in one
+  workflow and a `ref: ${{ … head.sha }}` in a doc example composed into a `critical` no file contained.
+  It also makes a hit id stable between a whole-diff scan and a single-file one, because the segment is
+  byte-identical either way, which is what lets the baseline and an in-loop scan de-duplicate (MF3).
+  Non-diff input falls through to a plain whole-text scan; keep that fallback.
 - **The indicator tool registers as exactly `scan_indicators`.** dspy registers a tool under its
   `__name__` and the prompt says `scan_indicators(region)` — a rename makes every sandbox call a
   NameError (a shipped regression; see the `fix(detect)` commit). The inner callable is renamed on

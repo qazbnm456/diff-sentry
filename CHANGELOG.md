@@ -5,6 +5,29 @@ malicious intent — the diff held as **untrusted data** in a sandboxed REPL, a 
 and deterministic indicator evidence unioned on read into a SIEM signal — as a traced, improvable RLM
 framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIre-style detector).
 
+## Unreleased
+
+### Fixed
+- **The scan is scoped per file.** `scan_indicators` reads whatever it is handed as one string, and the
+  action hands it the whole `git diff`. Most rules fire on a single match, so that was harmless — but
+  two need a PAIR of signals (`pwn-request`: privileged trigger + PR-HEAD checkout;
+  `detached-process-spawn`: detached spawn + `child_process`), and a whole-blob read let those pair
+  ACROSS FILES. A `workflow_run:` added to one workflow plus a `ref: ${{ ... head.sha }}` sitting in a
+  doc example, a test fixture, or the very workflow a change is *deleting*, composed into a `critical`
+  that no single file contained. The new `scan_diff` splits a unified diff on its file headers and
+  scans each segment on its own; non-diff input (a region the planner pulled out of the REPL, a plain
+  file) falls through to the previous whole-text scan. Used by `scan`, by the host-side baseline, and
+  by the in-loop `scan_indicators` tool, so all three agree.
+
+### Added
+- **Hits name the file they came from.** `location` was the name of the whole diff — `gated.diff` for
+  every hit, which meant reading the raw log to find out where a finding actually was. Per-file
+  scanning gives each hit its real path.
+- **A hit id is now stable between a whole-diff scan and a single-file scan.** The segment the planner
+  pulls out is byte-identical to the one the baseline scanned, so the evidence snippets — and therefore
+  the ids — match, and the two de-duplicate to one union member on read. Whole-blob scanning could not
+  promise that: the snippet window moved with the byte offset.
+
 ## 0.4.1
 
 A correctness release for one rule: `pwn-request` was failing the very pattern this
