@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0          # the scan diffs against the PR base
-      - uses: qazbnm456/diff-sentry@v0.4.1
+      - uses: qazbnm456/diff-sentry@v0.4.2
 ```
 
 That is the whole setup. The job fails when an indicator at or above `high` fires.

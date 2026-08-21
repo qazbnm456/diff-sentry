@@ -70,7 +70,7 @@ __all__ = [
     "detect_from_event",
 ]
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 
 
 def __getattr__(name: str):  # PEP 562 — defer the dspy import to first use

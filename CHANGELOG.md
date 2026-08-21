@@ -5,7 +5,10 @@ malicious intent — the diff held as **untrusted data** in a sandboxed REPL, a 
 and deterministic indicator evidence unioned on read into a SIEM signal — as a traced, improvable RLM
 framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIre-style detector).
 
-## Unreleased
+## 0.4.2
+
+Scoping. Every fix here comes from the same root: the scan read a whole change as one
+string, so rules that need two signals could take them from two unrelated files.
 
 ### Fixed
 - **The scan is scoped per file.** `scan_indicators` reads whatever it is handed as one string, and the
