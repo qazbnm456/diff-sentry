@@ -19,6 +19,14 @@ framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIr
   file) falls through to the previous whole-text scan. Used by `scan`, by the host-side baseline, and
   by the in-loop `scan_indicators` tool, so all three agree.
 
+### Changed
+- **`astral-sh/setup-uv` bumped to v10.0.1** (from v5.4.2), which runs on Node 24 — the old pin was the
+  last thing in either workflow still tripping GitHub's Node 20 deprecation warning. Five majors in one
+  jump, so what actually applies here was checked: v8 stopped publishing major tags (this repo already
+  SHA-pins), v9 flipped the `prune-cache` default, and v10 disables caching for `release` /
+  `workflow_run` / `pull_request_target` events under `enable-cache: auto` — CI passes `enable-cache:
+  true` explicitly and keeps its cache, and the release job never wanted one.
+
 ### Added
 - **Hits name the file they came from.** `location` was the name of the whole diff — `gated.diff` for
   every hit, which meant reading the raw log to find out where a finding actually was. Per-file
