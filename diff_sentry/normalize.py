@@ -159,13 +159,25 @@ def has_groundable_content(event_str: str) -> bool:
     return bool(body) and body != NO_CONTENT_SENTINEL
 
 
+def content_segments(event: dict) -> list[tuple[str, str]]:
+    """The untrusted content split the way the event already carries it: `(label, text)` per piece —
+    the title+author, then one segment per file, then the body.
+
+    `raw_content` is the concatenation of exactly these, in this order, so the two cannot drift and the
+    content digest built on it stays byte-stable. The split exists because the baseline scan needs the
+    same per-file scoping `scan_diff` gives a raw diff: read as one blob, a rule that needs two signals
+    could take one from a workflow and the other from an unrelated file. A file's segment keeps its
+    filename INSIDE the text as well as in the label — `workflow-tamper` reads the path itself."""
+    files = _files(event)
+    segments = [("", f"{event.get('title', '') or ''}\n{event.get('author', '') or ''}")]
+    segments += [(f["filename"], f"{f['filename']}\n{f['patch']}") for f in files]
+    segments.append(("", str(event.get("body", "") or "")))
+    return segments
+
+
 def raw_content(event: dict) -> str:
     """The concatenated untrusted content the host-side BASELINE scan runs on — TITLE + author +
     (filename + patch) per file + body. The title is included so a title-borne prompt injection is caught
     by the deterministic baseline even when the planner is skewed by the same payload (MF3): an issue/PR
     title is a canonical injection channel, and its hits must reach the signal regardless of the verdict."""
-    files = _files(event)
-    parts = [str(event.get("title", "") or ""), str(event.get("author", "") or "")]
-    parts += [f"{f['filename']}\n{f['patch']}" for f in files]
-    parts.append(str(event.get("body", "") or ""))
-    return "\n".join(parts)
+    return "\n".join(text for _, text in content_segments(event))

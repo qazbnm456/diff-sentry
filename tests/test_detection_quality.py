@@ -23,8 +23,7 @@ from pathlib import Path
 import pytest
 
 from diff_sentry.assemble import assemble_verdict
-from diff_sentry.indicators import scan_indicators
-from diff_sentry.normalize import raw_content
+from diff_sentry.indicators import scan_content
 from diff_sentry.schema import SIGNAL_SEVERITY_FLOOR, ChangeVerdict, severity_rank
 
 _CORPUS = json.loads((Path(__file__).parent / "corpus" / "change_corpus.json").read_text())
@@ -35,7 +34,9 @@ _EMIT_ON = ("suspicious", "malicious")
 def _assemble(event, *, verdict_label="benign"):
     """Assemble the event under a chosen verdict, with only the host-side baseline in the trace — so the
     signal derives from the deterministic evidence floor, exactly as the crash path and MF3 backstop do."""
-    baseline = [h.model_dump() for h in scan_indicators(raw_content(event))]
+    # scan_content, not scan_indicators(raw_content(...)): the corpus is the golden guard for the
+    # deterministic layer, so it has to exercise the path production actually takes — per-file scoped.
+    baseline = [h.model_dump() for h in scan_content(event)]
     events = [{"type": "run_start",
                "payload": {"meta": {"baseline_indicators": baseline, "emit_on": list(_EMIT_ON)}}}]
     verdict = ChangeVerdict(summary="s", verdict=verdict_label, confidence=0.5, rationale="r")
@@ -43,7 +44,7 @@ def _assemble(event, *, verdict_label="benign"):
 
 
 def _fired_rules(event) -> list[str]:
-    return sorted({h.rule for h in scan_indicators(raw_content(event))})
+    return sorted({h.rule for h in scan_content(event)})
 
 
 def _ids(kind):

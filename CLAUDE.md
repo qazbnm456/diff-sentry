@@ -106,8 +106,11 @@ One companion rule ships under `.claude/rules/`:
   the fork-PR checkout it now blocks. The last one needs no dataflow: the line states the intent. Each
   form carries its own title, because reporting an opt-in as "checks out the PR HEAD" sends a reader
   hunting for a `ref:` that is not there.
-- **A paired rule only pairs WITHIN one file.** `scan_diff` splits a unified diff on its file headers
-  and scans each segment alone; `scan`, the host-side baseline and the in-loop tool all go through it.
+- **A paired rule only pairs WITHIN one file.** `scan_diff` splits a unified diff on its file headers;
+  `scan_content` does the same for an EVENT, whose files `raw_content` would otherwise concatenate into
+  one header-less blob that `scan_diff` cannot scope at all. `scan` and the in-loop tool take the first,
+  the host-side baseline takes the second, and `content_segments` is the single definition both
+  `raw_content` and the baseline are built on, so they cannot drift.
   Scanning the diff as one blob let the two halves come from different files — a `workflow_run:` in one
   workflow and a `ref: ${{ … head.sha }}` in a doc example composed into a `critical` no file contained.
   It also makes a hit id stable between a whole-diff scan and a single-file one, because the segment is

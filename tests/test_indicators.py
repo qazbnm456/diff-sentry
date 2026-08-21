@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from diff_sentry.indicators import mint_id, scan_diff, scan_indicators, split_diff_by_file
+from diff_sentry.indicators import mint_id, scan_content, scan_diff, scan_indicators, split_diff_by_file
 from tests.conftest import MALICIOUS_FILENAME
 
 
@@ -225,6 +225,34 @@ def test_same_file_pairing_still_fires_and_names_the_file():
     hits = [h for h in scan_diff(_SAME_FILE) if h.rule == "pwn-request"]
     assert hits and hits[0].severity == "critical"
     assert hits[0].location == ".github/workflows/pwn.yml"
+
+
+def test_event_content_is_scoped_per_file_too():
+    """An event is not a unified diff. `raw_content` concatenates title, every (filename, patch) and body
+    with no `diff --git` headers, so handing that blob to `scan_diff` would scope NOTHING — the split has
+    to come from the event's own structure.
+
+    The case is not hypothetical: a PR that adds a `workflow_run` workflow AND documents the trap in the
+    same commit is what a careful repo writes, and reading the two as one blob turns it into a critical."""
+    from diff_sentry.normalize import raw_content
+
+    docs = ("+```yaml\n+- uses: actions/checkout@v4\n+  with:\n"
+            "+    ref: ${{ github.event.pull_request.head.sha }}\n+```\n")
+    event = {"repo": "acme/w", "kind": "pull_request", "number": 9, "author": "x",
+             "title": "document the trap", "body": "",
+             "files": [{"filename": ".github/workflows/publish.yml", "status": "modified",
+                        "additions": 2, "deletions": 0,
+                        "patch": "+on:\n+  workflow_run:\n+    workflows: [\"CI\"]\n"},
+                       {"filename": "docs/dangerous.md", "status": "added",
+                        "additions": 5, "deletions": 0, "patch": docs}]}
+
+    assert "pwn-request" in _rules(scan_indicators(raw_content(event)))   # one blob: invented critical
+    assert "pwn-request" not in _rules(scan_content(event))               # scoped: neither file has both
+    assert "privileged-fork-trigger" in _rules(scan_content(event))       # the trigger is still reported
+
+    # and a hit from a file names that file
+    tamper = [h for h in scan_content(event) if h.rule == "workflow-tamper"]
+    assert tamper and tamper[0].location == ".github/workflows/publish.yml"
 
 
 def test_the_chunk_before_the_first_file_header_is_still_scanned():

@@ -22,7 +22,7 @@ from __future__ import annotations
 from .assemble import assemble_verdict, verdict_from_events
 from .config import DetectConfig
 from .emit import EmitResult, emit_signal, signal_payload
-from .indicators import hits_from_events, scan_diff, scan_indicators
+from .indicators import hits_from_events, scan_content, scan_diff, scan_indicators
 from .ingest import event_from_payload, issue_event, pr_event
 from .normalize import event_metadata, normalize_event
 from .response import build_failed_response, build_response
@@ -44,6 +44,7 @@ __all__ = [
     "DetectionResponse",
     "RefusalInfo",
     "ProcessInfo",
+    "scan_content",
     "scan_diff",
     "scan_indicators",
     "hits_from_events",

@@ -500,6 +500,23 @@ def split_diff_by_file(text: str) -> list[tuple[str, str]]:
     return out
 
 
+def scan_content(event: dict) -> list[IndicatorHit]:
+    """Scan ONE event's untrusted content with the same per-file scoping `scan_diff` gives a raw diff.
+
+    An event is not a unified diff — `raw_content` concatenates the title, the author, every
+    (filename, patch) and the body into one string, with no `diff --git` headers for `scan_diff` to
+    split on. Handing that blob to `scan_diff` therefore scopes NOTHING: a paired rule could still take
+    one half from a workflow and the other from an unrelated file. The event already carries the
+    structure a raw diff has to be parsed for, so scan it piece by piece and let hits from a file name
+    that file."""
+    from .normalize import content_segments
+    deduped: dict[str, IndicatorHit] = {}
+    for label, text in content_segments(event):
+        for h in scan_indicators(text, location=label):
+            deduped.setdefault(h.id, h)
+    return list(deduped.values())
+
+
 def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
     """`scan_indicators` with per-file scoping — a paired rule can only fire when ONE file carries both
     halves. Non-diff input (a region the planner pulled out, a plain file) falls through to a single

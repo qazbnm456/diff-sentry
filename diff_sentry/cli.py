@@ -91,10 +91,9 @@ def _baseline_indicators(event: dict) -> list[dict]:
     """The host-side deterministic evidence recorded in run_start meta BEFORE the planner runs: the text
     detectors over the raw content ∪ the provenance detectors over the ingest facts. Both re-source into the
     evidence union on read (MF3), so a false-benign SUBMIT can skew the verdict but never suppress these."""
-    from .indicators import scan_diff, scan_provenance
-    from .normalize import raw_content
+    from .indicators import scan_content, scan_provenance
 
-    return ([h.model_dump() for h in scan_diff(raw_content(event))]
+    return ([h.model_dump() for h in scan_content(event)]
             + [h.model_dump() for h in scan_provenance(event.get("provenance") or {})])
 
 

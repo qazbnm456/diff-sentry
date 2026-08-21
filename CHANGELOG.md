@@ -16,8 +16,16 @@ framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIr
   doc example, a test fixture, or the very workflow a change is *deleting*, composed into a `critical`
   that no single file contained. The new `scan_diff` splits a unified diff on its file headers and
   scans each segment on its own; non-diff input (a region the planner pulled out of the REPL, a plain
-  file) falls through to the previous whole-text scan. Used by `scan`, by the host-side baseline, and
-  by the in-loop `scan_indicators` tool, so all three agree.
+  file) falls through to the previous whole-text scan. Used by `scan` and by the in-loop
+  `scan_indicators` tool.
+- **The host-side baseline is scoped per file too, via `scan_content`.** An event is not a unified diff:
+  `raw_content` concatenates the title, every `(filename, patch)` and the body with no `diff --git`
+  headers, so pointing the baseline at `scan_diff` would have scoped nothing at all. `scan_content`
+  splits on the structure the event already carries — and gives hits from a file that file's name. The
+  case is not hypothetical: a PR that adds a `workflow_run` workflow AND documents the trap in the same
+  commit is what a careful repo writes, and read as one blob it came out `critical`. `content_segments`
+  is now the single definition `raw_content` is built on, so the two cannot drift, and the
+  detection-quality corpus was moved onto the production path so it guards what actually ships.
 
 ### Changed
 - **`astral-sh/setup-uv` bumped to v10.0.1** (from v5.4.2) and **`actions/checkout` to v7**, both for
