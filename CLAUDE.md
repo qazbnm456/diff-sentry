@@ -100,6 +100,12 @@ One companion rule ships under `.claude/rules/`:
   network-fetch + file-write — are `high`. A rule that needs BOTH halves is how a common primitive
   becomes evidence without becoming noise. The corpus pins this hit/miss behavior, and every rule ships
   with its NEGATIVE case. Hit evidence is a BOUNDED snippet (`_MAX_EVIDENCE`), never the whole diff.
+- **`pwn-request` has THREE checkout forms**, and all three need the privileged trigger to count: the
+  expression on a `ref:` (directly or one binding hop away), a hand-rolled `git fetch`/`gh pr checkout`,
+  and `allow-unsafe-pr-checkout: true` — the input actions/checkout v5.1+ added for opting back into
+  the fork-PR checkout it now blocks. The last one needs no dataflow: the line states the intent. Each
+  form carries its own title, because reporting an opt-in as "checks out the PR HEAD" sends a reader
+  hunting for a `ref:` that is not there.
 - **A paired rule only pairs WITHIN one file.** `scan_diff` splits a unified diff on its file headers
   and scans each segment alone; `scan`, the host-side baseline and the in-loop tool all go through it.
   Scanning the diff as one blob let the two halves come from different files — a `workflow_run:` in one

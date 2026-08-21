@@ -554,6 +554,34 @@
       }
     },
     {
+      "name": "pwn_request_unsafe_checkout_optin",
+      "kind": "malicious",
+      "family": "workflow-config-escalation",
+      "key_rule": "pwn-request",
+      "expected_signal": true,
+      "expected_rules": [
+        "pwn-request",
+        "workflow-tamper"
+      ],
+      "event": {
+        "repo": "acme/widgets",
+        "kind": "pull_request",
+        "number": 121,
+        "author": "x",
+        "title": "keep the preview build working after the checkout bump",
+        "body": "",
+        "files": [
+          {
+            "filename": ".github/workflows/preview.yml",
+            "status": "modified",
+            "additions": 2,
+            "deletions": 0,
+            "patch": "+on:\n+  pull_request_target:\n+    types: [opened, synchronize]\n+jobs:\n+  preview:\n+    steps:\n+      - uses: actions/checkout@v7\n+        with:\n+          allow-unsafe-pr-checkout: true\n"
+          }
+        ]
+      }
+    },
+    {
       "name": "diff_viewport_whitespace_shove",
       "kind": "malicious",
       "family": "diff-presentation-evasion",

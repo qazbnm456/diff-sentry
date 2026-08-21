@@ -156,6 +156,17 @@ _HEAD_BINDING_RE = re.compile(
     rf"^[+ ]?\s*([A-Za-z_][A-Za-z0-9_-]*)\s*[:=]\s*[^\n]*(?:{_PR_HEAD_EXPR})",
     re.IGNORECASE | re.MULTILINE)
 _REF_VALUE_RE = re.compile(r"^[+ ]?\s*ref\s*:\s*([^\n]*)", re.IGNORECASE | re.MULTILINE)
+
+# The third way to check out a fork PR head, and the only one that says so in words. actions/checkout
+# v5.1/v6.1/v7 REFUSE to check out a fork PR under `pull_request_target`/`workflow_run` unless the
+# workflow opts back in with `allow-unsafe-pr-checkout: true`. There is no ref to trace and no dataflow
+# to infer — the line is the intent, written out. Under `pull_request` it means nothing (no privileged
+# context to protect), which is why it only counts inside `_scan_workflow_config`'s trigger guard.
+# Literal `true` only: an expression value is a parameterisation question, not evidence, and the
+# `^[+ ]?` anchor keeps a REMOVED opt-in (the hardening you want) from firing.
+_UNSAFE_PR_CHECKOUT_RE = re.compile(
+    r"^[+ ]?\s*allow-unsafe-pr-checkout\s*:\s*[\"']?true[\"']?\s*$",
+    re.IGNORECASE | re.MULTILINE)
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 # Diff-PRESENTATION evasion — attacks aimed at the human reading the diff, not at the runtime. Miasma
@@ -308,18 +319,31 @@ def _scan_workflow_perms(text: str) -> list[IndicatorHit]:
             for m in _WRITE_ALL_RE.finditer(text)]
 
 
-def _pr_head_checkout(text: str) -> re.Match[str] | None:
-    """Where a PR-HEAD expression actually reaches a checkout — directly, or through one binding."""
+_PWN_TITLE = ("privileged fork trigger checks out the PR HEAD — untrusted code with the base "
+              "repo's token/secrets")
+_PWN_OPTIN_TITLE = ("privileged fork trigger re-enables the fork-PR checkout actions/checkout now "
+                    "blocks by default — untrusted code with the base repo's token/secrets")
+
+
+def _pr_head_checkout(text: str) -> tuple[re.Match[str], str] | None:
+    """Where a PR-HEAD checkout actually happens, and which of the three forms it took.
+
+    Returns the match to cite plus the title for it — the opt-in reads differently enough from a ref
+    that reporting it as "checks out the PR HEAD" would send a reader looking for a `ref:` that is not
+    there."""
+    optin = _UNSAFE_PR_CHECKOUT_RE.search(text)
+    if optin:
+        return optin, _PWN_OPTIN_TITLE
     direct = _PR_HEAD_CHECKOUT_RE.search(text)
     if direct:
-        return direct
+        return direct, _PWN_TITLE
     # `ref:` is not a binding — a `ref:` holding the expression IS the direct case above.
     bound = {m.group(1).lower() for m in _HEAD_BINDING_RE.finditer(text)} - {"ref"}
     if not bound:
         return None
     for m in _REF_VALUE_RE.finditer(text):
         if any(name.lower() in bound for name in _IDENT_RE.findall(m.group(1))):
-            return m
+            return m, _PWN_TITLE
     return None
 
 
@@ -330,10 +354,9 @@ def _scan_workflow_config(text: str) -> list[IndicatorHit]:
         return []
     checkout = _pr_head_checkout(text)
     if checkout:
-        return [_hit("pwn-request", "critical",
-                     "privileged fork trigger checks out the PR HEAD — untrusted code with the base "
-                     "repo's token/secrets",
-                     _snip(text, checkout.start(), checkout.end()))]
+        match, title = checkout
+        return [_hit("pwn-request", "critical", title,
+                     _snip(text, match.start(), match.end()))]
     head = _PR_HEAD_REF_RE.search(text)
     if head:
         # Reads the head ref without checking it out. That is the validating-publisher shape, which is

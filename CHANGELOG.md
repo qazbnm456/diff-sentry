@@ -35,6 +35,13 @@ framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIr
   for a detector to be running.
 
 ### Added
+- **`pwn-request` covers `allow-unsafe-pr-checkout: true`.** actions/checkout v5.1/v6.1/v7 refuse to
+  check out a fork PR head under `pull_request_target` / `workflow_run` unless a workflow opts back in
+  with that input. The opt-in is the same attack stated in words — no ref to trace, no dataflow to
+  infer — so it joins the `ref:` value and the hand-rolled `git fetch` as the rule's third form, with
+  its own title so a reader is not sent hunting for a `ref:` that is not there. It only counts under a
+  privileged trigger (beneath `pull_request` the input carries none of that meaning), a removed opt-in
+  does not fire, and neither does an explicit `false`.
 - **Hits name the file they came from.** `location` was the name of the whole diff — `gated.diff` for
   every hit, which meant reading the raw log to find out where a finding actually was. Per-file
   scanning gives each hit its real path.

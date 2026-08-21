@@ -150,6 +150,38 @@ def test_pwn_request_needs_a_checkout_not_a_mention():
     assert "workflow_run.head_sha" in trig[0].evidence
 
 
+_OPTIN = ("on:\n  pull_request_target:\n    types: [opened]\njobs:\n  p:\n    steps:\n"
+          "      - uses: actions/checkout@v7\n        with:\n"
+          "          allow-unsafe-pr-checkout: true\n")
+
+
+def test_pwn_request_catches_the_unsafe_checkout_optin():
+    """actions/checkout v5.1/v6.1/v7 refuse a fork-PR checkout under a privileged trigger unless the
+    workflow opts back in. That opt-in is the same attack stated in words — no ref to trace — so it is
+    the third `pwn-request` form, and it gets its own title: reporting it as "checks out the PR HEAD"
+    would send a reader hunting for a `ref:` that isn't there."""
+    hits = [h for h in scan_indicators(_OPTIN) if h.rule == "pwn-request"]
+    assert hits and hits[0].severity == "critical"
+    assert "re-enables" in hits[0].title
+    assert "allow-unsafe-pr-checkout" in hits[0].evidence
+
+
+def test_the_optin_only_counts_under_a_privileged_trigger():
+    """Under plain `pull_request` there is no privileged context to protect, so the input carries none
+    of the meaning — flagging it there would train people to ignore the rule."""
+    plain = _OPTIN.replace("pull_request_target:", "pull_request:")
+    assert "pwn-request" not in _rules(scan_indicators(plain))
+
+
+def test_removing_the_optin_is_not_an_attack():
+    """A diff that DELETES the opt-in is the hardening you want. Line-anchored on `+`/context so the
+    remediation commit stays green — the same trap `workflow-permission-escalation` avoids."""
+    removal = "on:\n  pull_request_target:\n-          allow-unsafe-pr-checkout: true\n"
+    assert "pwn-request" not in _rules(scan_indicators(removal))
+    # and an explicit `false` is not an opt-in either
+    assert "pwn-request" not in _rules(scan_indicators(_OPTIN.replace("true", "false")))
+
+
 def test_pwn_request_follows_one_binding_hop():
     """`ref:` reading a name bound to the head expression elsewhere in the file is the same attack with
     an extra line. Requiring the expression to sit ON the `ref:` line would make that a free bypass."""

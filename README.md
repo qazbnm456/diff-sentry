@@ -32,7 +32,7 @@ That is the whole setup. The job fails when an indicator at or above `high` fire
 
 | Family | Examples |
 |---|---|
-| Workflow configuration | `pull_request_target` that checks out the PR head (the pwn-request that broke AsyncAPI), `permissions: write-all`, CODEOWNERS reassignment |
+| Workflow configuration | `pull_request_target` that checks out the PR head (the pwn-request that broke AsyncAPI) — by `ref:`, by a hand-rolled `git fetch`, or by opting back in with `allow-unsafe-pr-checkout: true` — plus `permissions: write-all` and CODEOWNERS reassignment |
 | Obfuscation | base64 that decodes to a shell payload, `_0x…` machine-mangled JavaScript, high-entropy blobs |
 | Execution | pipe-to-shell installs, `${IFS}` space-evasion, detached child processes, inline `node -e`, fetch-to-disk droppers |
 | Exfiltration | secrets reaching a network sink, cross-process `/proc/<pid>/mem` reads, OAST callback services, IPFS and permaweb gateways |
