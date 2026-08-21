@@ -10,6 +10,12 @@ framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIr
 A correctness release for one rule: `pwn-request` was failing the very pattern this
 project's README tells people to use.
 
+### Changed
+- **`pypa/gh-action-pypi-publish` bumped to v1.14.2** (from v1.14.0). `uv build` now emits core
+  metadata 2.5, and the twine bundled in v1.14.0 rejects it — `InvalidDistribution: '2.5' is not a
+  valid metadata version` — so the first attempt at this release built cleanly and then failed at
+  the upload step. v1.14.2 carries Twine 7, which accepts metadata 2.5.
+
 ### Fixed
 - **`pwn-request` no longer fires on a workflow that merely READS the PR head.** The rule paired a
   privileged trigger with a PR-HEAD *mention* anywhere in the text and called that a checkout, so the
