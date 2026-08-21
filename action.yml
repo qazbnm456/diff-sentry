@@ -44,7 +44,7 @@ inputs:
     # KEEP IN STEP WITH [project].version. release.yml fails the build if this drifts
     # from the tag being released, because a stale default here would silently run an
     # old scanner under a new action tag.
-    default: '0.4.0'
+    default: '0.4.1'
 
 outputs:
   failed:

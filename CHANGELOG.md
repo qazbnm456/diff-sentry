@@ -5,7 +5,10 @@ malicious intent — the diff held as **untrusted data** in a sandboxed REPL, a 
 and deterministic indicator evidence unioned on read into a SIEM signal — as a traced, improvable RLM
 framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIre-style detector).
 
-## Unreleased
+## 0.4.1
+
+A correctness release for one rule: `pwn-request` was failing the very pattern this
+project's README tells people to use.
 
 ### Fixed
 - **`pwn-request` no longer fires on a workflow that merely READS the PR head.** The rule paired a
