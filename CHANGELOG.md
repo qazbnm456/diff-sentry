@@ -5,6 +5,54 @@ malicious intent — the diff held as **untrusted data** in a sandboxed REPL, a 
 and deterministic indicator evidence unioned on read into a SIEM signal — as a traced, improvable RLM
 framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIre-style detector).
 
+## 0.4.3
+
+Dependencies. `rlm-harness` moves from `1.0.0` to `1.10.1` — ten minor releases of the kit — and `dspy`
+from `3.2.1` to `3.3.1` with it. Nothing in the `diff_sentry` package changed: every kit name this
+project imports was checked against 1.10.1 by name, both offline suites, the studio suite and the node
+tests pass on the new pin, and a live classification ran clean. The one real risk, a doubled
+`sub_call`, was tested for before the bump and is not there (below).
+
+### Changed
+- **`rlm-harness==1.10.1`, `dspy` 3.3.1.** The pin stays exact. dspy 3.3 drops `asyncer`, `typeguard`,
+  `numpy` and `xxhash` from its exact pins, so a fresh install resolves fewer packages, not more.
+- **The trace carries more of the run; nothing here reads it differently.** `run_start` records the kit
+  version that wrote it (`rlm_harness`); `run_end` gains `budgets` (the generation cap actually APPLIED
+  per role, plus the iteration caps and whether dspy accepted them — `dropped: true` means all three
+  reverted to dspy's defaults, so exclude those runs before any claim about iteration exhaustion),
+  `usage` (completion tokens per ATTEMPT, not per turn — a distribution over runs wants the per-run
+  `max`, never the sum) and `error_chain` (the causes below a failed run's outer exception). Every tool
+  call and `sub_call` carries a measured `duration_s`. `run_labels`, `run_metrics`, the rubric facts
+  and the SIEM signal derivation are untouched; the new fields ride along for a future reader.
+- **A non-retryable LM error fails fast, as itself.** An auth / billing / configuration /
+  unsupported-model error from dspy escapes the kit after ONE attempt as the original `dspy.LMError`
+  subclass instead of burning the retry budget and arriving wrapped in `RLMTaskError`. `cli.run` already
+  turns every exception into a `status=failed` response, so the never-raises contract holds; the
+  response now names the dspy class, which tells "fix the credential" apart from "the model kept
+  producing invalid output". `RLMTaskError` still means the latter, or a retryable endpoint fault
+  (timeout / 5xx / transport) that outlasted the single attempt.
+- **The studio's "took" label on a tool call reads the kit's own timing.** The kit now measures each
+  call; the console used to estimate a tool's duration as the gap since the previous live event, which
+  charged the whole preceding planner turn to a sub-millisecond scan. It prefers the recorded
+  `duration_s` and falls back to the gap for a trace that predates it.
+
+### Fixed (upstream, reaching this project)
+- **An analyst escalation is recorded once.** Since kit 1.7.0 a plain `sub_lm` is wrapped for tracing
+  automatically. This project already wraps the analyst with `intercept_sub_lm`, whose wrapper declares
+  `records_sub_call = True`; the kit honours that opt-out and leaves it alone, so a `sub_call` lands in
+  the trace — and in the exported datasets — exactly once. Verified at runtime and on a live run.
+- **`intercept_sub_lm` handles dspy's typed `LMResponse`.** Under dspy 3.3 a sub-LM can return an
+  `LMResponse` rather than a list of strings, and the 1.0.0 wrapper mishandled it. The analyst intercept
+  is that wrapper.
+- **A lone surrogate in a payload no longer loses the event.** The change under review is
+  attacker-authored text; a payload carrying an unpaired surrogate used to fail the recorder's JSON dump
+  and drop the event. It is written now.
+
+### Docs
+- **`CLAUDE.md` names all five version sites** and which of them `release.yml` gates (the README's
+  `uses:` example is the one it does not), and its `RLMTaskError` guidance matches the fail-fast
+  behaviour above.
+
 ## 0.4.2
 
 Scoping. Every fix here comes from the same root: the scan read a whole change as one

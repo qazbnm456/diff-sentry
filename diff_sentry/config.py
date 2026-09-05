@@ -72,7 +72,8 @@ class DetectConfig:
     # Generous, NOT None: a reasoning planner truncated before its answer returns empty content.
     planner_max_tokens: int | None = 16384
     # HARD ceiling on the single RLM episode. No outer multi-run loop (max_retries=1) — one change =
-    # one trajectory, so the trace stays valid training data. RLMTaskError is INFRA, not a schema bug.
+    # one trajectory, so the trace stays valid training data. A failed run is INFRA, not a schema bug:
+    # a non-retryable LM error escapes as the raw dspy.LMError (kit >= 1.2.1), the rest as RLMTaskError.
     max_iterations: int = 25
     max_llm_calls: int = 8          # caps ONLY analyst (llm_query) escalations
     max_output_chars: int = 10_000  # head+tail char cap dspy.RLM applies to each REPL output

@@ -72,3 +72,15 @@ def test_per_turn_timing_off_when_main_steps_cluster():
     d = build_iterations(trace)
     assert d["per_turn_timing"] is False
     assert "duration_s" not in d["iterations"][0]
+
+
+def test_tool_duration_prefers_the_kits_measured_time_over_the_gap():
+    # rlm-harness >= 1.8.3 times every call: a 0.3 ms scan must not be shown as the 2 s planner turn
+    # before it (the gap since the previous live event). An older trace without the field keeps the gap.
+    base = [{"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {}}}]
+    timed = base + [{"type": "tool_call", "step_id": 1, "ts": 3.0, "payload": {
+        "tool": "scan_indicators", "args": {"region": "r"}, "hits": [], "duration_s": 0.000258}}]
+    legacy = base + [{"type": "tool_call", "step_id": 1, "ts": 3.0, "payload": {
+        "tool": "scan_indicators", "args": {"region": "r"}, "hits": []}}]
+    assert build_iterations(timed)["timeline"][0]["duration_s"] == 0.000258
+    assert build_iterations(legacy)["timeline"][0]["duration_s"] == 2.0

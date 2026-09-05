@@ -57,11 +57,19 @@ def _gap(ts: float | None, prev: float | None) -> float | None:
     return round(ts - prev, 3) if (ts is not None and prev is not None) else None
 
 
+def _took(p: dict, gap: float | None) -> float | None:
+    """How long a tool / analyst call took. rlm-harness >= 1.8.3 measures every call and writes
+    `payload.duration_s`; prefer that. The gap since the previous live event is only a FALLBACK for a
+    trace that predates it — it charges the whole preceding planner turn to a sub-millisecond scan."""
+    d = p.get("duration_s")
+    return round(float(d), 6) if isinstance(d, (int, float)) and not isinstance(d, bool) else gap
+
+
 def _tool_entry(p: dict, gap: float | None) -> dict:
     """One tool_call → a UI-ready entry: a label, the input it was given, the output it returned."""
     tool = p.get("tool")
     args = p.get("args") or {}
-    e: dict = {"kind": "tool", "tool": tool, "ok": p.get("ok"), "duration_s": gap}
+    e: dict = {"kind": "tool", "tool": tool, "ok": p.get("ok"), "duration_s": _took(p, gap)}
     if tool == "scan_indicators":
         hits = p.get("hits") or []
         e.update(label="scan", target=_preview(args.get("region")), n=p.get("n") or len(hits),
@@ -92,7 +100,7 @@ def _tool_entry(p: dict, gap: float | None) -> dict:
 def _sub_entry(p: dict, gap: float | None) -> dict:
     """One sub_call (an analyst escalation) → the distilled question + the answer it returned."""
     return {"kind": "analyst", "label": "analyst", "model": p.get("name") or p.get("model"),
-            "duration_s": gap, "input": _preview(p.get("input")),
+            "duration_s": _took(p, gap), "input": _preview(p.get("input")),
             "output": _preview(p.get("processed") or p.get("raw")), "error": p.get("error")}
 
 
@@ -141,7 +149,8 @@ def build_iterations(events: list[dict]) -> dict:
       finalize, so their ts cluster at one instant; we detect that, set `per_turn_timing=False`, and skip
       per-turn durations rather than fake them.
     - `timeline` — the `tool_call`/`sub_call` events, ALWAYS recorded LIVE with real `ts`. Each entry
-      carries `rel_s` (since run start) and `duration_s` (the gap since the previous live event). The
+      carries `rel_s` (since run start) and `duration_s` (the kit's measured call time, else the gap
+      since the previous live event). The
       accurate "where did the time go" signal either way, and the headline for debugging a slow run.
     """
     evs = sorted(events, key=_step_key)

@@ -124,8 +124,12 @@ One companion rule ships under `.claude/rules/`:
   `DS_CLASSIFIER_LM` classifier, defaulting to the analyst). Refer to them by role in code, docs, and
   the prompt. No hardcoded model name.
 - **The budget is HARD — `max_retries=1`, no whole-RLM retry** (set in `detect.setup`). One change =
-  one trajectory, so the trace stays valid training data. An `RLMTaskError` is almost always infra (a
-  planner-endpoint hiccup / an adapter parse failure), NOT a schema bug — check the endpoint first.
+  one trajectory, so the trace stays valid training data. A failed run is INFRA before it is a schema
+  bug — check the endpoint first. Since rlm-harness 1.2.1 the failure names itself: a non-retryable
+  LM error (auth / billing / configuration / unsupported model) escapes after ONE attempt as the raw
+  `dspy.LMError` subclass, while an `RLMTaskError` means the single attempt ended in an adapter parse
+  failure, an invalid result, or a retryable endpoint fault (timeout / 5xx / transport). `cli.run`
+  catches BOTH into a `status=failed` response.
 - **A second model-judgement is a TOOL, never the sub-LM.** `deep_classify` is the swappable
   second-stage SEAM, built on rlm-harness's `make_model_tool` (chat → transient-retry → validate →
   circuit-break) — the planner CHOOSES to consult it, so the decision is a `tool_call` in the
@@ -214,4 +218,9 @@ One companion rule ships under `.claude/rules/`:
 
 ## Versioning
 
-- Keep `pyproject.toml` `[project].version` and `diff_sentry.__version__` in sync.
+- A release moves FIVE version sites together: `pyproject.toml` `[project].version`,
+  `diff_sentry.__version__`, `action.yml`'s `version` input default, the README quickstart's
+  `uses: qazbnm456/diff-sentry@vX.Y.Z`, and `uv.lock` (via `uv lock`) — plus a `CHANGELOG.md` entry.
+  `release.yml` gates the first three against the tag and the built wheel; the README `uses:` line is
+  gated by nothing, so a stale one sends new adopters to the previous release. Publishing the GitHub
+  Release (tag `vX.Y.Z`) is what builds, verifies, and uploads to PyPI, and what Marketplace lists.

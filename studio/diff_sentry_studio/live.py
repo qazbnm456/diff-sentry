@@ -123,7 +123,9 @@ def _describe_exc(exc: BaseException) -> str:
     """One line describing a run failure, INCLUDING its underlying cause. `RLMTaskError` reports the
     opaque "Failed to produce a valid 'result' after N attempts"; the real reason (a planner-endpoint
     error, an adapter parse failure) is on `__cause__`. Surfacing it stops an infra hiccup from reading
-    like a content/schema problem (diff-sentry's own CLAUDE.md: an RLMTaskError is almost always infra)."""
+    like a content/schema problem (diff-sentry's own CLAUDE.md: a failed run is infra before it is a
+    schema bug). A non-retryable LM error (rlm-harness >= 1.2.1) arrives unwrapped as the raw
+    `dspy.LMError` subclass, so its own class name already says "fix the credential"."""
     out = f"{type(exc).__name__}: {exc}"
     cause = exc.__cause__ or exc.__context__
     if cause is not None and cause is not exc:
