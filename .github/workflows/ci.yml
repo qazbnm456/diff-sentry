@@ -124,6 +124,12 @@ jobs:
           # The fixture lives under tests/ (a report-only path) rather than inline here. This file is in
           # the GATED half, so a payload written into it fails our own scan -- which is exactly what
           # happened to the first version of this job. Payload samples belong where payloads are allowed.
+          # FIRST prove the install. `scan` exits 1 when it flags, and uvx ALSO exits 1 when it cannot
+          # resolve `diff-sentry==${ver}` -- so the negative check below cannot tell "flagged" from "never
+          # installed". This job passed GREEN on the 0.4.3 release commit while PyPI had no 0.4.3 yet.
+          got=$(uvx "diff-sentry==${ver}" --version)
+          echo "installed: $got"
+          case "$got" in *" ${ver}") ;; *) echo "::error::expected version ${ver}, got '$got'"; exit 1;; esac
           # Must exit non-zero: a package that installs but scans nothing would otherwise pass silently.
           if uvx "diff-sentry==${ver}" scan tests/fixtures/known-malicious.diff; then
             echo "::error::the published package did not flag a known-malicious diff"
