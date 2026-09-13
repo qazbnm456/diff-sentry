@@ -4,8 +4,8 @@ A **BewAIre-style malicious-change detector** built on `rlm-harness` — a downs
 scaffold. It classifies ONE GitHub change (PR/issue/push)
 for malicious intent: the diff is UNTRUSTED DATA held in a sandboxed REPL, the planner SUBMITs a
 judgement-only verdict, and the deterministic indicator EVIDENCE is unioned on read into a SIEM signal.
-rlm-harness is consumed as an **exact PyPI pin** (`rlm-harness==1.10.1`, resolved from the index and
-recorded in `uv.lock`); overlay `uv pip install -e ../rlm-harness` only when co-developing the kit
+rlm-harness is consumed as an **exact PyPI pin** (`rlm-harness==X.Y.Z` in `pyproject.toml`, resolved from
+the index and recorded in `uv.lock`); overlay `uv pip install -e ../rlm-harness` only when co-developing the kit
 locally, and bump the pin once the change ships. See
 `README.md` for the pipeline table + the honest caveats (prompt-injection residual, deep-tier scale),
 and rlm-harness's **"Building a consumer"** for the extension contract this project lives within.

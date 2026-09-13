@@ -9,7 +9,7 @@ authors = [{ name = "Boik Su" }]
 keywords = ["rlm", "dspy", "security", "malicious-code-detection", "supply-chain-security", "prompt-injection", "siem"]
 dependencies = [
     # Pinned exactly (the kit's public surface has been SemVer-frozen since 1.0.0); bump deliberately.
-    "rlm-harness==1.10.1",
+    "rlm-harness==1.11.2",
     "pydantic>=2.0",
     "httpx>=0.27",      # the GitHub-allowlisted enrichment fetcher + the host-side SIEM emitter
 ]
