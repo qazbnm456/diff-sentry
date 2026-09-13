@@ -2,6 +2,7 @@
 Exercises the live endpoint's worker-thread → async-queue → SSE glue and the replay endpoints' file
 handling, plus the path-traversal, no-cache, and cited-unknown-augmentation guards."""
 
+import itertools
 import json
 
 import pytest
@@ -140,6 +141,26 @@ def test_replay_orders_causally_by_ts_with_step_id_tiebreak(tmp_path, monkeypatc
     assert body.index("first-turn") < body.index("event: detection.scan")         # think → act, not act → think
     assert body.index('"n": 0') < body.index('"n": 1')                              # same ts → step_id order
     assert body.index("detection.result.done") < body.index("detection.run.completed")  # ts-less tail stays last
+    assert body.count("event: detection.run.completed") == 1
+
+
+def test_replay_order_is_permutation_invariant_with_nan_or_inf_stamps_and_run_end_last(tmp_path, monkeypatch):
+    # `json.loads` is non-strict (admits NaN/Infinity), `isinstance(nan, float)` is True, and every NaN
+    # comparison is False — so before the `isfinite` guard the replay order depended on INPUT ORDER (22
+    # distinct orders over these 120 permutations; 54 put an event after run_end). A NaN/±inf stamp must
+    # join the ts-less tail (step_id order), the result stay deterministic, and `run_end` stay terminal.
+    ev = [{"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {"planner": "P"}}},
+          {"type": "tool_call", "step_id": 1, "ts": float("nan"), "payload": {"tool": "scan_indicators", "hits": [], "n": 0}},
+          {"type": "main_step", "step_id": 2, "ts": 2.0, "payload": {"turn": 0, "reasoning": "r", "code": "c"}},
+          {"type": "result", "step_id": 3, "ts": float("inf"), "payload": {"output": {}}},
+          {"type": "run_end", "step_id": 4, "ts": 5.0, "payload": {}}]
+    orders = {tuple(e["step_id"] for e in appmod._replay_order(list(p))) for p in itertools.permutations(ev)}
+    assert orders == {(0, 2, 1, 3, 4)}       # finite stamps first, NaN/inf tail by step_id, run_end pinned last
+    _write_trace(tmp_path, ev)               # json.dumps writes the NaN/Infinity literals the loader admits
+    monkeypatch.setattr(appmod, "ARTIFACTS", tmp_path)
+    with client.stream("GET", "/v1/runs/r/events") as resp:
+        body = "".join(resp.iter_text())
+    assert body.index("detection.result.done") < body.index("detection.run.completed")
     assert body.count("event: detection.run.completed") == 1
 
 

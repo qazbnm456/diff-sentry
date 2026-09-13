@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import threading
@@ -127,10 +128,22 @@ def _causal_key(event: dict) -> tuple:
     a turn precedes the tool calls its own code then made; the same interleave rlm-harness >= 1.11.2's
     `export_actions` produces. `step_id` stays as the tiebreak so same-`ts` events (a trace with no live
     stamps at all falls back to flush time) keep a deterministic order instead of input order. A `ts`
-    that is absent or not a number sorts last and never raises."""
+    that is absent, not a number, NaN or ±inf sorts last and never raises. NaN needs the explicit
+    `isfinite`: `json.loads` is non-strict and admits `NaN`, `isinstance(nan, float)` is True, and every
+    NaN comparison is False — which does not raise, it makes the sort depend on INPUT ORDER (22 distinct
+    orders over the 120 permutations of a 5-event fixture with one NaN stamp)."""
     ts = event.get("ts")
-    ok = isinstance(ts, (int, float)) and not isinstance(ts, bool)
+    ok = isinstance(ts, (int, float)) and not isinstance(ts, bool) and math.isfinite(ts)
     return (0 if ok else 1, ts if ok else 0.0, _step_key(event))
+
+
+def _replay_order(events: list[dict]) -> list[dict]:
+    """Causal order, with `run_end` pinned LAST structurally. The causal key already sends a bad stamp to the
+    tail, but a corrupted stamp on a mid-run event would still land it after a sanely-stamped `run_end`;
+    the terminal event's position must not depend on every other stamp being sane. Both sorts are stable."""
+    ordered = sorted(events, key=_causal_key)
+    ordered.sort(key=lambda e: e.get("type") == "run_end")
+    return ordered
 
 
 def _load_events(path: Path) -> list[dict]:
@@ -235,8 +248,8 @@ async def stream_run(run_id: str, delay: float = 0.0) -> StreamingResponse:
         raise HTTPException(404, f"no trace for run {run_id!r}")
     # Sort CAUSALLY (`ts`, then step_id). By step_id alone a replay streamed the whole action timeline
     # first and the reasoning turns last, because `main_step`s flush post-hoc with trailing step_ids;
-    # their `ts` is the live parse stamp, so ordering by it restores think→act. See `_causal_key`.
-    events = sorted(_load_events(p), key=_causal_key)
+    # their `ts` is the live parse stamp, so ordering by it restores think→act. See `_replay_order`.
+    events = _replay_order(_load_events(p))
 
     async def gen():
         saw_completed = False
