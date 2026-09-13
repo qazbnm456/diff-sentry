@@ -71,7 +71,7 @@ def to_event(trace_event: dict) -> dict[str, Any] | None:
             },
         })
     if t == "main_step":
-        # Surfaced for the REPLAY (step-sorted) stream. The LIVE endpoint's sink drops main_step (it
+        # Surfaced for the REPLAY (causally sorted: ts, then step_id) stream. The LIVE sink drops main_step (it
         # flushes post-hoc, so it would arrive as a trailing burst — see live.trace_event_sink).
         return _ev("detection.plan.step", {
             "turn": p.get("turn"),

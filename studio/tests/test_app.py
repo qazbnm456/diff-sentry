@@ -122,6 +122,27 @@ def test_replay_streams_mapped_events(tmp_path, monkeypatch):
     assert body.index("detection.result.done") < body.index("detection.run.completed")  # terminal is LAST
 
 
+def test_replay_orders_causally_by_ts_with_step_id_tiebreak(tmp_path, monkeypatch):
+    # rlm-harness flushes `main_step`s AFTER the run, so by step_id every turn trails every tool call and a
+    # replay used to stream the whole action timeline before the first reasoning turn. A turn's `ts` is its
+    # live parse stamp, so by `ts` it precedes the scan its own code made. `step_id` breaks a `ts` tie
+    # (deterministic, not input order); an event with no `ts` sorts last and never raises.
+    _write_trace(tmp_path, [
+        {"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {"planner": "P"}}},
+        {"type": "tool_call", "step_id": 1, "ts": 3.0, "payload": {"tool": "scan_indicators", "hits": [], "n": 0}},
+        {"type": "tool_call", "step_id": 2, "ts": 3.0, "payload": {"tool": "scan_indicators", "hits": [], "n": 1}},
+        {"type": "main_step", "step_id": 3, "ts": 2.0, "payload": {"turn": 0, "reasoning": "first-turn", "code": "c"}},
+        {"type": "result", "step_id": 4, "payload": {"output": {}}},          # no ts → sorts last (before run_end)
+        {"type": "run_end", "step_id": 5, "payload": {}}])                    # no ts → step_id tiebreak keeps it terminal
+    monkeypatch.setattr(appmod, "ARTIFACTS", tmp_path)
+    with client.stream("GET", "/v1/runs/r/events") as resp:
+        body = "".join(resp.iter_text())
+    assert body.index("first-turn") < body.index("event: detection.scan")         # think → act, not act → think
+    assert body.index('"n": 0') < body.index('"n": 1')                              # same ts → step_id order
+    assert body.index("detection.result.done") < body.index("detection.run.completed")  # ts-less tail stays last
+    assert body.count("event: detection.run.completed") == 1
+
+
 def test_replay_of_truncated_trace_still_ends_with_completed(tmp_path, monkeypatch):
     # a hard-killed run (SIGKILL) leaves a trace with NO run_end; replay must still emit the terminal
     # `completed` so the client stops "Classifying…" and GETs the stored response instead of hanging.

@@ -118,6 +118,21 @@ def _step_key(event: dict) -> int:
     return int(s) if s.lstrip("-").isdigit() else 1 << 30
 
 
+def _causal_key(event: dict) -> tuple:
+    """Replay order = CAUSAL order: `ts` first, `step_id` as the tiebreak, a missing/malformed `ts` last.
+
+    `step_id` is WRITE order, and it lies about `main_step`: rlm-harness flushes the whole trajectory after
+    the run, so every turn's step_id trails every live tool_call/sub_call of the run. `ts` does not lie —
+    a turn is stamped when its reasoning was PARSED (the flush only backfills that live stamp), so by `ts`
+    a turn precedes the tool calls its own code then made; the same interleave rlm-harness >= 1.11.2's
+    `export_actions` produces. `step_id` stays as the tiebreak so same-`ts` events (a trace with no live
+    stamps at all falls back to flush time) keep a deterministic order instead of input order. A `ts`
+    that is absent or not a number sorts last and never raises."""
+    ts = event.get("ts")
+    ok = isinstance(ts, (int, float)) and not isinstance(ts, bool)
+    return (0 if ok else 1, ts if ok else 0.0, _step_key(event))
+
+
 def _load_events(path: Path) -> list[dict]:
     events: list[dict] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -218,10 +233,10 @@ async def stream_run(run_id: str, delay: float = 0.0) -> StreamingResponse:
     p = _trace_path(run_id)
     if not p.exists():
         raise HTTPException(404, f"no trace for run {run_id!r}")
-    # Sort by step_id (matches diff-sentry's read order). Ordering caveat: tool_calls are written live but
-    # `main_step`s flush post-hoc with trailing step_ids, so a REPLAY streams the action timeline first,
-    # then the reasoning turns — the stored trace does not preserve true think→act interleaving.
-    events = sorted(_load_events(p), key=_step_key)
+    # Sort CAUSALLY (`ts`, then step_id). By step_id alone a replay streamed the whole action timeline
+    # first and the reasoning turns last, because `main_step`s flush post-hoc with trailing step_ids;
+    # their `ts` is the live parse stamp, so ordering by it restores think→act. See `_causal_key`.
+    events = sorted(_load_events(p), key=_causal_key)
 
     async def gen():
         saw_completed = False
