@@ -3,7 +3,12 @@
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change
 (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
-## Unreleased
+## 0.5.0
+
+Upgrade from 0.4.3: dspy 3.4.0 removed the interface rlm-harness 1.10.1 hands its sandbox through, so a
+fresh 0.4.3 install resolves dspy 3.4.0 and every `pr` / `issue` / `classify` run fails with a
+`TypeError`. The Action's deterministic `scan` is unaffected. 0.5.0 pins `rlm-harness==1.14.0`, which
+caps dspy below 3.5.
 
 ### Changed
 - **`rlm-harness==1.14.0`, which requires `dspy>=3.4.0,<3.5.0` and `pydantic>=2.11.0`** (from 1.10.1,
