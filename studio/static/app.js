@@ -218,11 +218,12 @@
     // Show the run's OWN step count unclamped — clamping to CONFIG.max_iterations (today's env) would
     // falsify a replayed run recorded under a different cap. Cap-hit is authoritative from `process`.
     const steps = p.steps != null ? String(p.steps) : "—";
+    const analyst = RunCore.analystStat(p);
     const stats = [
       ["steps", steps, p.hit_iteration_cap ? "warn" : ""],
       ["scans", p.scan_calls != null ? p.scan_calls : "—", ""],
       ["deep-classify", p.deep_classify_calls != null ? p.deep_classify_calls : "—", p.deep_classify_circuit_breaks ? "warn" : ""],
-      ["analyst", p.analyst_calls != null ? p.analyst_calls : "—", p.analyst_calls ? "analyst" : ""],
+      ["analyst", analyst.value, analyst.cls],
     ].map(([l, v, c]) => `<div class="stat ${c}"><div class="sv">${esc(v)}</div><div class="sl">${l}</div></div>`).join("");
 
     const techs = (r.techniques || []).map((t) => `<span class="tchip">${esc(t)}</span>`).join("");
@@ -237,7 +238,8 @@
     // Telemetry first — the run's signature sits top-right, the family convention across the consoles.
     metaEl.innerHTML =
       module("Run telemetry", `<div class="headline">${esc(formatElapsed(p.elapsed_s) || "—")}</div><div class="stat-grid">${stats}</div>` +
-        (p.hit_iteration_cap ? `<span class="flag-chip">hit iteration cap</span>` : "")) +
+        (p.hit_iteration_cap ? `<span class="flag-chip">hit iteration cap</span>` : "") +
+        (analyst.refused ? `<span class="flag-chip">${analyst.refused} analyst escalation${analyst.refused > 1 ? "s" : ""} refused</span>` : "")) +
       module("Verdict detail", (r.rationale ? `<div class="prose">${esc(r.rationale)}</div>` : "") +
         (techs ? `<div class="chips">${techs}</div>` : "") + (suspects ? `<div class="ind-group-label">suspect files</div><div class="chips">${suspects}</div>` : "") +
         (fabs ? `<div class="ind-group-label">fabricated citations</div><div class="chips">${fabs}</div>` : "")) +

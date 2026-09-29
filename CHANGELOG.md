@@ -18,6 +18,10 @@ All notable changes to diff-sentry, a BewAIre-style detector that classifies one
   agents read natively. Area-specific invariants moved to path-scoped `.claude/rules/`, and the release
   procedure to `.claude/skills/release`.
 
+### Added
+- **The studio's run telemetry flags refused analyst escalations**: the analyst tile turns amber and an
+  "N analyst escalations refused" chip appears; a trace too old to record refusals shows neither.
+
 ### Fixed
 - **The studio feed shows a refused analyst escalation as "Ask analyst failed"** with the provider's
   error, instead of rendering it like one that answered.

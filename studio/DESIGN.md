@@ -147,9 +147,11 @@ views by triage:
 **Right modules** (`.module`: thin top accent, uppercase label head, `--surface-1` body), in order:
 1. `RUN TELEMETRY`, top-right as the run's signature (the convention across the sibling consoles), from
    `process`: an `elapsed_s` headline, then a grid of steps (the run's OWN count, unclamped), scans,
-   deep-classify (amber if a circuit broke), and analyst (violet if >0). Fetch is off by default, so it
-   has no fixed tile; a fetch shows in the Trajectory drawer. `hit_iteration_cap` shows as an amber flag
-   chip, read from `process` and never inferred from a step-vs-cap comparison.
+   deep-classify (amber if a circuit broke), and analyst (escalations that got a response; violet if >0,
+   amber if any were refused). Fetch is off by default, so it has no fixed tile; a fetch shows in the
+   Trajectory drawer. `hit_iteration_cap` shows as an amber flag chip, read from `process` and never
+   inferred from a step-vs-cap comparison; `analyst_failures > 0` adds an "N analyst escalations
+   refused" chip, and a null count (a trace whose kit could not record refusals) adds none.
 2. `VERDICT DETAIL`: `rationale` (sans), `techniques[]` chips, `suspect_files[]`, and each
    `cited_unknown_ids` entry as a red fabrication chip.
 3. `SIEM SIGNAL`: whether a signal fired, plus the would-send payload, which mirrors

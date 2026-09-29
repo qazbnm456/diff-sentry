@@ -60,5 +60,23 @@ test("a transient fetch failure is its own honest terminal state — never claim
   assert.equal(RC.planChangeView(null, { error: true }).kind, "error");
 });
 
+// ---- analystStat: refused escalations are flagged; an unrecorded failure count is unknown, not zero ----
+test("answered escalations only → violet tile, no refused chip", () => {
+  assert.deepStrictEqual(RC.analystStat({ analyst_calls: 2, analyst_failures: 0 }),
+    { value: "2", cls: "analyst", refused: 0 });
+});
+test("a refused escalation → amber tile + refused count, even with zero answered", () => {
+  assert.deepStrictEqual(RC.analystStat({ analyst_calls: 0, analyst_failures: 1 }),
+    { value: "0", cls: "warn", refused: 1 });
+});
+test("failures unrecorded (older kit: null / absent) → no chip, the tile reads as before", () => {
+  assert.deepStrictEqual(RC.analystStat({ analyst_calls: 1, analyst_failures: null }),
+    { value: "1", cls: "analyst", refused: 0 });
+  assert.deepStrictEqual(RC.analystStat({ analyst_calls: 0 }), { value: "0", cls: "", refused: 0 });
+});
+test("no process block → a dash, never a fake zero", () => {
+  assert.deepStrictEqual(RC.analystStat({}), { value: "—", cls: "", refused: 0 });
+});
+
 console.log(failed ? "\n" + failed + " test(s) FAILED" : "\nall passing");
 process.exit(failed ? 1 : 0);

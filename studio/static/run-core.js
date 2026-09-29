@@ -47,5 +47,15 @@
     return { kind: "gone" };
   }
 
-  return { planTerminal: planTerminal, planChangeView: planChangeView };
+  // The Run-telemetry analyst tile → { value, cls, refused }. `analyst_calls` counts escalations that got
+  // a response; `analyst_failures` counts provider-refused ones and is null on a trace whose kit could
+  // not record them, which must read as unknown (no chip), never as zero failures.
+  function analystStat(p) {
+    const calls = p && p.analyst_calls != null ? p.analyst_calls : null;
+    const refused = p && typeof p.analyst_failures === "number" ? p.analyst_failures : 0;
+    const cls = refused > 0 ? "warn" : (calls ? "analyst" : "");
+    return { value: calls != null ? String(calls) : "—", cls: cls, refused: refused };
+  }
+
+  return { planTerminal: planTerminal, planChangeView: planChangeView, analystStat: analystStat };
 });
