@@ -6,9 +6,10 @@ All notable changes to diff-sentry, a BewAIre-style detector that classifies one
 ## Unreleased
 
 ### Changed
-- **`rlm-harness==1.11.2`**: each exported action's `state` lists its prior actions in causal order
-  (interleaved by time) instead of write order; labels, metrics, rubric facts and the SIEM signal are
-  unchanged.
+- **`rlm-harness==1.14.0`, which requires `dspy>=3.4.0,<3.5.0` and `pydantic>=2.11.0`** (from 1.10.1,
+  dspy 3.3.1). diff-sentry's own `pydantic` floor rises to match.
+- **Each exported action's `state` lists its prior actions in causal order** (interleaved by time)
+  instead of write order; labels, rubric facts and the SIEM signal are unchanged.
 - **The agent guide is `AGENTS.md` (formerly `CLAUDE.md`)**, which Claude Code 2.1.277+ and other coding
   agents read natively. Area-specific invariants moved to path-scoped `.claude/rules/`, and the release
   procedure to `.claude/skills/release`.

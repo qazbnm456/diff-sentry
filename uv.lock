@@ -537,8 +537,8 @@ requires-dist = [
     { name = "langfuse", marker = "extra == 'observe'", specifier = ">=4.6.1" },
     { name = "openai", marker = "extra == 'classify'", specifier = ">=1.0" },
     { name = "openinference-instrumentation-dspy", marker = "extra == 'observe'", specifier = ">=0.1.36" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "rlm-harness", specifier = "==1.11.2" },
+    { name = "pydantic", specifier = ">=2.11.0" },
+    { name = "rlm-harness", specifier = "==1.14.0" },
 ]
 provides-extras = ["classify", "observe", "subscription"]
 
@@ -625,7 +625,7 @@ wheels = [
 
 [[package]]
 name = "dspy"
-version = "3.3.1"
+version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -643,9 +643,9 @@ dependencies = [
     { name = "tenacity" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/47/36/cafd7ee235481f299426243d9c3608b9fa2e64227940cce50f94feea9570/dspy-3.3.1.tar.gz", hash = "sha256:ca53a428ac6a30984a894cf3847cf623b7dd7e8aadf8a63620b1f1f6155e4eaf", size = 361491, upload-time = "2026-08-21T23:06:13.993Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d2/1b/5b1964b0f1299aaca2b98300d73d972046ab70edb53c47674d6ace3c1bf1/dspy-3.4.0.tar.gz", hash = "sha256:4dea089c6bd1f8d314e1095e7f64b4b4ff64bb8a09549efee026c0a609f08c16", size = 887770, upload-time = "2026-09-25T04:04:25.439Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/cc/d769426ff2cfb816bdedbcedf364c1812b6831887d34be8d188ca2727dc8/dspy-3.3.1-py3-none-any.whl", hash = "sha256:250049f565f52c014609ce2d3ca0de17a6c9449ac961492d61a009aa30dceabf", size = 421179, upload-time = "2026-08-21T23:06:12.591Z" },
+    { url = "https://files.pythonhosted.org/packages/17/96/31628d4231b5dd7edbe9eaf5c975d1055f4b79b337062a1f957dca6dd931/dspy-3.4.0-py3-none-any.whl", hash = "sha256:36de329ecdaf18e31977e26c61b587caa470a34f574f2fe6cb7f4c82bcbf97cc", size = 987510, upload-time = "2026-09-25T04:04:23.915Z" },
 ]
 
 [[package]]
@@ -2176,15 +2176,15 @@ wheels = [
 
 [[package]]
 name = "rlm-harness"
-version = "1.11.2"
+version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dspy" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/51/fd/9024a738922bd1d10acd52c4801c8e393162fbabf6c0cb6318bed39661a3/rlm_harness-1.11.2.tar.gz", hash = "sha256:149c00ee7286982ad74714af118639862f2267387967b417e5583b92ca699450", size = 726079, upload-time = "2026-09-11T14:38:28.354Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/dc/6b9a65d454c84fdbf60ac8874a3a98f687441156ed00f683610b41428c17/rlm_harness-1.14.0.tar.gz", hash = "sha256:3d66fe0ffaed510e861eabc74e11a65add67cc5177af01680557661040f85426", size = 764295, upload-time = "2026-09-25T20:04:18.313Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bc/0d/08a0e8cd77d66c2becfc35b262fc9a394a10b601c5c8147df887cabcab31/rlm_harness-1.11.2-py3-none-any.whl", hash = "sha256:d2f036e945d70817d93adbd0cdaa256cb7e06a90ac858f9f5be2d40443a180a3", size = 291178, upload-time = "2026-09-11T14:38:26.763Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/4b/4956802714e973123ed9dfda31855e9508b668c1f0cf6c14053a92776382/rlm_harness-1.14.0-py3-none-any.whl", hash = "sha256:5fa7207f5032dd91f80c843221d74f4ac551660102ced66c2b44f5cdc6cc1d4a", size = 305671, upload-time = "2026-09-25T20:04:16.651Z" },
 ]
 
 [[package]]
