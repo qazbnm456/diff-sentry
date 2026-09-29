@@ -10,9 +10,10 @@ locally, and bump the pin once the change ships. See
 `README.md` for the pipeline table + the honest caveats (prompt-injection residual, deep-tier scale),
 and rlm-harness's **"Building a consumer"** for the extension contract this project lives within.
 
-One companion rule ships under `.claude/rules/`:
+One companion rule ships under `.claude/rules/` (Claude Code loads it automatically; other agents read it
+by path):
 
-- `@.claude/rules/handoff.md` — what must survive context compaction. Read it before auto-compacting.
+- `.claude/rules/handoff.md` — what must survive context compaction. Read it before auto-compacting.
 
 ## Verify
 

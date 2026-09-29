@@ -3,18 +3,18 @@
 diff-sentry routes durable knowledge into its tracked docs — keep using them, and when the conversation
 is about to compact, preserve only what they do NOT already hold:
 
-- **Stable invariants** → the **Hard invariants** section of `CLAUDE.md`.
+- **Stable invariants** → the **Hard invariants** section of `AGENTS.md`.
 - **Resolved decisions / shipped changes** → the commit message (grow a `CHANGELOG.md` at the first
   version bump, like the siblings).
 - **Open / proposed work** → the issue tracker, or the `README.md` **Status** section.
 
 So a handoff summary should carry the *in-flight session state* those files miss. Prioritize, in order:
 
-1. **Decisions we agreed on this session** not yet in CLAUDE.md / a commit — design choices and the
+1. **Decisions we agreed on this session** not yet in AGENTS.md / a commit — design choices and the
    *reason* (e.g. "judgement-only SUBMIT + union-on-read so a benign self-report can't suppress
    evidence", "the fetch allowlist is GitHub-only because the input is attacker-authored", "workflow
    edits are `medium` so a benign workflow PR doesn't force a signal"). Promote durable ones into
-   CLAUDE.md (invariant) before they fade.
+   AGENTS.md (invariant) before they fade.
 2. **Files / symbols changed**, as `path:symbol` one-liners on the *final* shape — e.g.
    `assemble.py:assemble_verdict — signal = verdict∈emit_on OR severity≥floor`,
    `indicators.py:make_indicator_tool — registers as scan_indicators (dspy __name__)`.
@@ -31,7 +31,7 @@ So a handoff summary should carry the *in-flight session state* those files miss
 
 **Do NOT preserve** (reconstructable / already durable):
 
-- Anything already in `CLAUDE.md`, `README.md`, `.env.example`, or `pyproject.toml`.
+- Anything already in `AGENTS.md`, `README.md`, `.env.example`, or `pyproject.toml`.
 - Tool-call transcripts, `grep` output, file listings, full file contents readable from disk.
 - Step-by-step exploration narration; speculative reasoning that led to no decision.
 
@@ -44,7 +44,7 @@ So a handoff summary should carry the *in-flight session state* those files miss
 - Seams: <classify backend | pre-filter/live wiring | rlm-harness dep — one line each if touched>
 
 ## Decisions
-- <decision> — <why>   (→ promote to CLAUDE.md invariant / the commit message)
+- <decision> — <why>   (→ promote to AGENTS.md invariant / the commit message)
 
 ## Changed
 - <path:symbol> — <what & why>
