@@ -103,7 +103,7 @@ def trace_facts(events: list[dict]) -> dict:
 _CATEGORY_LENS = {
     "TF": ("verdict", "signal", "hit_iteration_cap"),
     "TA": ("scan_calls", "deep_classify_calls", "deep_classify_circuit_breaks", "analyst_calls",
-           "fetches", "skill_reads"),
+           "analyst_failures", "fetches", "skill_reads"),
     "TG": ("indicator_count", "max_indicator_severity", "signal", "cited_unknown"),
     "PA": ("verdict", "cited_unknown"),
 }

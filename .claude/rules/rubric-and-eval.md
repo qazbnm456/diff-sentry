@@ -19,8 +19,8 @@ paths:
 - The facts are a re-lens over `run_labels` / `run_metrics`, not a second derivation: `rubric.trace_facts`
   reuses them, so a criterion's `observed` cannot drift from what a trainer reads. `_CATEGORY_LENS` maps
   TF↔(verdict / signal / hit_iteration_cap), TA↔(scan / deep_classify / analyst / fetch / skill counts +
-  circuit-breaks), TG↔(indicator_count / max_indicator_severity / signal / cited_unknown),
-  PA↔(verdict / cited_unknown).
+  circuit-breaks + analyst failures), TG↔(indicator_count / max_indicator_severity / signal /
+  cited_unknown), PA↔(verdict / cited_unknown).
 - `CriterionFact` has no score/met field; the trainer scores. Never add a reward/score/met field to any
   rubric type.
 - `rubric.py` is a dspy-free leaf: it imports only `.schema` at top, and its `rl_export` reuse is a

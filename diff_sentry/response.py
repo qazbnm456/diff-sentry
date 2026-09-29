@@ -11,6 +11,7 @@ from rlm_harness.trace import EVENT_RUN_START
 
 from .indicators import hits_from_events
 from .normalize import has_groundable_content
+from .rl_export import analyst_counts
 from .rubric import criteria_facts, default_rubric, rubric_from_meta
 from .schema import (
     INCONCLUSIVE_VERDICT,
@@ -52,6 +53,7 @@ def _process(events: list[dict]) -> ProcessInfo:
 
     steps = sum(1 for e in events if e["type"] == "main_step")
     cap = _meta(events).get("max_iterations")
+    answered, failed = analyst_counts(events)
     return ProcessInfo(
         steps=steps,
         scan_calls=_tool("scan_indicators"),
@@ -61,7 +63,8 @@ def _process(events: list[dict]) -> ProcessInfo:
         deep_classify_circuit_breaks=sum(
             1 for e in events if e["type"] == "tool_call"
             and e["payload"].get("tool") == "deep_classify" and e["payload"].get("circuit_broken")),
-        analyst_calls=sum(1 for e in events if e["type"] == "sub_call"),
+        analyst_calls=answered,
+        analyst_failures=failed,
         fetches=_tool("fetch_url"),
         elapsed_s=_elapsed_s(events),
         hit_iteration_cap=bool(isinstance(cap, int) and cap > 0 and steps >= cap),

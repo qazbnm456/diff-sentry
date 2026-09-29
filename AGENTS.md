@@ -79,8 +79,10 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
   plumbing.
 - **This is a ROLLOUT source: trajectories, not reward.** `rl_export` passes `reward=None`; labels read
   the assembled verdict and metrics are objective effort counters. `deep_classify` tool_calls train the
-  classifier; every other action is the planner's. The ATLAS rubric and the eval member stay reward-free
-  too; see `.claude/rules/rubric-and-eval.md`.
+  classifier; every other action is the planner's. A metric keeps ONE meaning across rlm-harness
+  versions (the corpus mixes them; `run_start.payload.rlm_harness` names the writer): a quantity a newer
+  kit makes observable gets a NEW key that is None where the trace cannot say (e.g. `analyst_failures`).
+  The ATLAS rubric and the eval member stay reward-free too; see `.claude/rules/rubric-and-eval.md`.
 - **Attack knowledge lives in `diff_sentry/skills/`, not the prompt.** The skill catalog is injected
   (`load_skills_as_tools(discovery="inject")`) and `read_skill(name)` pulls a body on demand. Fix a wrong
   convention by editing or adding a skill; `detect.INSTRUCTIONS` holds only identity, the MISSION frame,

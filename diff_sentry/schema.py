@@ -167,7 +167,8 @@ class ProcessInfo(BaseModel):
     scan_calls: int = 0
     deep_classify_calls: int = 0
     deep_classify_circuit_breaks: int = 0
-    analyst_calls: int = 0
+    analyst_calls: int = 0                  # escalations that got a response
+    analyst_failures: int | None = None     # provider-refused; None when the trace cannot say
     fetches: int = 0
     elapsed_s: float | None = None
     hit_iteration_cap: bool = False

@@ -10,6 +10,10 @@ All notable changes to diff-sentry, a BewAIre-style detector that classifies one
   dspy 3.3.1). diff-sentry's own `pydantic` floor rises to match.
 - **Each exported action's `state` lists its prior actions in causal order** (interleaved by time)
   instead of write order; labels, rubric facts and the SIEM signal are unchanged.
+- **A failed analyst escalation is recorded**: the trace gains a `sub_call` carrying the provider's
+  error and `cause: "endpoint"`. The new `analyst_failures` metric counts them (None for a trace
+  written before rlm-harness 1.13.0, which could not record them), and `analyst_calls` keeps counting
+  only escalations that got a response, so it means the same on traces from either side of the upgrade.
 - **The agent guide is `AGENTS.md` (formerly `CLAUDE.md`)**, which Claude Code 2.1.277+ and other coding
   agents read natively. Area-specific invariants moved to path-scoped `.claude/rules/`, and the release
   procedure to `.claude/skills/release`.

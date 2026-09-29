@@ -29,7 +29,7 @@ from .schema import CATEGORIES, EvalReport, EvalRow
 from .taskset import EvalTask
 
 _METRIC_KEYS = ("steps", "scan_calls", "deep_classify_calls", "deep_classify_circuit_breaks",
-                "analyst_calls", "fetches", "skill_reads", "hit_iteration_cap")
+                "analyst_calls", "analyst_failures", "fetches", "skill_reads", "hit_iteration_cap")
 
 
 def _run_id(events: list[dict]) -> str:
@@ -106,13 +106,15 @@ def _execution_summary(events: list[dict]) -> str:
     """The deterministic narrative the judge reads — the derived verdict/signal/evidence + the effort
     counters, all re-sourced from run_labels ∪ run_metrics, never the planner's self-report."""
     f = _trace_facts(events)
+    refused = f.get("analyst_failures")
     return "\n".join([
         f"assembled verdict: {f.get('verdict')} · derived SIEM signal: {f.get('signal')}",
         (f"deterministic indicators: {f.get('indicator_count', 0)} (max severity "
          f"{f.get('max_indicator_severity', 'info')}); cited-but-unrecorded: {f.get('cited_unknown', 0)}"),
         (f"tools: {f.get('scan_calls', 0)} scan(s), {f.get('deep_classify_calls', 0)} deep-classify "
          f"({f.get('deep_classify_circuit_breaks', 0)} circuit-broken), {f.get('analyst_calls', 0)} "
-         f"analyst escalation(s), {f.get('fetches', 0)} fetch(es), {f.get('skill_reads', 0)} skill read(s)"),
+         f"analyst escalation(s){f' ({refused} refused by the provider)' if refused else ''}, "
+         f"{f.get('fetches', 0)} fetch(es), {f.get('skill_reads', 0)} skill read(s)"),
     ])
 
 

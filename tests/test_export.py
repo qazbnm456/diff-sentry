@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from diff_sentry.rl_export import export_dataset, load_runs
+from diff_sentry.rl_export import analyst_counts, export_dataset, load_runs
 
 
 def test_export_is_reward_free_and_reads_assembled_labels(make_trace, tmp_path):
@@ -65,9 +65,28 @@ def test_run_metrics_carries_effort_fields(make_trace):
     runs = load_runs(make_trace(run_id="pr-11"))
     metrics = export_dataset(runs)["metrics"]["pr-11"]
     for key in ("steps", "scan_calls", "deep_classify_calls", "deep_classify_circuit_breaks",
-                "analyst_calls", "fetches", "skill_reads", "elapsed_s", "hit_iteration_cap"):
+                "analyst_calls", "analyst_failures", "fetches", "skill_reads", "elapsed_s",
+                "hit_iteration_cap"):
         assert key in metrics, key
     assert metrics["hit_iteration_cap"] is False
     assert metrics["deep_classify_circuit_breaks"] == 0
     assert metrics["scan_calls"] >= 1
     assert metrics["skill_reads"] >= 1
+
+
+def _escalations(kit: str | None) -> list[dict]:
+    start = {"type": "run_start", "payload": {"meta": {}, **({"rlm_harness": kit} if kit else {})}}
+    return [start,
+            {"type": "sub_call", "payload": {"input": "q1", "processed": "a1", "cause": "ok"}},
+            {"type": "sub_call", "payload": {"input": "q2", "error": "APIConnectionError", "cause": "endpoint"}}]
+
+
+def test_analyst_counts_keep_one_meaning_across_kit_versions():
+    """`analyst_calls` counts escalations that got a response on every kit version; failures are counted
+    only where the writing kit records them (1.13.0+), and are None (unknown) before that."""
+    assert analyst_counts(_escalations("1.14.0")) == (1, 1)
+    old = _escalations("1.11.2")[:2]
+    assert analyst_counts(old) == (1, None)
+    # Compared numerically: as a string "1.9.0" > "1.13.0", which would report a structural 0.
+    assert analyst_counts(_escalations("1.9.0")[:2]) == (1, None)
+    assert analyst_counts(_escalations(None)[:2]) == (1, None)

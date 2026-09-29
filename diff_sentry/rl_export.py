@@ -29,6 +29,36 @@ def _meta(events: list[dict]) -> dict:
     return {}
 
 
+# rlm-harness records a provider-refused escalation (a `sub_call` with `cause="endpoint"`) from 1.13.0 on;
+# an older kit wrote nothing for it, so its traces cannot say how many escalations failed.
+_FAILED_ESCALATIONS_SINCE = (1, 13, 0)
+
+
+def _kit_version(events: list[dict]) -> tuple[int, ...] | None:
+    """The rlm-harness version that wrote the trace (`run_start.payload.rlm_harness`), or None."""
+    for e in events:
+        if e.get("type") == "run_start":
+            raw = e.get("payload", {}).get("rlm_harness")
+            try:
+                return tuple(int(x) for x in str(raw).split(".")[:3]) if raw else None
+            except ValueError:
+                return None
+    return None
+
+
+def analyst_counts(events: list[dict]) -> tuple[int, int | None]:
+    """(answered, failed) analyst escalations.
+
+    `answered` counts escalations that got a response, the meaning `analyst_calls` has on every kit
+    version, so a corpus spanning the 1.13.0 boundary stays comparable. `failed` counts provider-refused
+    ones and is None when the writing kit predates their recording (unknown, never a fake 0)."""
+    subs = [e for e in events if e["type"] == "sub_call"]
+    failed = sum(1 for e in subs if e["payload"].get("cause") == "endpoint")
+    version = _kit_version(events)
+    recorded = version is not None and version >= _FAILED_ESCALATIONS_SINCE
+    return len(subs) - failed, (failed if recorded else None)
+
+
 def _resolve_max_iterations(events: list[dict]) -> int:
     m = _meta(events).get("max_iterations")
     return m if isinstance(m, int) and m > 0 else _DEFAULT_MAX_ITERATIONS
@@ -79,12 +109,14 @@ def run_metrics(events: list[dict]) -> dict:
     dc = _tool(CLASSIFIER_TOOL)
     steps = sum(1 for e in events if e["type"] == "main_step")
     ts = [e["ts"] for e in events if isinstance(e.get("ts"), (int, float))]
+    answered, failed = analyst_counts(events)
     return {
         "steps": steps,
         "scan_calls": len(_tool("scan_indicators")),
         "deep_classify_calls": sum(1 for g in dc if not g["payload"].get("circuit_broken")),
         "deep_classify_circuit_breaks": sum(1 for g in dc if g["payload"].get("circuit_broken")),
-        "analyst_calls": sum(1 for e in events if e["type"] == "sub_call"),
+        "analyst_calls": answered,
+        "analyst_failures": failed,
         "fetches": len(_tool("fetch_url")),
         "skill_reads": len(_tool("read_skill")),
         "elapsed_s": round(max(ts) - min(ts), 3) if len(ts) >= 2 else None,
