@@ -43,7 +43,7 @@
   }
 
   // where play should START from the current selection: the selection itself if walkable; a TOOL → its
-  // turn (so play still advances the whole run); else Init. (This is the start-from-tool fix at source.)
+  // turn (so play still advances the whole run); else Init.
   function resolveStart(sel, timeline) {
     if (sel && sel.kind !== "tool") return { kind: sel.kind, index: sel.index };
     if (sel && sel.kind === "tool") {

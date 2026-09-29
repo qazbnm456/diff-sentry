@@ -34,11 +34,10 @@ jobs:
       - name: Build sdist + wheel
         run: uv build
 
-      # Verify the ARTIFACT, not the checkout — a wheel can build cleanly and still be unusable. This
-      # project shipped for months with no `[project.scripts]` entry point at all, so `uvx diff-sentry`
-      # (the exact command the GitHub Action runs) could not have worked; nothing in the source tree
-      # would have told you. Installing the built wheel into a clean environment and running it is what
-      # catches that.
+      # Verify the ARTIFACT, not the checkout — a wheel can build cleanly and still be unusable. Without
+      # a `[project.scripts]` entry point, for example, `uvx diff-sentry` (the exact command the GitHub
+      # Action runs) cannot work, and nothing in the source tree says so. Installing the built wheel into
+      # a clean environment and running it is what catches that.
       #
       # It also settles the version question against the thing being uploaded rather than against a
       # regex over the source. Three identities have to agree: the git tag people pin, the version

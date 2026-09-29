@@ -31,7 +31,7 @@ def test_metadata_is_derived_and_stable():
 
 def test_raw_content_covers_title_patches_and_body():
     raw = raw_content({**MALICIOUS_EVENT, "title": "SENTINEL-TITLE"})
-    assert "SENTINEL-TITLE" in raw                         # title is scanned (finding 1)
+    assert "SENTINEL-TITLE" in raw                         # title is scanned
     assert "CODEOWNERS" in raw or "@hackerbot-claw" in raw
 
 

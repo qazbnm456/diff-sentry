@@ -81,8 +81,8 @@ def test_pr_event_404_author_becomes_a_fact_transient_does_not():
 
 
 def test_pr_event_aborts_when_the_primary_fetch_fails():
-    # dropping `check=True` must NOT silently turn a missing PR into an empty event — the primary fetch
-    # still raises and aborts pr_event (the host-side run() then records a status=failed response).
+    # a missing PR must NOT become an empty event: the primary fetch raises and aborts pr_event (the
+    # host-side run() then records a status=failed response). Only enrichment calls are best-effort.
     def api(path):
         raise GhApiError("not found", status=404)
     try:

@@ -35,8 +35,8 @@
 
 * { box-sizing:border-box; }
 /* `hidden` must always win: a class's `display:*` (author origin) otherwise beats the UA's
-   `[hidden]{display:none}` and the attribute silently no-ops — the mode panes and the trajectory
-   handle were all visible while hidden. The JS already sequences unhide → rAF → animate around this. */
+   `[hidden]{display:none}` and the attribute silently no-ops. The JS sequences unhide → rAF → animate
+   around this. */
 [hidden] { display:none !important; }
 html, body { margin:0; height:100%; }
 body {
@@ -326,7 +326,7 @@ button { font-family:var(--mono); cursor:pointer; }
   background:var(--surface-1); border:1px solid var(--border); border-radius:var(--radius); padding:1px 5px; max-width:100%; overflow-wrap:anywhere; }
 .rub-fact .rk { color:var(--text-faint); } .rub-fact .rv { color:var(--text); font-weight:600; }
 
-/* ── trajectory drawer (ported; family colors adapted) ──────────────────── */
+/* ── trajectory drawer ──────────────────────────────────────────────────── */
 .traj-handle {
   /* bottom-right: the family convention across the sibling consoles */
   position:fixed; right:24px; bottom:20px; z-index:30; display:flex; gap:8px;

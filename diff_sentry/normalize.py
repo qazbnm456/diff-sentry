@@ -1,6 +1,6 @@
 """Normalize a GitHub change event into the RLM's untrusted `event: str` input.
 
-MF1 (from the design validation): dspy.RLM surfaces a ~1000-char PREVIEW (head + tail) of every input
+MF1: dspy.RLM surfaces a ~1000-char PREVIEW (head + tail) of every input
 variable into the planner's prompt, and anything the model prints re-enters context. So we cannot claim
 untrusted text "never reaches the prompt". What we CAN do is control the preview WINDOW: this normalizer
 sandwiches the attacker-controlled body/patches BETWEEN a derived-metadata header and an identical
@@ -164,10 +164,9 @@ def content_segments(event: dict) -> list[tuple[str, str]]:
     the title+author, then one segment per file, then the body.
 
     `raw_content` is the concatenation of exactly these, in this order, so the two cannot drift and the
-    content digest built on it stays byte-stable. The split exists because the baseline scan needs the
-    same per-file scoping `scan_diff` gives a raw diff: read as one blob, a rule that needs two signals
-    could take one from a workflow and the other from an unrelated file. A file's segment keeps its
-    filename INSIDE the text as well as in the label — `workflow-tamper` reads the path itself."""
+    content digest built on it stays byte-stable. The baseline scan (`indicators.scan_content`) reads
+    them one by one so a paired rule only pairs within one file. A file's segment keeps its filename
+    INSIDE the text as well as in the label, because `workflow-tamper` reads the path itself."""
     files = _files(event)
     segments = [("", f"{event.get('title', '') or ''}\n{event.get('author', '') or ''}")]
     segments += [(f["filename"], f"{f['filename']}\n{f['patch']}") for f in files]

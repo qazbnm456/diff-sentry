@@ -12,7 +12,8 @@ indicators. (This is deterministic reduction over facts, NOT a model judgement s
 path — the verdict tier stays the planner's; only the evidence-driven floor is ours.)
 
 This runs everywhere the result is consumed — the live path (cli), re-render, and rl_export — so labels
-read facts too. Old traces heal: pydantic ignores legacy keys; hits re-source from the trace.
+read facts too. A trace missing a newer field still reads: pydantic ignores unknown keys, and hits
+re-source from the trace.
 
 Pure stdlib + pydantic; no dspy.
 """
@@ -35,7 +36,7 @@ _DEFAULT_EMIT_ON = ("suspicious", "malicious")
 
 def _emit_on_from_meta(events: list[dict]) -> tuple[str, ...]:
     """The `emit_on` the run actually used, recorded in run_start meta (so an OFFLINE re-render/export
-    re-derives the SAME `signal` the live run emitted). Falls back to the default for an old trace."""
+    re-derives the SAME `signal` the live run emitted). Falls back to the default when meta has none."""
     for e in events:
         if e.get("type") == EVENT_RUN_START:
             eo = ((e.get("payload") or {}).get("meta") or {}).get("emit_on")
@@ -76,7 +77,7 @@ def verdict_from_events(events: list[dict], *, emit_on: tuple[str, ...] | None =
                         ) -> AssembledVerdict | None:
     """Reconstruct the assembled verdict from a saved trace's result event, or None if the run produced
     no result (never finalized). `emit_on` defaults to the value recorded in the run's meta, so an
-    offline re-render/export re-derives the SAME `signal` the live run emitted (finding 5)."""
+    offline re-render/export re-derives the SAME `signal` the live run emitted."""
     results = [e for e in events if e["type"] == EVENT_RESULT]
     if not results:
         return None

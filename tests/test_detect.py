@@ -48,8 +48,7 @@ def test_tools_wired(configure_dummy):
 
 def test_prompt_tool_names_match_registered_tools(configure_dummy):
     """Every consumer tool the prompt tells the planner to call must be REGISTERED under that exact name.
-    A mismatch is a NameError in the sandbox that only the live forward path would otherwise surface
-    (regresses the scan_indicators/scan_indicators_tool drift)."""
+    A mismatch is a NameError in the sandbox that only the live forward path would otherwise surface."""
     task = ClassifyChange(config=_cfg())
     names = {getattr(t, "__name__", getattr(t, "name", "")) for t in task.tools}
     for name in ("scan_indicators", "deep_classify", "read_skill"):

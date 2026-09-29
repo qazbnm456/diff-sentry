@@ -3,8 +3,8 @@
 Uses rlm-harness's `rlm_harness.testing` seam: a scripted DummyLM drives the planner, a `ScriptedInterpreter`
 runs each turn's step (dispatching the REAL injected tools, so their tracing runs) and SUBMITs. This is
 the layer the unit tests can't reach — it exercises `planner → scan_indicators → (deep_classify) →
-verdict → assemble → response → emit` on a trace the real loop produced. It also regresses the
-scan_indicators tool-name bug end-to-end (a wrong registered name would KeyError in the `call(...)` step).
+verdict → assemble → response → emit` on a trace the real loop produced. It also pins the
+`scan_indicators` registered name end-to-end (a wrong name would KeyError in the `call(...)` step).
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def _run_scripted(tmp_path, event, steps, planner_turns, *, chat_fn=None, run_id
 
 def test_malicious_change_full_flow_offline(tmp_path):
     """The whole chain through the real loop: the planner scans, SUBMITs malicious, the assembled signal
-    fires, and the host-side emitter POSTs — proving the wiring end-to-end (and the tool-name fix)."""
+    fires, and the host-side emitter POSTs — the wiring holds end-to-end."""
     region = raw_content(MALICIOUS_EVENT)
     verdict, events = _run_scripted(
         tmp_path, MALICIOUS_EVENT,
@@ -80,8 +80,8 @@ def test_malicious_change_full_flow_offline(tmp_path):
 
 
 def test_scan_indicators_tool_is_callable_in_the_loop(tmp_path):
-    """Direct regression for the scan_indicators/scan_indicators_tool drift: the step calls the tool by
-    the name the prompt uses; a mismatched registered name would KeyError here."""
+    """The step calls the tool by the name the prompt uses; a mismatched registered name would KeyError
+    here."""
     _verdict, events = _run_scripted(
         tmp_path, MALICIOUS_EVENT,
         steps=[call("scan_indicators", region=raw_content(MALICIOUS_EVENT)),

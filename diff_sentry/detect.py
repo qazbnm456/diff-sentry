@@ -129,10 +129,10 @@ def setup(config: DetectConfig) -> DetectConfig:
 
     A role whose model is `claude-agent-sdk/<id>` runs on the user's Claude Pro/Max SUBSCRIPTION
     (rlm-harness's `ClaudeAgentLM`, injected through configure's public seam); every other role is built from
-    the DS_* proxy, byte-identical to before. Mixed auth is by design — the classifier (a separate tool)
+    the DS_* proxy. Mixed auth is by design — the classifier (a separate tool)
     always stays on its own OpenAI-compatible endpoint, never routed through the subscription.
     """
-    # None → configure builds a dspy.LM from the proxy config (the pre-existing behavior).
+    # None → configure builds a dspy.LM from the proxy config.
     main_lm = _maybe_subscription_lm(config.main_model)
     sub_lm = _maybe_subscription_lm(config.sub_model)
     rlm_harness.configure(

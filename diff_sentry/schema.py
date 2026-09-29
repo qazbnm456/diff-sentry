@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-# reward-free rubric TYPES — now rlm-harness's shared, taxonomy-agnostic primitives, re-exported here so
-# diff-sentry's own `from .schema import Criterion, ...` call sites are unchanged.
-from rlm_harness.rubric import Criterion, CriterionFact, RubricCriteria  # noqa: F401 (re-export, back-compat)
+# reward-free rubric TYPES — rlm-harness's shared, taxonomy-agnostic primitives, re-exported so
+# `from .schema import Criterion, ...` resolves here.
+from rlm_harness.rubric import Criterion, CriterionFact, RubricCriteria  # noqa: F401 (re-export)
 
 # ─── ATLAS rubric (a rollout LABEL surface, never a reward) ────────────────────────────────────
 # The four ATLAS criterion categories: Task Fulfillment, Tool Appropriateness, Tool Grounding,
@@ -154,7 +154,7 @@ class AssembledVerdict(BaseModel):
 class RefusalInfo(BaseModel):
     """Populated INSTEAD of a verdict when the run could not classify — an INFORMATIVE failure."""
 
-    reason: str = Field(..., description="Machine-readable category, e.g. run_failed / cancelled / inconclusive.")
+    reason: str = Field(..., description="Machine-readable category: run_failed / inconclusive / insufficient_evidence.")
     detail: str
     indicators: list[IndicatorHit] = Field(
         default_factory=list, description="Deterministic hits still gathered even though no verdict landed.")
@@ -204,8 +204,9 @@ class DetectionResponse(BaseModel):
     """The API-shaped result of one run — an OpenAI-Responses-flavored envelope over the assembled
     verdict. A read-time presentation; carries NO new judgement.
 
-    `status`: `classified` (a verdict landed) · `inconclusive` (ran but produced no usable verdict →
-    `refusal` populated) · `failed` (the run did not finalize)."""
+    `status`: `classified` (a verdict landed) · `inconclusive` (finalized without a usable verdict, with the
+    sanctioned `inconclusive` verdict, or over an ungroundable change → `refusal` populated) · `failed`
+    (the run did not finalize)."""
 
     model_config = {"protected_namespaces": ()}
 

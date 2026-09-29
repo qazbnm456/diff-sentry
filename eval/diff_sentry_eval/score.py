@@ -9,16 +9,11 @@ never a private internal:
   the system emits, not the planner's raw self-report);
 - `diff_sentry.run_labels` (verdict / signal / indicator_count / max_indicator_severity / cited_unknown) ∪
   `diff_sentry.run_metrics` (scan / deep_classify / analyst / fetch counts, cap) for the execution summary
-  + the deterministic cross-check facts. (That union is exactly what `diff_sentry.rubric.trace_facts`
-  computes internally; we re-merge the two PUBLIC halves here rather than reach for the private one.)
+  + the deterministic cross-check facts.
 
 NO new trace field is read or written. The planner-visible CHANGE for the judge comes from the run's
 `run_start` meta (the exact normalized untrusted content), falling back to the EvalTask's change payload.
-
-Reward-free throughout: `score_run` produces a row of independent category scores next to deterministic
-facts; `aggregate` computes per-category MEANS (TF primary) — never a weighted composite, never a
-pass/fail. A run that never finalized OR produced no usable verdict becomes an `unscored` row, not a crash
-and not a fake 0.
+`aggregate` computes per-category MEANS (TF primary), never a weighted composite or a pass/fail.
 """
 
 from __future__ import annotations
@@ -53,8 +48,8 @@ def _trace_facts(events: list[dict]) -> dict:
 
 
 def _assembled(events: list[dict]) -> AssembledVerdict | None:
-    """The assembled verdict, or None if the run never finalized. `verdict_from_events` RETURNS None on a
-    trace with no result event; the caller turns None into an `unscored` row."""
+    """The assembled verdict, or None if the run never finalized (no result event, or a result whose
+    output is not an object). The caller turns None into an `unscored` row."""
     return verdict_from_events(events)
 
 
@@ -126,8 +121,9 @@ def build_judge_inputs(events: list[dict], eval_task: EvalTask,
     """Reconstruct the ATLAS judge's inputs from the trace, or None for a run with no usable verdict.
 
     `assembled` may be passed when the caller already built it (`score_run` does); otherwise it is
-    re-derived here. A finalized run with an EMPTY verdict (inconclusive) is treated the same as no result:
-    there is no classification to judge → None. The `change` is the run's normalized content, falling back
+    re-derived here. A finalized run with an EMPTY verdict label is treated the same as no result: there
+    is no classification to judge → None. (The sanctioned `inconclusive` label is a classification and is
+    judged like any other.) The `change` is the run's normalized content, falling back
     to the task's change payload."""
     assembled = assembled if assembled is not None else _assembled(events)
     if assembled is None or not (assembled.verdict or "").strip():
@@ -147,8 +143,8 @@ def score_run(events: list[dict], eval_task: EvalTask,
               judge: Callable[[dict], JudgeVerdict]) -> EvalRow:
     """One run → one EvalRow: judge inputs from the trace, the judge's verdict, plus the deterministic
     facts (metrics + verdict/signal/severity/cited_unknown) surfaced side by side as a cross-check. Never
-    raises on a bad run: never-finalized → `unscored`; finalized-but-no-usable-verdict → `unscored`;
-    judge-failed → `unscored` — each with the reason, never a fake 0."""
+    raises on a bad run: never-finalized, finalized with an empty verdict label, and judge-failed each
+    become an `unscored` row with the reason, never a fake 0."""
     run_id = _run_id(events) or eval_task.id
     assembled = _assembled(events)
     if assembled is None:
@@ -163,7 +159,7 @@ def score_run(events: list[dict], eval_task: EvalTask,
     if not verdict.strip():
         return EvalRow(task_id=eval_task.id, run_id=run_id, metrics=metrics, verdict="", signal=signal,
                        max_indicator_severity=top, cited_unknown=cited_unknown, unscored=True,
-                       unscored_reason="run finalized without a usable verdict (inconclusive)")
+                       unscored_reason="run finalized without a usable verdict")
     result = judge(build_judge_inputs(events, eval_task, assembled))
     if not result.ok or result.score is None:
         return EvalRow(task_id=eval_task.id, run_id=run_id, metrics=metrics, verdict=verdict, signal=signal,

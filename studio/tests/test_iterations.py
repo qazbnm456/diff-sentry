@@ -65,7 +65,7 @@ def test_unrecognized_tool_surfaces_its_scalar_fields():
 
 
 def test_per_turn_timing_off_when_main_steps_cluster():
-    # older-style trace: main_steps flushed at finalize (ts cluster) → no per-turn timing, no fake durations
+    # main_steps flushed at finalize (ts cluster) → no per-turn timing, no fake durations
     trace = [{"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {}}},
              {"type": "main_step", "step_id": 1, "ts": 9.0, "payload": {"turn": 0, "reasoning": "a"}},
              {"type": "main_step", "step_id": 2, "ts": 9.0, "payload": {"turn": 1, "reasoning": "b"}}]
@@ -75,8 +75,8 @@ def test_per_turn_timing_off_when_main_steps_cluster():
 
 
 def test_tool_duration_prefers_the_kits_measured_time_over_the_gap():
-    # rlm-harness >= 1.8.3 times every call: a 0.3 ms scan must not be shown as the 2 s planner turn
-    # before it (the gap since the previous live event). An older trace without the field keeps the gap.
+    # rlm-harness times every call (`duration_s`): a 0.3 ms scan must not be shown as the 2 s planner turn
+    # before it (the gap since the previous live event). A trace without the field keeps the gap.
     base = [{"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {}}}]
     timed = base + [{"type": "tool_call", "step_id": 1, "ts": 3.0, "payload": {
         "tool": "scan_indicators", "args": {"region": "r"}, "hits": [], "duration_s": 0.000258}}]

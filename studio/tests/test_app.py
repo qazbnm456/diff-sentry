@@ -41,8 +41,7 @@ def test_config_classifier_falls_back_to_analyst(monkeypatch):
 
 def test_config_classifier_never_surfaces_a_subscription_analyst(monkeypatch):
     # the classifier is a make_model_tool endpoint and from_env REJECTS a subscription classifier, so
-    # the panel must NOT show a subscription-sentinel analyst as the classifier — a config a run couldn't
-    # use. (Regression: classifier = DS_CLASSIFIER_LM or analyst surfaced the subscription analyst.)
+    # the panel must NOT show a subscription-sentinel analyst as the classifier (a config a run can't use).
     monkeypatch.setenv("DS_SUB_LM", "claude-agent-sdk/claude-fable-5")
     monkeypatch.delenv("DS_CLASSIFIER_LM", raising=False)
     cfg = client.get("/v1/config").json()["models"]
@@ -124,10 +123,9 @@ def test_replay_streams_mapped_events(tmp_path, monkeypatch):
 
 
 def test_replay_orders_causally_by_ts_with_step_id_tiebreak(tmp_path, monkeypatch):
-    # rlm-harness flushes `main_step`s AFTER the run, so by step_id every turn trails every tool call and a
-    # replay used to stream the whole action timeline before the first reasoning turn. A turn's `ts` is its
-    # live parse stamp, so by `ts` it precedes the scan its own code made. `step_id` breaks a `ts` tie
-    # (deterministic, not input order); an event with no `ts` sorts last and never raises.
+    # rlm-harness flushes `main_step`s AFTER the run, so by step_id every turn trails every tool call. A
+    # turn's `ts` is its live parse stamp, so by `ts` it precedes the scan its own code made. `step_id`
+    # breaks a `ts` tie (deterministic, not input order); an event with no `ts` sorts last, never raises.
     _write_trace(tmp_path, [
         {"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {"planner": "P"}}},
         {"type": "tool_call", "step_id": 1, "ts": 3.0, "payload": {"tool": "scan_indicators", "hits": [], "n": 0}},
@@ -146,9 +144,9 @@ def test_replay_orders_causally_by_ts_with_step_id_tiebreak(tmp_path, monkeypatc
 
 def test_replay_order_is_permutation_invariant_with_nan_or_inf_stamps_and_run_end_last(tmp_path, monkeypatch):
     # `json.loads` is non-strict (admits NaN/Infinity), `isinstance(nan, float)` is True, and every NaN
-    # comparison is False — so before the `isfinite` guard the replay order depended on INPUT ORDER (22
-    # distinct orders over these 120 permutations; 54 put an event after run_end). A NaN/±inf stamp must
-    # join the ts-less tail (step_id order), the result stay deterministic, and `run_end` stay terminal.
+    # comparison is False — so without the `isfinite` guard the replay order depends on INPUT ORDER (and
+    # can put an event after run_end). A NaN/±inf stamp must join the ts-less tail (step_id order), the
+    # result stay deterministic, and `run_end` stay terminal.
     ev = [{"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {"planner": "P"}}},
           {"type": "tool_call", "step_id": 1, "ts": float("nan"), "payload": {"tool": "scan_indicators", "hits": [], "n": 0}},
           {"type": "main_step", "step_id": 2, "ts": 2.0, "payload": {"turn": 0, "reasoning": "r", "code": "c"}},

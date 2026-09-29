@@ -47,7 +47,7 @@ class EvalRow(BaseModel):
     run_id: str
     score: EvalScore | None = None
     metrics: dict = Field(default_factory=dict, description="run_metrics (steps, scan/deep_classify/analyst calls…)")
-    verdict: str = Field("", description="the assembled verdict (benign/suspicious/malicious/none) — a fact")
+    verdict: str = Field("", description="the assembled verdict label (empty if none) — a fact")
     signal: bool = Field(False, description="the deterministically DERIVED SIEM signal — a fact, not the judge's")
     max_indicator_severity: str = Field("info", description="highest deterministic indicator severity — a fact")
     cited_unknown: int = Field(0, description="count of cited indicator ids matching no recorded hit (fabrication tell)")

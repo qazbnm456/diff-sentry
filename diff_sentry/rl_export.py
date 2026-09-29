@@ -45,7 +45,7 @@ def run_labels(events: list[dict]) -> dict:
     """Intrinsic OUTCOME labels for one run — facts, NOT a reward. Derived from the ASSEMBLED verdict so
     `signal` reads the deterministic union (never the planner's self-report).
 
-    `inconclusive` is a reward-free NEGATIVE OUTCOME fact (mirroring the clean-negative idea): True when
+    `inconclusive` is a reward-free NEGATIVE OUTCOME fact: True when
     the finalized run reached the sanctioned insufficient-evidence outcome — the planner submitted
     `inconclusive`, or the normalized change carried no groundable content (the response backstop). It is
     a FACT for a downstream trainer to weigh, never a score."""
@@ -97,10 +97,9 @@ def rubric_signal(events: list[dict]) -> dict:
     All LABELS: a downstream trainer computes dᵢ∈[0,1] and aggregates; this service never does.
 
     The reported `rubric` is the EFFECTIVE one — the run_start-meta rubric, or the constant
-    `default_rubric()` for a legacy trace that carries none — so it always names the SAME criteria
-    `criteria_facts` was computed against (no orphan facts). The `rubric` import is LAZY: it keeps
-    rl_export's module top unchanged and can't form a load-time cycle (rubric.trace_facts calls back into
-    THIS module, also lazily)."""
+    `default_rubric()` for a trace that carries none — so it always names the SAME criteria
+    `criteria_facts` was computed against (no orphan facts). The `rubric` import is LAZY so it can't form
+    a load-time cycle (rubric.trace_facts calls back into THIS module, also lazily)."""
     from .rubric import criteria_facts, default_rubric, rubric_from_meta
 
     rubric = rubric_from_meta(events).criteria or default_rubric().criteria
@@ -131,8 +130,6 @@ def export_dataset(runs: dict[str, list[dict]]) -> dict:
         # The three per-run LABEL surfaces ride via rlm-harness's shared run_label_bundle (the canonical
         # {surface: {run_id: fn(events)}} seam) — one bundle shape across consumers, and `reward` is a
         # refused surface name (it raises), so the reward-free invariant is structural at the transport.
-        # Output is byte-identical to the old comprehensions. `rubric_signal` is the ATLAS 4-category
-        # (TF/TA/TG/PA) rubric + per-criterion deterministic facts (reward-free LABELS).
         **run_label_bundle(runs, labels=run_labels, metrics=run_metrics, rubric_signal=rubric_signal),
     }
 

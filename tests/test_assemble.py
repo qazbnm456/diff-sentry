@@ -46,12 +46,12 @@ def test_no_result_event_returns_none(make_trace):
 def test_emit_on_is_read_from_meta():
     assert _emit_on_from_meta([{"type": "run_start", "payload": {"meta": {"emit_on": ["malicious"]}}}]) \
         == ("malicious",)
-    assert _emit_on_from_meta([]) == ("suspicious", "malicious")   # default for an old/absent trace
+    assert _emit_on_from_meta([]) == ("suspicious", "malicious")   # default when meta has no emit_on
 
 
 def test_offline_signal_matches_the_runs_emit_on(make_trace):
     """A 'suspicious' verdict on a change with no high indicators: the default threshold signals, a
-    'malicious'-only threshold recorded in meta does not — and offline re-derivation honors it (finding 5)."""
+    'malicious'-only threshold recorded in meta does not — offline re-derivation honors the run's own emit_on."""
     susp = {**BENIGN_SELF_REPORT, "verdict": "suspicious", "indicator_ids": []}
     default = verdict_from_events(load_events(make_trace(event=BENIGN_EVENT, verdict=susp, run_id="b1")))
     strict = verdict_from_events(load_events(

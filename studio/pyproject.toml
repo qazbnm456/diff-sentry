@@ -11,8 +11,7 @@ dependencies = [
 [project.optional-dependencies]
 # `live` pulls diff-sentry (and through it dspy/rlm-harness) so POST /v1/classify can drive a real run.
 # Replay (the GET endpoints) needs none of it — keep it optional so a replay-only deploy stays light.
-# NOTE: diff-sentry pins rlm-harness to an exact PyPI version, so a `live` install is self-contained —
-# no ../rlm-harness sibling checkout needed.
+# diff-sentry pins rlm-harness to an exact PyPI version, so a `live` install is self-contained.
 live = ["diff-sentry"]
 # `subscription` FORWARDS diff-sentry's OWN subscription extra (the Claude Agent SDK, for a
 # planner/analyst on a Claude Pro/Max subscription — `DS_ROOT_LM/DS_SUB_LM=claude-agent-sdk/<id>`). It

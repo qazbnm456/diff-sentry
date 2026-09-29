@@ -74,8 +74,7 @@ def _age_days(created_at: str) -> int | None:
     try:
         from datetime import datetime
 
-        # No "Z" -> "+00:00" rewrite: `fromisoformat` has parsed a trailing "Z" since 3.11, which
-        # is this project's `requires-python` floor.
+        # `fromisoformat` parses a trailing "Z" on 3.11+ (the `requires-python` floor).
         created = datetime.fromisoformat(str(created_at))
         return max(0, (datetime.now(UTC) - created).days)
     except (ValueError, TypeError):
@@ -116,9 +115,8 @@ def _provenance(repo: str, number: int | None, user: dict | None, association: A
             commits = None
         if isinstance(commits, list):
             # Tally everything BEFORE assigning, so a malformed element can't leave a half-populated dict.
-            # Every nested field is isinstance-guarded (not just `or {}`): a TRUTHY non-dict — `{"commit":
-            # "x"}` from a schema-broken 200 or a proxying transport — would otherwise raise on `.get` and
-            # sink the whole ingest, breaking the best-effort contract this function documents above.
+            # Every nested field is isinstance-guarded (not just `or {}`): a TRUTHY non-dict such as
+            # `{"commit": "x"}` (a schema-broken 200) would otherwise raise on `.get` and sink the ingest.
             unverified = mismatch = 0
             spoofed_authors: list[str] = []
             for c in commits:

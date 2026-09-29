@@ -36,10 +36,9 @@ from .mapper import to_event
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Where diff-sentry's runs live, resolved to an ABSOLUTE path so it is stable regardless of the process
-# CWD. Default: `<root>/output` — diff-sentry's `cli` defaults `--out ./output` (and cli.run's `outdir`
-# default is "./output"), so a CLI run from the repo root writes `output/{traces,responses}`; the studio's
-# own live worker writes there too (it passes this dir as `outdir`). So zero-config replay-only just works
-# on CLI-produced runs. `DS_ARTIFACTS_DIR` overrides to point at any other output dir / checkout.
+# CWD. Default: `<root>/output`, the `--out` / `outdir` default of diff-sentry's `cli`, so a CLI run from
+# the repo root is replayable with zero config; the studio's live worker writes there too (it passes this
+# dir as `outdir`). `DS_ARTIFACTS_DIR` points it at any other output dir / checkout.
 ARTIFACTS = Path(
     os.environ.get("DS_ARTIFACTS_DIR") or REPO_ROOT / "output"
 ).expanduser().resolve()
@@ -125,13 +124,12 @@ def _causal_key(event: dict) -> tuple:
     `step_id` is WRITE order, and it lies about `main_step`: rlm-harness flushes the whole trajectory after
     the run, so every turn's step_id trails every live tool_call/sub_call of the run. `ts` does not lie —
     a turn is stamped when its reasoning was PARSED (the flush only backfills that live stamp), so by `ts`
-    a turn precedes the tool calls its own code then made; the same interleave rlm-harness >= 1.11.2's
+    a turn precedes the tool calls its own code then made; the same interleave rlm-harness's
     `export_actions` produces. `step_id` stays as the tiebreak so same-`ts` events (a trace with no live
     stamps at all falls back to flush time) keep a deterministic order instead of input order. A `ts`
     that is absent, not a number, NaN or ±inf sorts last and never raises. NaN needs the explicit
     `isfinite`: `json.loads` is non-strict and admits `NaN`, `isinstance(nan, float)` is True, and every
-    NaN comparison is False — which does not raise, it makes the sort depend on INPUT ORDER (22 distinct
-    orders over the 120 permutations of a 5-event fixture with one NaN stamp)."""
+    NaN comparison is False, so the sort silently depends on INPUT ORDER."""
     ts = event.get("ts")
     ok = isinstance(ts, (int, float)) and not isinstance(ts, bool) and math.isfinite(ts)
     return (0 if ok else 1, ts if ok else 0.0, _step_key(event))
@@ -163,17 +161,14 @@ def config() -> JSONResponse:
     """The three model ROLES → their configured model names (from env), so the UI can show them on page
     load. Read env DIRECTLY (never `DetectConfig.from_env`, which RAISES without DS_ROOT_LM/DS_SUB_LM) so a
     replay-only deploy still answers. `classifier` mirrors diff-sentry's `DS_CLASSIFIER_LM or analyst`
-    fallback — but NEVER surfaces a subscription-sentinel analyst as the classifier (from_env rejects a
-    subscription classifier; see `_role_or_none`). `classify_backend`/`emit_on`/`max_iterations`/
-    `enable_fetch` let the UI frame the run."""
+    fallback via `_role_or_none`. `classify_backend`/`emit_on`/`max_iterations`/`enable_fetch` let the UI
+    frame the run."""
     analyst = os.environ.get("DS_SUB_LM")
     emit_on = [v.strip() for v in os.environ.get("DS_EMIT_ON", "suspicious,malicious").split(",") if v.strip()]
     return JSONResponse({
         "models": {
             "planner": os.environ.get("DS_ROOT_LM"),
             "analyst": analyst,
-            # classifier = DS_CLASSIFIER_LM or analyst, but NEVER surface a subscription analyst as the
-            # classifier (from_env rejects a subscription classifier — a config a run couldn't use).
             "classifier": _role_or_none(os.environ.get("DS_CLASSIFIER_LM"), analyst),
         },
         "classify_backend": os.environ.get("DS_CLASSIFY_BACKEND", "self"),
@@ -246,9 +241,7 @@ async def stream_run(run_id: str, delay: float = 0.0) -> StreamingResponse:
     p = _trace_path(run_id)
     if not p.exists():
         raise HTTPException(404, f"no trace for run {run_id!r}")
-    # Sort CAUSALLY (`ts`, then step_id). By step_id alone a replay streamed the whole action timeline
-    # first and the reasoning turns last, because `main_step`s flush post-hoc with trailing step_ids;
-    # their `ts` is the live parse stamp, so ordering by it restores think→act. See `_replay_order`.
+    # Causal order (think → act), `run_end` last: see `_causal_key` / `_replay_order`.
     events = _replay_order(_load_events(p))
 
     async def gen():

@@ -57,7 +57,7 @@ CATEGORY_MEANING = {
 def default_rubric(task: str = "") -> RubricCriteria:
     """The FIXED, deterministic rubric skeleton — one criterion per ATLAS category, weight 1.0, NO model.
 
-    `task` is accepted for signature parity (and future extensibility) but unused: the criteria are
+    `task` is accepted for signature parity but unused: the criteria are
     CONSTANT because diff-sentry's task never varies — only the per-run FACTS do."""
     return RubricCriteria(criteria=[
         Criterion(name="verdict_resolves_change", category="TF", weight=1.0,
@@ -91,9 +91,7 @@ def trace_facts(events: list[dict]) -> dict:
     max_indicator_severity / cited_unknown) + `run_metrics` (steps, scan / deep_classify / analyst / fetch
     counts, circuit-breaks, cap). Their key-sets are DISJOINT, so the merge drops nothing; sourcing them
     here rather than re-deriving keeps `criteria_facts` provably consistent with the export's labels/metrics
-    (no second facts derivation to drift). The import is LAZY so this module's top stays dspy-free (it
-    imports only `.schema` + the dspy-free `rlm_harness.rubric`) — the rl_export call path
-    (→ assemble.verdict_from_events → indicators) is itself dspy-free."""
+    (no second facts derivation to drift). The import is LAZY (see the module docstring)."""
     from .rl_export import run_labels, run_metrics  # lazy: keeps rubric's module top dspy-free
 
     return {**run_labels(events), **run_metrics(events)}

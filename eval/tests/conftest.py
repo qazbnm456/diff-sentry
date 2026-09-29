@@ -38,7 +38,7 @@ _MALICIOUS_VERDICT = {
     "indicator_ids": [], "recommended_action": "block-merge",
 }
 
-# A verdict with NO usable label (empty string) → inconclusive → an `unscored` row (not a fake 0).
+# A verdict with NO usable label (empty string) → an `unscored` row (not a fake 0).
 _EMPTY_VERDICT = {"summary": "", "verdict": "", "confidence": 0.0, "rationale": "",
                   "techniques": [], "suspect_files": [], "indicator_ids": [], "recommended_action": "allow"}
 
@@ -47,8 +47,8 @@ def record_run(tmp_path, *, run_id, with_result=True, verdict=None, change=None,
                emit_on=("suspicious", "malicious"), max_iterations=25):
     """Write a synthetic diff-sentry run to `tmp_path/<run_id>.jsonl` through the REAL TraceRecorder, so the
     load_events → group_by_run path is exercised against the actual wire format. `with_result=False` → the
-    run never finalized; `verdict` defaults to a malicious verdict (pass `_EMPTY_VERDICT` for an
-    inconclusive run). Returns the run's events."""
+    run never finalized; `verdict` defaults to a malicious verdict (pass `_EMPTY_VERDICT` for a run with
+    no usable label). Returns the run's events."""
     from rlm_harness import TraceRecorder, record_tool_call
     from rlm_harness.trace import load_events
 
@@ -105,6 +105,6 @@ def no_result_events(tmp_path):
 
 
 @pytest.fixture
-def inconclusive_events(tmp_path):
-    # finalized but with an EMPTY verdict label → inconclusive → an `unscored` row (never a fake 0)
+def empty_verdict_events(tmp_path):
+    # finalized but with an EMPTY verdict label → an `unscored` row (never a fake 0)
     return record_run(tmp_path, run_id="demo-malicious-ci", verdict=_EMPTY_VERDICT)

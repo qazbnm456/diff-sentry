@@ -1,15 +1,15 @@
-"""L4b — offline REPRODUCTION of the real hackerbot-claw incident (late Feb-early Mar 2026).
+"""L4b — offline REPRODUCTION of the real hackerbot-claw incident (Feb-Mar 2026).
 
 Datadog's public writeup ("Stopping hackerbot-claw with BewAIre") documents an AI agent that opened
-malicious PRs and prompt-injection issues against their public repos. The original artifacts are gone
-(the attacker account was deleted — datadog-iac-scanner PR #7/#8 and datadog-agent issues #47021/#47024
-all 404 today; only the remediation PR #9 survives), so we CANNOT live-ingest them. Instead we
-reconstruct the three payloads the article quotes verbatim into change events and prove the DETERMINISTIC
-layer (scan_indicators + assemble) catches all three OFFLINE — no model, no loop, no network.
+malicious PRs and prompt-injection issues against their public repos. The original artifacts
+(datadog-iac-scanner PR #7/#8, datadog-agent issues #47021/#47024) were deleted with the attacker
+account and cannot be live-ingested, so the three payloads the article quotes verbatim are reconstructed
+as change events. The DETERMINISTIC layer (scan_indicators + assemble) must catch all three OFFLINE — no
+model, no loop, no network.
 
 Each event is assembled under a NEUTRAL benign verdict, so `signal` is driven purely by the MF3 evidence
-floor: a false-benign self-report from the planner could not have suppressed any of these. This is the
-same harness shape as `test_detection_quality.py`, scoped to the real incident with provenance.
+floor: a false-benign self-report from the planner could not have suppressed any of these. Same harness
+shape as `test_detection_quality.py`, scoped to the incident.
 """
 
 from __future__ import annotations

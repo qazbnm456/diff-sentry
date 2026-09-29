@@ -1,5 +1,5 @@
 """Build the API-shaped `DetectionResponse` from an assembled verdict + the trace — a read-time
-presentation carrying no new judgement. `build_failed_response` is the crash/cancel path (no verdict →
+presentation carrying no new judgement. `build_failed_response` is the crash path (no verdict →
 an informative refusal that still carries whatever deterministic indicators were gathered).
 
 Pure stdlib + pydantic; no dspy.
@@ -96,7 +96,7 @@ def _has_groundable_content(events: list[dict]) -> bool:
 
 def _resolve_outcome(assembled: AssembledVerdict, events: list[dict]) -> tuple[str, str, str]:
     """The response status for a FINALIZED run + the refusal (reason, detail) when it is not `classified`.
-    A finalized run is `classified` UNLESS the planner submitted no verdict (legacy empty), submitted the
+    A finalized run is `classified` UNLESS the planner submitted an empty verdict, submitted the
     sanctioned `inconclusive` outcome, OR the normalized change carried NO groundable content — in which
     case a confident verdict is DOWNGRADED to inconclusive (defense-in-depth: an ungroundable input must
     never ship a confident verdict)."""
@@ -147,7 +147,7 @@ def build_response(assembled: AssembledVerdict, events: list[dict], run_id: str)
 
 def build_failed_response(run_id: str, events: list[dict], detail: str, *, reason: str = "run_failed"
                           ) -> DetectionResponse:
-    """The crash/cancel path — no verdict, but still carries the deterministic indicators gathered and
+    """The crash path (or a trace with no result event) — no verdict, but still carries the deterministic indicators gathered and
     the derived signal (a run that crashed AFTER a critical indicator fired must STILL be able to alert)."""
     from .schema import SIGNAL_SEVERITY_FLOOR, max_severity, severity_rank
 
@@ -159,5 +159,5 @@ def build_failed_response(run_id: str, events: list[dict], detail: str, *, reaso
         signal=signal, indicators=hits, max_indicator_severity=top,
         refusal=RefusalInfo(reason=reason, detail=detail, indicators=hits),
         process=_process(events),
-        rubric=_rubric(events),   # a failed/cancelled run still has a partial trajectory worth labelling
+        rubric=_rubric(events),   # a failed run still has a partial trajectory worth labelling
     )

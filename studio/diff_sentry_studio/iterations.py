@@ -58,9 +58,9 @@ def _gap(ts: float | None, prev: float | None) -> float | None:
 
 
 def _took(p: dict, gap: float | None) -> float | None:
-    """How long a tool / analyst call took. rlm-harness >= 1.8.3 measures every call and writes
-    `payload.duration_s`; prefer that. The gap since the previous live event is only a FALLBACK for a
-    trace that predates it — it charges the whole preceding planner turn to a sub-millisecond scan."""
+    """How long a tool / analyst call took. rlm-harness measures every call into `payload.duration_s`;
+    prefer that. The gap since the previous live event is only a FALLBACK for a trace without the field —
+    it charges the whole preceding planner turn to a sub-millisecond scan."""
     d = p.get("duration_s")
     return round(float(d), 6) if isinstance(d, (int, float)) and not isinstance(d, bool) else gap
 
@@ -145,13 +145,13 @@ def build_iterations(events: list[dict]) -> dict:
     - `iterations` — the planner's REPL turns (reasoning + code + its output), in turn order. CONTENT is
       always reliable; each turn's `output` already contains its tools' results inline. Per-turn timing
       (`rel_s`/`duration_s`) is attached WHEN the trace carries live `main_step` ts (rlm-harness backfills
-      them as each turn is parsed → `per_turn_timing=True`). An OLDER trace flushed every `main_step` at
-      finalize, so their ts cluster at one instant; we detect that, set `per_turn_timing=False`, and skip
-      per-turn durations rather than fake them.
+      them as each turn is parsed → `per_turn_timing=True`). A trace whose `main_step`s were all flushed
+      at finalize has their ts clustered at one instant; that is detected, `per_turn_timing=False`, and
+      per-turn durations are skipped rather than faked.
     - `timeline` — the `tool_call`/`sub_call` events, ALWAYS recorded LIVE with real `ts`. Each entry
       carries `rel_s` (since run start) and `duration_s` (the kit's measured call time, else the gap
-      since the previous live event). The
-      accurate "where did the time go" signal either way, and the headline for debugging a slow run.
+      since the previous live event). It is the accurate "where did the time go" signal either way, and
+      the headline for debugging a slow run.
     """
     evs = sorted(events, key=_step_key)
     meta: dict = {}
@@ -175,10 +175,8 @@ def build_iterations(events: list[dict]) -> dict:
                                "code": _preview(p.get("code")), "output": _preview(p.get("output")),
                                "_ts": e.get("ts")})
     iterations.sort(key=lambda it: it["turn"] if it["turn"] is not None else 1 << 30)
-    # Per-turn timing is available IFF the trace carries live main_step ts (rlm-harness backfills them as each
-    # turn is parsed). An older trace flushed every main_step at finalize, so their ts cluster at one
-    # instant (span ~0) — detect that and skip per-turn timing (the tool timeline still carries the real
-    # where-did-time-go signal). A >1s span over ≥2 turns can only be live (an LM turn is seconds+).
+    # Live main_step stamps iff a >1s span over ≥2 turns (an LM turn takes seconds); finalize-flushed
+    # stamps cluster at a ~0 span.
     step_ts = [it["_ts"] for it in iterations if isinstance(it["_ts"], (int, float))]
     per_turn = len(step_ts) >= 2 and (max(step_ts) - min(step_ts)) > 1.0
     for i, it in enumerate(iterations):

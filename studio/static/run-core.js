@@ -1,8 +1,8 @@
 /* Pure, DOM-free decisions for the live-run driver — require-able + unit-tested (tests/run-core.test.js),
    loaded as a plain <script> before app.js (which reads the RunCore global, same as ReplayCore). Kept out
    of app.js so the terminal-outcome invariant — EVERY outcome finalizes the stage — has a test seam the
-   DOM IIFE cannot give. The bug this guards: a 409/"kept" branch that set state but rendered nothing into
-   the stage, leaving the animated "Classifying…" skeleton spinning forever. */
+   DOM IIFE cannot give. A branch that sets state but renders nothing (e.g. a 409 "kept") leaves the
+   animated "Classifying…" skeleton spinning forever. */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
   else root.RunCore = factory();
@@ -14,7 +14,7 @@
   //                 response); `{status: 409}` when a finalized run already owns this id; else any thrown
   //                 error (network drop / HTTP 5xx).
   //   finalStatus — the status carried by the completed event (used only on the clean-end path).
-  // `stage` is NEVER null — that is exactly the invariant the skeleton-hang bug violated:
+  // `stage` is NEVER null (a null stage leaves the skeleton spinning):
   //   "card"      the completed event already produced the result; the caller re-GETs + renders the card
   //   "existing"  this id already had a finalized run — the 409 case; app.js prompts overwrite-or-keep
   //   "failed"    render a failed stage card (clears the "Classifying…" skeleton)

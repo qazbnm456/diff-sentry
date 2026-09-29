@@ -5,10 +5,10 @@
 change, so the call lands in the trajectory as a `tool_call` — the correct rlm-harness shape for a second
 model-JUDGEMENT (it must be a tool, not the sub-LM: a model grading the change is an agentic decision).
 
-- `classify_backend="self"` (now, default): a general model returns a structured verdict as JSON.
-- A dedicated/stronger backend later: only `_selfclassify_chat` changes; the planner, schema, assemble,
-  and export are untouched — a localized swap. That is the whole point of routing stage-2 through one
-  `chat_fn`.
+- `classify_backend="self"` (the default and only wired backend): a general model returns a structured
+  verdict as JSON.
+- A dedicated/stronger backend replaces only `_selfclassify_chat`; the planner, schema, assemble, and
+  export stay untouched. Routing stage-2 through one `chat_fn` is what keeps that swap local.
 
 The chat call is injectable (`chat_fn`) so the pipeline is testable without a live endpoint. Sync — dspy
 invokes tools synchronously.
@@ -125,11 +125,10 @@ def make_deep_classify_tool(config: DetectConfig, chat_fn: Callable[[str], str] 
             record_tool_call("deep_classify", args={"findings": findings[:400]}, error=r.endpoint_error)
             return f"DEEP_CLASSIFY ENDPOINT ERROR: {r.endpoint_error}. Decide from the indicators yourself."
         v: ClassifyValidation = r.validated
-        # Future SEAM swap: when the second-stage backend is a delegated rlm-harness HARNESS
-        # (make_harness_tool) rather than the `self` model, its result carries
+        # SEAM: a delegated rlm-harness HARNESS backend (make_harness_tool) returns
         # child_run_id/child_trace/child_meta linking THIS parent run to the child's OWN rollout. Attach
-        # them here IFF present, so the child link survives the recording step. The current backend's
-        # ModelToolResult has none, so `child` is empty → a NO-OP today, correct for the swap.
+        # them IFF present so the link survives recording. The `self` backend's ModelToolResult carries
+        # none, so `child` is empty.
         child = {k: getattr(r, k) for k in ("child_run_id", "child_trace", "child_meta")
                  if getattr(r, k, None) is not None}
         record_tool_call("deep_classify", args={"findings": findings[:400]}, ok=v.ok, raw=r.raw,

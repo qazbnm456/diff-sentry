@@ -9,9 +9,8 @@ returns structured `IndicatorHit`s — FACTS, never a model opinion. It is used 
 2. **An RLM TOOL** (`make_indicator_tool`) the planner calls on a specific region it decoded or wants
    double-checked; each call records a `tool_call` carrying the FULL structured hits.
 
-Why pure-Python and no subprocess: a subprocess spawned from inside the live dspy.RLM/asyncio process
-reliably hangs (a hard-won rlm-harness-consumer lesson). Any heavier external scanner belongs host-side,
-post-run — never as an in-loop tool.
+Pure-Python, no subprocess: a subprocess spawned from inside the live dspy.RLM/asyncio process reliably
+hangs. Any heavier external scanner belongs host-side, post-run, never as an in-loop tool.
 
 No dspy import; the tool wrapper imports only `rlm_harness.trace.record_tool_call`.
 """
@@ -115,7 +114,7 @@ _CI_BYPASS_RE = re.compile(
 # Workflow permission escalation: an over-broad `permissions: write-all` grant — the "permission model
 # change" the malicious-PR research flags. Rare and high-signal, like a CODEOWNERS reassignment → `high`.
 # LINE-ANCHORED (MULTILINE) on the YAML shorthand and NOT on a diff `-` deletion line, so REMOVING a
-# write-all (the recommended hardening after tj-actions) and prose mentions do NOT fire.
+# write-all (the recommended hardening) and prose mentions do NOT fire.
 _WRITE_ALL_RE = re.compile(r"^[+ ]?\s*permissions\s*:\s*write-all\b", re.IGNORECASE | re.MULTILINE)
 
 # ── Workflow-CONFIGURATION escalation (distinct from `workflow-tamper`, which only asks "was a workflow
@@ -128,11 +127,10 @@ _WRITE_ALL_RE = re.compile(r"^[+ ]?\s*permissions\s*:\s*write-all\b", re.IGNOREC
 # and it has no safe reading → `critical`.
 _PRIV_TRIGGER_RE = re.compile(r"^[+ ]?\s*(?:pull_request_target|workflow_run)\s*:", re.MULTILINE)
 
-# The PR-HEAD expressions themselves, shared by the two patterns below — which differ only in what they
+# The PR-HEAD expressions themselves, shared by the patterns below, which differ only in what they
 # require the expression to DO. A bare MENTION is not a checkout: the recommended `workflow_run`
 # publisher (the safe way to comment on a fork PR, since `pull_request` hands forks a read-only token)
-# reads `workflow_run.head_sha` precisely to VALIDATE the artifact it was given, and gating on the
-# mention alone failed that pattern exactly as hard as the attack it is meant to catch.
+# reads `workflow_run.head_sha` precisely to VALIDATE the artifact it was given.
 _PR_HEAD_EXPR = (r"github\.event\.pull_request\.head\.(?:sha|ref)"
                  r"|github\.event\.workflow_run\.head_(?:sha|branch)"
                  # The interpolated form `refs/pull/${{ github.event.number }}/head` is the one that
@@ -171,22 +169,18 @@ _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 # Diff-PRESENTATION evasion — attacks aimed at the human reading the diff, not at the runtime. Miasma
 # prepended ~700 spaces to shove its payload off the right edge of a standard diff viewer. No source
-# formatter indents past ~60 columns, so a 200-space run before real content is unambiguous.
-# NOT anchored to the line start. Miasma PREPENDED its ~700 spaces, but a run of that size sitting
-# mid-line shoves the tail of the line off the viewport just as effectively, and the concealment is the
-# thing being detected — not where it happens to sit. No formatter indents or aligns past ~60 columns.
+# formatter indents or aligns past ~60 columns, so a 200-space run before real content is unambiguous.
+# NOT anchored to the line start: a run that size mid-line hides the line's tail just as well, and the
+# concealment is what is detected, wherever it sits.
 _WS_SHOVE_RE = re.compile(r"[ \t]{200,}(?=\S)")
 # Trojan Source: bidi overrides/isolates reorder rendered text away from what the compiler sees; ZWSP
-# hides content outright. Deliberately EXCLUDES U+200E/U+200F (LRM/RLM) and U+200C/U+200D (ZWNJ/ZWJ),
-# named here as CODEPOINTS rather than pasted literally — those carry real linguistic and emoji-
-# sequence use and would fire on ordinary prose, and a comment full of invisible characters is the
-# very thing this rule exists to catch (ruff PLE2502 rejects it, correctly).
-# those carry real linguistic and emoji-sequence use, and would fire on ordinary prose.
-_INVISIBLE_RE = re.compile("[\u202a-\u202e\u2066-\u2069\u200b]")  # escaped on purpose: literal
-# invisible characters in this file would be unreadable, un-reviewable, and would trip this very rule.
+# hides content outright. Deliberately EXCLUDES U+200E/U+200F (LRM/RLM) and U+200C/U+200D (ZWNJ/ZWJ):
+# those carry real linguistic and emoji-sequence use and would fire on ordinary prose. Codepoints are
+# ESCAPED on purpose: literal invisible characters here would be un-reviewable, would trip this very
+# rule, and ruff PLE2502 rejects them.
+_INVISIBLE_RE = re.compile("[\u202a-\u202e\u2066-\u2069\u200b]")
 
-# Node/npm execution primitives. Miasma's payload was JS end-to-end and our suite was shell/YAML-shaped,
-# so every stage of it ran silently past the deterministic floor. Tuned rather than uniformly paranoid:
+# Node/npm execution primitives (Miasma's payload was JS end-to-end). Tuned rather than uniformly paranoid:
 # `child_process` and `eval` appear in legitimate tooling constantly, so only the DETACHED spawn (a
 # process deliberately outliving the parent — the stage-1 loader shape) and inline `node -e` execution
 # reach the floor; a bare dynamic eval is a sub-floor corroborator.
@@ -215,8 +209,8 @@ _CONTENT_HOST_RE = re.compile(
     r"\b(?:" + "|".join(re.escape(d) for d in _CONTENT_HOST_DOMAINS) + r")\b", re.IGNORECASE)
 
 # javascript-obfuscator's signature identifier mangling (`_0x1dd48b`). Terser/uglify emit SHORT names
-# (`a`, `t`), never this form, so it is a strong obfuscation tell that base64 detection cannot see —
-# Miasma's 15k-char `validator.js` payload used exactly this and fired nothing in our suite.
+# (`a`, `t`), never this form, so it is a strong obfuscation tell that base64 detection cannot see
+# (Miasma's 15k-char `validator.js` payload is this shape).
 _HEX_IDENT_RE = re.compile(r"_0x[0-9a-fA-F]{4,}")
 
 # Prompt-injection phrases — the class of payload hackerbot-claw aimed at a claude-code-action workflow.
@@ -390,7 +384,7 @@ def _scan_diff_evasion(text: str) -> list[IndicatorHit]:
 
 
 def _scan_js_exec(text: str) -> list[IndicatorHit]:
-    """Node/npm execution primitives — the ecosystem our shell/YAML-shaped rules were blind to."""
+    """Node/npm execution primitives (the JS side of loaders and droppers)."""
     hits: list[IndicatorHit] = []
     detached = _JS_DETACHED_RE.search(text)
     if detached and _JS_CHILD_PROC_RE.search(text):
@@ -472,12 +466,12 @@ def _sev_rank(sev: str) -> int:
 # Read as one blob, those pair ACROSS FILES: a `workflow_run:` added to one workflow and a
 # `ref: ${{ github.event.pull_request.head.sha }}` sitting in an unrelated file — a doc example, a test
 # fixture, or the very workflow the change is DELETING — compose into a `critical` that no single file
-# contains. Scoping the scan per file removes that class outright, and names the file in `location`
-# while it is there: evidence that used to read `gated.diff` for every hit now points at what to open.
+# contains. Scoping the scan per file removes that class outright and names the file in each hit's
+# `location`.
 #
-# The trade is explicit: a payload deliberately split across two files no longer pairs. That is the
+# The trade is explicit: a payload deliberately split across two files does not pair. That is the
 # right way round — a detector that invents a critical out of two unrelated files trains people to
-# disable it, and the single-signal rules (which are most of them) are unaffected either way.
+# disable it, and the single-signal rules (most of them) are unaffected.
 _DIFF_FILE_RE = re.compile(r"^diff --git a/(?P<a>.+?) b/(?P<b>.+?)$", re.MULTILINE)
 
 
@@ -503,12 +497,9 @@ def split_diff_by_file(text: str) -> list[tuple[str, str]]:
 def scan_content(event: dict) -> list[IndicatorHit]:
     """Scan ONE event's untrusted content with the same per-file scoping `scan_diff` gives a raw diff.
 
-    An event is not a unified diff — `raw_content` concatenates the title, the author, every
-    (filename, patch) and the body into one string, with no `diff --git` headers for `scan_diff` to
-    split on. Handing that blob to `scan_diff` therefore scopes NOTHING: a paired rule could still take
-    one half from a workflow and the other from an unrelated file. The event already carries the
-    structure a raw diff has to be parsed for, so scan it piece by piece and let hits from a file name
-    that file."""
+    An event is not a unified diff: `raw_content` has no `diff --git` headers, so `scan_diff` over it
+    would scope nothing. The event already carries the per-file structure, so each
+    `normalize.content_segments` piece is scanned on its own and a file's hits name that file."""
     from .normalize import content_segments
     deduped: dict[str, IndicatorHit] = {}
     for label, text in content_segments(event):
@@ -690,11 +681,9 @@ def make_indicator_tool() -> Callable[[str], str]:
         lines = [f"- {h.id} [{h.severity}] {h.rule}: {h.title}" for h in hits]
         return f"{len(hits)} indicator(s):\n" + "\n".join(lines)
 
-    # dspy registers a tool under its __name__ and the planner calls it by that name; the prompt
-    # (detect.INSTRUCTIONS) says `scan_indicators(region)`, so the tool MUST register under exactly that
-    # name — otherwise the sandbox call is a NameError. The inner def can't literally BE `scan_indicators`
-    # without shadowing the module-level detector it calls, so rename the callable here. (The trace
-    # `tool_call` already records the "scan_indicators" name via record_tool_call above.)
+    # dspy registers a tool under its __name__, and the prompt (detect.INSTRUCTIONS) calls
+    # `scan_indicators(region)`: any other name makes every sandbox call a NameError. The inner def
+    # cannot BE `scan_indicators` without shadowing the module-level detector it calls, hence the rename.
     scan_indicators_tool.__name__ = "scan_indicators"
     scan_indicators_tool.__qualname__ = "scan_indicators"
     return scan_indicators_tool

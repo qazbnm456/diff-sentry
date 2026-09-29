@@ -6,9 +6,9 @@ subtle case the planner can't call alone; and the CLASSIFIER (reached through th
 is the swappable second-stage that returns a structured verdict on an ambiguous change. Referred to by
 ROLE in code, docs, and the prompt; set via env (`from_env`, `DS_*`). No dspy import.
 
-The classifier is a SEAM (see `detect.make_deep_classify_tool`): today `classify_backend="self"` means
-a general model returns the structured verdict; a stronger/dedicated backend swaps in with no change to
-the planner, schema, assemble, or export.
+The classifier is a SEAM (see `deep_classify.make_deep_classify_tool`): `classify_backend="self"` means
+a general model returns the structured verdict; a dedicated backend swaps in with no change to the
+planner, schema, assemble, or export.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ class DetectConfig:
     base_url: str | None = None
 
     # ── The second-stage classifier SEAM ─────────────────────────────────────────────────────────
-    classify_backend: str = "self"          # "self" now (a general model); a dedicated backend later
+    classify_backend: str = "self"          # "self" = a general model; the only wired backend
     classifier_model: str = ""
     classifier_base_url: str | None = None
     classifier_api_key: str | None = None
@@ -73,7 +73,7 @@ class DetectConfig:
     planner_max_tokens: int | None = 16384
     # HARD ceiling on the single RLM episode. No outer multi-run loop (max_retries=1) — one change =
     # one trajectory, so the trace stays valid training data. A failed run is INFRA, not a schema bug:
-    # a non-retryable LM error escapes as the raw dspy.LMError (kit >= 1.2.1), the rest as RLMTaskError.
+    # a non-retryable LM error escapes as the raw dspy.LMError, the rest as RLMTaskError.
     max_iterations: int = 25
     max_llm_calls: int = 8          # caps ONLY analyst (llm_query) escalations
     max_output_chars: int = 10_000  # head+tail char cap dspy.RLM applies to each REPL output
@@ -117,13 +117,10 @@ class DetectConfig:
         api_key = os.getenv("DS_API_KEY")
         classifier = os.getenv("DS_CLASSIFIER_LM") or analyst
         # The classifier is a SEPARATE OpenAI-compatible client (deep_classify._selfclassify_chat →
-        # rlm-harness make_model_tool), NOT the subscription Agent SDK adapter — so its model can NEVER be
-        # a `claude-agent-sdk/…` sentinel. Two ways the sentinel could reach it, both config errors:
-        # an EXPLICIT DS_CLASSIFIER_LM set to a sentinel, or the DEFAULT inheriting a subscription
-        # DS_SUB_LM when DS_CLASSIFIER_LM is unset. `deep_classify` is ALWAYS registered, so a sentinel
-        # here would fail LATE — mid-trajectory, when the planner escalates, burning the one hard-budget
-        # attempt (max_retries=1) — so fail LOUD and actionable here rather than shipping the sentinel
-        # to the classifier endpoint as a bogus model id.
+        # rlm-harness make_model_tool), not the subscription Agent SDK adapter, so its model can never be
+        # a `claude-agent-sdk/…` sentinel, whether set explicitly or inherited from DS_SUB_LM. Since
+        # `deep_classify` is always registered, a sentinel would otherwise fail mid-trajectory and burn
+        # the one hard-budget attempt; fail here, loud and actionable.
         if classifier.startswith(SUBSCRIPTION_PREFIX):
             inherited = not os.getenv("DS_CLASSIFIER_LM")
             raise ValueError(

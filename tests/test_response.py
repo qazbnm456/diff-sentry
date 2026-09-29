@@ -45,7 +45,7 @@ def test_inconclusive_when_no_result(make_trace):
 # ---- inconclusive: an ungroundable input must not ship a CONFIDENT verdict ----
 
 def test_empty_payload_yields_inconclusive_not_a_confident_verdict(make_trace):
-    """The core gap: a content-free change (empty payload → '(no textual content)') must NOT ship a
+    """A content-free change (empty payload → '(no textual content)') must NOT ship a
     confident verdict. Even a confident benign SUBMIT is DOWNGRADED to status=inconclusive (the
     defense-in-depth backstop) — never a 'benign, confidence 0.9'."""
     empty = event_from_payload({})
@@ -87,7 +87,7 @@ def test_inconclusive_verdict_cannot_suppress_hard_evidence(make_trace):
 
 
 def test_groundable_benign_stays_classified(make_trace):
-    """Regression: a real, groundable benign change is UNCHANGED — status classified, verdict carried."""
+    """A real, groundable benign change is UNCHANGED — status classified, verdict carried."""
     benign = {**MALICIOUS_VERDICT, "verdict": "benign", "confidence": 0.8, "techniques": [],
               "suspect_files": [], "indicator_ids": []}
     events = load_events(make_trace(event=BENIGN_EVENT, verdict=benign, run_id="ben-1"))

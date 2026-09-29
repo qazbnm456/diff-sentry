@@ -8,13 +8,13 @@ license = "MIT"
 authors = [{ name = "Boik Su" }]
 keywords = ["rlm", "dspy", "security", "malicious-code-detection", "supply-chain-security", "prompt-injection", "siem"]
 dependencies = [
-    # Pinned exactly (the kit's public surface has been SemVer-frozen since 1.0.0); bump deliberately.
+    # Pinned exactly (the kit's public surface follows SemVer); bump deliberately.
     "rlm-harness==1.11.2",
     "pydantic>=2.0",
     "httpx>=0.27",      # the GitHub-allowlisted enrichment fetcher + the host-side SIEM emitter
 ]
 
-# The console entry point. `python -m diff_sentry` still works and is what the repo's own docs use for
+# The console entry point. `python -m diff_sentry` also works and is what the repo's own docs use for
 # local runs, but a `diff-sentry` command is what makes the tool installable-and-runnable in one step
 # (`uvx diff-sentry scan …`) — which is how the GitHub Action invokes it.
 [project.scripts]
@@ -30,31 +30,28 @@ observe = ["langfuse>=4.6.1", "openinference-instrumentation-dspy>=0.1.36"]
 # can't express (see .env.example).
 subscription = ["claude-agent-sdk>=0.1.60"]
 
-# Bare `uv sync` (and `--all-packages`) default-installs the `subscription-sdk` dev group (below) so the
-# Claude Agent SDK isn't pruned from the shared dev venv — an EXTRA is not synced by default, so a
-# `uv sync` without `--extra subscription` PRUNES it and a subscription dev run then crashes (ClaudeAgentLM
-# ImportError). `dev` MUST stay listed — default-groups REPLACES uv's `["dev"]` default, it doesn't append.
-# The public pip extra above is unchanged. Opt out for one sync: `uv sync --no-group subscription-sdk`.
+# Bare `uv sync` (and `--all-packages`) default-installs the `subscription-sdk` dev group (below). An
+# EXTRA is not synced by default, so without the group a `uv sync` lacking `--extra subscription` PRUNES
+# the Claude Agent SDK and a subscription dev run crashes (ClaudeAgentLM ImportError). `dev` MUST stay
+# listed: default-groups REPLACES uv's `["dev"]` default rather than appending to it.
+# Opt out for one sync: `uv sync --no-group subscription-sdk`.
 [tool.uv]
 default-groups = ["dev", "subscription-sdk"]
 
-# rlm-harness resolves from PyPI at the version pinned above. The dogfooding loop it is designed around
-# still holds: when co-developing the kit locally, overlay an editable install
-# (`uv pip install -e ../rlm-harness`) so a fix that surfaces here can be promoted upstream, then bump
-# the pin once it ships.
+# rlm-harness resolves from PyPI at the version pinned above, so the workspace needs no source override
+# for it. When co-developing the kit locally, overlay an editable install (`uv pip install -e
+# ../rlm-harness`) so a fix that surfaces here can be promoted upstream, then bump the pin once it ships.
 
 # The in-repo workspace members — each its OWN package, NOT part of the `diff_sentry` wheel:
 #   studio/ — the visualization console (fastapi/uvicorn/frontend, behind its `live` extra);
 #   eval/   — the offline, reward-free LLM-as-judge scorecard (a one-way trace reader).
 # Both read this package's trace/DetectionResponse contract, so co-locating keeps them in sync.
-# rlm-harness resolves from PyPI, so no workspace-root source override is needed for it.
 [tool.uv.workspace]
 members = ["studio", "eval"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
-# A dev-group MIRROR of the `subscription` optional-dependency extra (kept above for the pip surface),
-# default-installed via `[tool.uv] default-groups` so a bare `uv sync` doesn't prune the Claude Agent SDK.
+# A dev-group MIRROR of the `subscription` extra (which stays the pip surface); see `[tool.uv]` above.
 subscription-sdk = ["claude-agent-sdk>=0.1.60"]
 
 [tool.pytest.ini_options]
@@ -65,9 +62,9 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 110
 
-# ruff's DEFAULT rule set is not a stable contract — 0.16 expanded it far past the
-# pycodestyle/pyflakes baseline, which is why CI pins the version. The handful of default rules that
-# fight this project's design are ignored BY NAME here, with the reason.
+# ruff's DEFAULT rule set is not a stable contract, which is why CI pins the version (see ci.yml).
+# The handful of default rules that fight this project's design are ignored BY NAME here, with the
+# reason.
 #
 # Deliberately no `select` list: curating one is a real policy decision, and this codebase leans on
 # lazy imports (keeping modules SDK-free, deferring optional extras) that a broader selection would

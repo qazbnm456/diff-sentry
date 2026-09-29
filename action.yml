@@ -58,9 +58,9 @@ outputs:
     value: ${{ steps.scan.outputs.max-severity }}
   report:
     description: >-
-      Path to the JSON scan report. Upload it as an artifact and read it from a
-      separate privileged job if you want to post results back to the PR — see
-      the README on why that job must not be a `pull_request_target`.
+      Path to the JSON scan report. To post results back to the PR, upload it as
+      an artifact and read it from a separate privileged job. The README explains
+      why that job must not be a `pull_request_target`.
     value: ${{ steps.scan.outputs.report }}
 
 runs:

@@ -1,11 +1,10 @@
 # Vendored / external dependencies
 
-diff-sentry deliberately vendors **nothing** — it is a downstream *consumer* of rlm-harness (a
-exact PyPI pin), the deterministic detection logic (indicators, assemble, emit) is its own
-pure-Python code, and the Claude-subscription adapter it can use now ships in the rlm-harness wheel
-(`rlm-harness[subscription]` → `rlm_harness.ClaudeAgentLM`, injected at `configure(main_lm=…, sub_lm=…)`; it
-used to be vendored here from rlm-harness's `examples/` and was promoted into the kit). The external
-boundaries it does cross, and why, are listed here.
+diff-sentry vendors nothing. It consumes rlm-harness as an exact PyPI pin, and its deterministic
+detection logic (indicators, assemble, emit) is its own pure-Python code. The Claude-subscription
+adapter comes from the rlm-harness wheel (`rlm-harness[subscription]` provides
+`rlm_harness.ClaudeAgentLM`, injected at `configure(main_lm=…, sub_lm=…)`). The external boundaries
+diff-sentry does cross, and why, are listed here.
 
 ## External services (all opt-in, none bundled)
 

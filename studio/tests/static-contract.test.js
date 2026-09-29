@@ -1,8 +1,8 @@
 /* Static CSS contracts the zero-build frontend relies on (run: `node tests/static-contract.test.js`).
-   These shipped broken once each, so they are pinned textually (no browser in the suite):
+   Pinned textually (no browser in the suite):
    1. the `[hidden]` guard — author `display:*` on a class otherwise beats the UA's
-      `[hidden]{display:none}` and every JS `.hidden` toggle silently no-ops (all three mode panes
-      rendered stacked; the trajectory handle showed before any run);
+      `[hidden]{display:none}` and every JS `.hidden` toggle silently no-ops (the mode panes stack,
+      the trajectory handle shows before any run);
    2. the empty-stage glyph sizing — an inline SVG with only a viewBox inflates to the column width. */
 "use strict";
 const assert = require("assert");

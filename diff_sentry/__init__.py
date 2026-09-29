@@ -1,8 +1,8 @@
 """diff-sentry — classify a GitHub change for malicious intent, as a traced RLM harness.
 
-A downstream *consumer* of rlm-harness (editable path dep) reproducing Datadog's BewAIre defense shape:
+A downstream *consumer* of rlm-harness (an exact PyPI pin) reproducing Datadog's BewAIre defense shape:
 ingest a GitHub PR/issue/push → analyze the diff as UNTRUSTED data in a sandboxed REPL → produce a
-judgement-only structured verdict (benign/suspicious/malicious) → union the deterministic indicator
+judgement-only structured verdict (benign/suspicious/malicious/inconclusive) → union the deterministic indicator
 evidence on read → emit a SIEM signal host-side → export reward-free trajectories.
 
 Public surface::
@@ -12,8 +12,8 @@ Public surface::
     from diff_sentry import scan_indicators, assemble_verdict, build_response, emit_signal
     from diff_sentry import normalize_event, event_from_payload, export_dataset
 
-`config`, `schema`, `normalize`, `indicators`, `assemble`, `response`, `emit`, `ingest`, `rl_export`
-import NO dspy at module top (unit-testable in isolation). `ClassifyChange` / `setup` / `run` /
+`config`, `schema`, `normalize`, `indicators`, `assemble`, `response`, `emit`, `ingest`, `rl_export`,
+`rubric` import NO dspy at module top (unit-testable in isolation). `ClassifyChange` / `setup` / `run` /
 `detect_from_event` pull in dspy lazily (via RLMTask).
 """
 

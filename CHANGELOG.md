@@ -1,296 +1,135 @@
 # Changelog
 
-All notable changes to diff-sentry. This project classifies ONE GitHub change (PR/issue/push) for
-malicious intent — the diff held as **untrusted data** in a sandboxed REPL, a judgement-only verdict,
-and deterministic indicator evidence unioned on read into a SIEM signal — as a traced, improvable RLM
-framework on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness) (a BewAIre-style detector).
+All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change
+(PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
 ## 0.4.3
 
-Dependencies. `rlm-harness` moves from `1.0.0` to `1.10.1` — ten minor releases of the kit — and `dspy`
-from `3.2.1` to `3.3.1` with it. Nothing in the `diff_sentry` package changed: every kit name this
-project imports was checked against 1.10.1 by name, both offline suites, the studio suite and the node
-tests pass on the new pin, and a live classification ran clean. The one real risk, a doubled
-`sub_call`, was tested for before the bump and is not there (below).
+Dependencies only: the `diff_sentry` package itself is unchanged.
 
 ### Changed
-- **`rlm-harness==1.10.1`, `dspy` 3.3.1.** The pin stays exact. dspy 3.3 drops `asyncer`, `typeguard`,
-  `numpy` and `xxhash` from its exact pins, so a fresh install resolves fewer packages, not more.
-- **The trace carries more of the run; nothing here reads it differently.** `run_start` records the kit
-  version that wrote it (`rlm_harness`); `run_end` gains `budgets` (the generation cap actually APPLIED
-  per role, plus the iteration caps and whether dspy accepted them — `dropped: true` means all three
-  reverted to dspy's defaults, so exclude those runs before any claim about iteration exhaustion),
-  `usage` (completion tokens per ATTEMPT, not per turn — a distribution over runs wants the per-run
-  `max`, never the sum) and `error_chain` (the causes below a failed run's outer exception). Every tool
-  call and `sub_call` carries a measured `duration_s`. `run_labels`, `run_metrics`, the rubric facts
-  and the SIEM signal derivation are untouched; the new fields ride along for a future reader.
-- **A non-retryable LM error fails fast, as itself.** An auth / billing / configuration /
-  unsupported-model error from dspy escapes the kit after ONE attempt as the original `dspy.LMError`
-  subclass instead of burning the retry budget and arriving wrapped in `RLMTaskError`. `cli.run` already
-  turns every exception into a `status=failed` response, so the never-raises contract holds; the
-  response now names the dspy class, which tells "fix the credential" apart from "the model kept
-  producing invalid output". `RLMTaskError` still means the latter, or a retryable endpoint fault
-  (timeout / 5xx / transport) that outlasted the single attempt.
-- **The studio's "took" label on a tool call reads the kit's own timing.** The kit now measures each
-  call; the console used to estimate a tool's duration as the gap since the previous live event, which
-  charged the whole preceding planner turn to a sub-millisecond scan. It prefers the recorded
-  `duration_s` and falls back to the gap for a trace that predates it.
+- **`rlm-harness==1.10.1` and `dspy` 3.3.1** (from 1.0.0 and 3.2.1); the pin stays exact, and a fresh
+  install resolves fewer packages because dspy 3.3 drops several exact pins.
+- **Traces record more of each run** (the kit version in `run_start`; applied `budgets`, per-attempt
+  `usage` and the failed run's `error_chain` in `run_end`; `duration_s` on every tool call and
+  `sub_call`), while labels, metrics, rubric facts and the SIEM signal are derived exactly as before.
+- **A non-retryable LM error (auth, billing, configuration, unsupported model) fails after one attempt
+  and the `status=failed` response names the dspy error class**, so a credential problem reads
+  differently from a model that kept producing invalid output (`RLMTaskError`).
+- **The studio's "took" label on a tool call shows the recorded `duration_s`**, falling back to the
+  event gap only for older traces.
 
-### Fixed (upstream, reaching this project)
-- **An analyst escalation is recorded once.** Since kit 1.7.0 a plain `sub_lm` is wrapped for tracing
-  automatically. This project already wraps the analyst with `intercept_sub_lm`, whose wrapper declares
-  `records_sub_call = True`; the kit honours that opt-out and leaves it alone, so a `sub_call` lands in
-  the trace — and in the exported datasets — exactly once. Verified at runtime and on a live run.
-- **`intercept_sub_lm` handles dspy's typed `LMResponse`.** Under dspy 3.3 a sub-LM can return an
-  `LMResponse` rather than a list of strings, and the 1.0.0 wrapper mishandled it. The analyst intercept
-  is that wrapper.
-- **A lone surrogate in a payload no longer loses the event.** The change under review is
-  attacker-authored text; a payload carrying an unpaired surrogate used to fail the recorder's JSON dump
-  and drop the event. It is written now.
+### Fixed
+- **An analyst escalation appears in the trace and the exported datasets exactly once.**
+- **The analyst intercept handles dspy 3.3's typed `LMResponse`.**
+- **A payload containing an unpaired surrogate is recorded** instead of being dropped from the trace.
 
 ### Docs
-- **`CLAUDE.md` names all five version sites** and which of them `release.yml` gates (the README's
-  `uses:` example is the one it does not), and its `RLMTaskError` guidance matches the fail-fast
-  behaviour above.
+- **`CLAUDE.md` lists all five version sites a release moves**, noting that
+  `release.yml` does not gate the README's `uses:` line.
 
 ## 0.4.2
 
-Scoping. Every fix here comes from the same root: the scan read a whole change as one
-string, so rules that need two signals could take them from two unrelated files.
-
 ### Fixed
-- **The scan is scoped per file.** `scan_indicators` reads whatever it is handed as one string, and the
-  action hands it the whole `git diff`. Most rules fire on a single match, so that was harmless — but
-  two need a PAIR of signals (`pwn-request`: privileged trigger + PR-HEAD checkout;
-  `detached-process-spawn`: detached spawn + `child_process`), and a whole-blob read let those pair
-  ACROSS FILES. A `workflow_run:` added to one workflow plus a `ref: ${{ ... head.sha }}` sitting in a
-  doc example, a test fixture, or the very workflow a change is *deleting*, composed into a `critical`
-  that no single file contained. The new `scan_diff` splits a unified diff on its file headers and
-  scans each segment on its own; non-diff input (a region the planner pulled out of the REPL, a plain
-  file) falls through to the previous whole-text scan. Used by `scan` and by the in-loop
-  `scan_indicators` tool.
-- **The host-side baseline is scoped per file too, via `scan_content`.** An event is not a unified diff:
-  `raw_content` concatenates the title, every `(filename, patch)` and the body with no `diff --git`
-  headers, so pointing the baseline at `scan_diff` would have scoped nothing at all. `scan_content`
-  splits on the structure the event already carries — and gives hits from a file that file's name. The
-  case is not hypothetical: a PR that adds a `workflow_run` workflow AND documents the trap in the same
-  commit is what a careful repo writes, and read as one blob it came out `critical`. `content_segments`
-  is now the single definition `raw_content` is built on, so the two cannot drift, and the
-  detection-quality corpus was moved onto the production path so it guards what actually ships.
+- **Paired rules (`pwn-request`, `detached-process-spawn`) only pair signals from the same file**, in both
+  the in-loop `scan_indicators` tool and the host-side baseline, so two unrelated files can no longer
+  compose a `critical` that neither contains.
 
 ### Changed
-- **`astral-sh/setup-uv` bumped to v10.0.1** (from v5.4.2) and **`actions/checkout` to v7**, both for
-  the Node 24 runtime — between them they clear GitHub's Node 20 deprecation warning. The setup-uv bump
-  covers `action.yml` too, so it reaches every repo running this action, not just this one's CI. Five
-  majors in one
-  jump, so what actually applies here was checked: v8 stopped publishing major tags (this repo already
-  SHA-pins), v9 flipped the `prune-cache` default, and v10 disables caching for `release` /
-  `workflow_run` / `pull_request_target` events under `enable-cache: auto` — CI passes `enable-cache:
-  true` explicitly and keeps its cache, and the release job never wanted one.
-
-  checkout v7 also **blocks checking out a fork PR head under `pull_request_target` / `workflow_run`** —
-  the `pwn-request` shape this project exists to detect, now refused by the action itself. Nothing here
-  checks out a PR head, so the bump is behaviour-neutral for these workflows and strictly better posture
-  for a detector to be running.
+- **`astral-sh/setup-uv` v10.0.1 and `actions/checkout` v7**, for the Node 24 runtime; the setup-uv bump
+  also applies inside `action.yml`, so repos running the action stop seeing the Node 20 deprecation
+  warning.
 
 ### Added
-- **`pwn-request` covers `allow-unsafe-pr-checkout: true`.** actions/checkout v5.1/v6.1/v7 refuse to
-  check out a fork PR head under `pull_request_target` / `workflow_run` unless a workflow opts back in
-  with that input. The opt-in is the same attack stated in words — no ref to trace, no dataflow to
-  infer — so it joins the `ref:` value and the hand-rolled `git fetch` as the rule's third form, with
-  its own title so a reader is not sent hunting for a `ref:` that is not there. It only counts under a
-  privileged trigger (beneath `pull_request` the input carries none of that meaning), a removed opt-in
-  does not fire, and neither does an explicit `false`.
-- **Hits name the file they came from.** `location` was the name of the whole diff — `gated.diff` for
-  every hit, which meant reading the raw log to find out where a finding actually was. Per-file
-  scanning gives each hit its real path.
-- **A hit id is now stable between a whole-diff scan and a single-file scan.** The segment the planner
-  pulls out is byte-identical to the one the baseline scanned, so the evidence snippets — and therefore
-  the ids — match, and the two de-duplicate to one union member on read. Whole-blob scanning could not
-  promise that: the snippet window moved with the byte offset.
+- **`pwn-request` flags `allow-unsafe-pr-checkout: true` under a privileged trigger** as its third
+  checkout form, with its own title; an explicit `false`, a removed opt-in, or a plain `pull_request`
+  trigger does not fire.
+- **Each hit names the file it came from** instead of the whole diff.
+- **A hit id is the same whether the diff was scanned whole or one file at a time**, so the baseline and
+  an in-loop re-scan de-duplicate to one piece of evidence.
 
 ## 0.4.1
 
-A correctness release for one rule: `pwn-request` was failing the very pattern this
-project's README tells people to use.
-
 ### Changed
-- **`pypa/gh-action-pypi-publish` bumped to v1.14.2** (from v1.14.0). `uv build` now emits core
-  metadata 2.5, and the twine bundled in v1.14.0 rejects it — `InvalidDistribution: '2.5' is not a
-  valid metadata version` — so the first attempt at this release built cleanly and then failed at
-  the upload step. v1.14.2 carries Twine 7, which accepts metadata 2.5.
+- **`pypa/gh-action-pypi-publish` v1.14.2**, whose Twine 7 accepts the core metadata 2.5 that `uv build`
+  now emits.
 
 ### Fixed
-- **`pwn-request` no longer fires on a workflow that merely READS the PR head.** The rule paired a
-  privileged trigger with a PR-HEAD *mention* anywhere in the text and called that a checkout, so the
-  validating-publisher shape — `workflow_run`, head SHA in an env var, checkout pinned to the default
-  branch — was graded `critical`, identically to the attack. That is the shape README.md tells people to
-  use, next to the sentence "diff-sentry's own rules make the same distinction, so the safe shape does
-  not trip them"; it did trip them. Escalation now requires the expression to actually reach a checkout:
-  an `actions/checkout` `ref:` value, or a `git checkout`/`git fetch`/`gh pr checkout` command. A bare
-  mention keeps the sub-floor `medium` `privileged-fork-trigger`, cited at the reference rather than the
-  trigger line so a reviewer still lands on the spot worth reading. Found by running the action against
-  a real publisher workflow.
-- **`pwn-request` now follows one binding hop.** `HEAD: ${{ github.event.pull_request.head.sha }}`
-  followed by `ref: ${{ env.HEAD }}` is the same attack split across two lines. Requiring the expression
-  to sit on the `ref:` line would have turned the fix above into a free bypass, so a name bound to the
-  head expression is tracked and a `ref:` that reads it counts as the checkout.
-- **`refs/pull/…` matching tolerates interpolation.** `refs/pull/${{ github.event.number }}/head` — the
-  form that actually appears in the wild — was missed, because the character class stopped at the space
-  inside the expression. A hand-rolled `git fetch` of the PR head is caught now.
+- **`pwn-request` fires only when the PR-head expression reaches a checkout** (an `actions/checkout`
+  `ref:` or a `git checkout` / `git fetch` / `gh pr checkout` command), so the safe `workflow_run`
+  publisher shape the README recommends stays at the sub-floor `privileged-fork-trigger`.
+- **`pwn-request` follows one binding hop**, catching a head SHA bound to a name and then used as
+  `ref: ${{ env.HEAD }}`.
+- **A hand-rolled fetch of `refs/pull/${{ github.event.number }}/head` is detected.**
 
 ## 0.4.0
 
-The first release, and a repositioning: the front door is now a GitHub Action anyone installs in fifteen
-lines, with the trajectory/studio/fine-tuning half kept as the second goal for people who run the
-infrastructure themselves.
+The first release, led by a GitHub Action anyone can install; the local model pipeline, studio and
+trajectory export remain for teams that run that infrastructure.
 
 ### Added
-- **Ships as a GitHub Action** (`action.yml`, a composite action at the repo root, which is what
-  Marketplace requires). Inputs `fail-on` / `report-only-paths` / `base-sha` / `version`; outputs
-  `failed` / `hit-count` / `max-severity` / `report`. It runs the DETERMINISTIC scan, never the model
-  pipeline, and that is the load-bearing choice: `classify` needs `DS_*` creds, and the only mechanism
-  that puts creds into a fork PR's run is `pull_request_target` — the exact misconfiguration that opened
-  the AsyncAPI "Miasma" compromise and that this action reports as `critical`. The scan needs no creds,
-  no network and no Deno, so it runs under the read-only token a fork PR already gets. `report-only-paths`
-  is an input rather than a fixed list because the paths that legitimately carry attack patterns differ
-  per repo. The README documents the safe way to comment back on a fork PR (artifact plus a `workflow_run`
-  job that never checks out the PR head), because shipping a detector whose own docs recommend the hole it
-  detects would distribute that hole at scale.
-- **`scan` subcommand** (`cli._cmd_scan`) — the deterministic half standalone, with no model, network,
-  creds or Deno. `--fail-on` defaults to `SIGNAL_SEVERITY_FLOOR`, so the CI gate honours the same tuning a
-  SIEM signal derives from and a plain workflow edit (`medium`, on purpose) does not fail a build.
-  `--json` for machine consumption, `--include-deletions` to audit what a change removed.
-- **A `diff-sentry` console entry point** (`[project.scripts]`). There was none, so `uvx diff-sentry` —
-  the exact command the Action runs — could not have worked at all.
-- **Ten indicator rules covering the Miasma families.** Reconstructing that chain stage by stage found
-  seven of its eight stages passing the suite silently, because the rules were shell- and YAML-shaped
-  while the attack was Node end to end. Added: `pwn-request` (critical) and `privileged-fork-trigger`
-  (medium) for workflow CONFIGURATION as distinct from `workflow-tamper`'s "was a workflow touched";
-  `diff-viewport-evasion` and `invisible-unicode` for payloads aimed at the human reading the diff;
-  `detached-process-spawn`, `inline-code-exec` and `remote-fetch-to-disk` for Node execution primitives;
-  `obfuscated-identifiers` for `_0x…` mangling that base64 detection cannot see; `dynamic-code-eval` and
-  `content-addressed-host` (IPFS/permaweb) as sub-floor corroborators. The tuning is the load-bearing
-  part: rules that would be noisy alone require two halves to fire, and every rule ships with its negative
-  case. Corpus grows by nine entries (six malicious families, three benigns pinning the sub-floor tiers).
-- **`self-scan` CI job** — this repo runs the Action it publishes (`uses: ./`, `version: local`), so every
-  PR is an integration test of what users install, scanned by the rules in that PR rather than the ones
-  already on main. It caught a real defect on its first run.
-- **`release.yml`** — PyPI publish over OIDC Trusted Publishing, no API token, with a fork guard on the
-  publish job. It verifies the ARTIFACT rather than the checkout: the built wheel is installed into a
-  clean environment, the console script must actually flag a known-malicious diff, and the tag, the wheel
-  filename and the installed `__version__` must all agree before an irreversible upload.
+- **diff-sentry ships as a GitHub Action** (`action.yml`, with inputs `fail-on`, `report-only-paths`,
+  `base-sha`, `version` and outputs `failed`, `hit-count`, `max-severity`, `report`) that runs only the
+  deterministic scan, so it needs no credentials, network or Deno and runs safely on fork PRs under the
+  read-only token.
+- **A `scan` subcommand and a `diff-sentry` console entry point** run the deterministic scan standalone;
+  `--fail-on` defaults to the SIEM signal floor, with `--json` and `--include-deletions` options.
+- **Ten indicator rules for the Miasma attack families**: `pwn-request`, `privileged-fork-trigger`,
+  `diff-viewport-evasion`, `invisible-unicode`, `detached-process-spawn`, `inline-code-exec`,
+  `remote-fetch-to-disk`, `obfuscated-identifiers`, and the sub-floor corroborators `dynamic-code-eval`
+  and `content-addressed-host`, each with a negative case in the corpus.
+- **A `self-scan` CI job** runs this repo's own Action on every PR.
+- **`release.yml` publishes to PyPI through OIDC Trusted Publishing** after installing the built wheel
+  cleanly and checking that the tag, wheel filename and `__version__` agree.
 
 ### Changed
-- **`rlm-kit` → `rlm-harness`, pinned to `==1.0.0` from PyPI.** The `[tool.uv.sources]` git pointer is
-  gone, so nothing in the dependency closure resolves outside PyPI any more — which is what made
-  publishing this package possible at all. Imports move to `rlm_harness`.
-- **The rubric adopts the harness's own primitives** (`rlm_harness.rubric`), with `schema` re-exporting
-  `Criterion` / `CriterionFact` / `RubricCriteria` for back-compat.
-- **README and package description lead with the Action**, and the local pipeline, studio console,
-  trajectory export and fine-tuning path are framed as the second goal rather than the premise.
-- **`uv sync` default-installs the `subscription-sdk` dev group**, so a bare sync stops pruning the Claude
-  Agent SDK out of the shared dev venv.
-- **ruff pinned to `0.16.0`** in CI. `uvx ruff` resolves the latest release at run time and ruff's default
-  rule set is not a stable contract, so an unpinned lint job goes red overnight with no code change.
+- **`rlm-kit` is replaced by `rlm-harness==1.0.0` from PyPI**; imports move to `rlm_harness`.
+- **The rubric uses `rlm_harness.rubric`**, and `schema` still re-exports `Criterion`, `CriterionFact`
+  and `RubricCriteria`.
+- **The README and package description lead with the Action.**
+- **A bare `uv sync` installs the `subscription-sdk` dev group**, keeping the Claude Agent SDK in the dev
+  environment.
+- **CI pins ruff to `0.16.0`.**
 
 ### Fixed
-- **`scan` no longer flags what a diff deletes.** A unified diff carries removed code as well as added
-  code, and the detectors read plain text, so scanning a raw diff flagged a change for the payload it was
-  DELETING — the worst failure mode a security gate can have, since it turns every remediation commit red.
-  `-` lines are dropped by default; `---` file headers survive and non-diff input is untouched.
-- **The CI self-scan no longer fails on its own explanatory comment.** The comment describing "our files
-  carry attack patterns as their job" quoted two payload shapes verbatim, and `.github/` is in the gated
-  half, so the commit that introduced the gate failed it. Confirmed as a real red CI run, not a
-  hypothetical.
+- **`scan` ignores lines a diff deletes by default**, so a commit that removes a payload is not flagged
+  for it.
 
 ## 0.3.0
 
 ### Added
-- **An ungroundable input yields a principled `inconclusive`, never a confident verdict.** A content-free
-  / unfetchable / not-actually-a-change input (an empty `{}` payload normalizes to `(no textual content)`)
-  used to still ship a confident `benign, confidence 0.9`. Now `inconclusive` is a SANCTIONED SUBMIT
-  outcome — a 4th `verdict` value (`schema.INCONCLUSIVE_VERDICT`, `SUBMIT_VERDICTS`): the classifier
-  prompt sanctions it explicitly (only for a change with no assessable content — NOT an escape hatch for a
-  hard-but-real change), and the second-stage `deep_classify` enum validator accepts it. `response` maps
-  it to `status="inconclusive"` + `RefusalInfo(reason="insufficient_evidence")` (the pre-existing
-  inconclusive envelope, previously unreachable). A host-side deterministic BACKSTOP
-  (`normalize.has_groundable_content` over the run's normalized `event`) DOWNGRADES even a confident
-  verdict to inconclusive when there is no groundable content — defense-in-depth, read-time. It rides the
-  reward-free trajectory as an `inconclusive` OUTCOME label (`rl_export.run_labels`, mirroring the
-  clean-negative idea) — a FACT, never a score/reward. The DETERMINISTIC SIEM half is untouched:
-  `inconclusive` is not in `emit_on`, so a real high/critical indicator still forces a signal on its own.
-- **Studio: an unrecognized `tool_call` renders its short scalar fields instead of an empty step, and the
-  future harness swap keeps its child-rollout link.** The drawer mapper (`iterations._tool_entry`), the
-  SSE mapper (`mapper.to_event` — which previously DROPPED an unknown tool from the live feed, now emits a
-  generic `detection.tool` event), and the frontend fallback (`trajectory.js` detail + a generic
-  icon/`fam-tool` family) all surface an unknown tool's short scalar payload fields (tool, ok, and any
-  short string/number fields; bulky raw/preview/spec/hits dropped) as kv rows — never a bare "no detail
-  recorded" when fields exist. And `deep_classify.record_tool_call` now attaches `child_run_id` /
-  `child_trace` / `child_meta` when the second-stage result carries them (guarded — a NO-OP for today's
-  `self` backend, correct for the documented future `make_harness_tool` swap so the parent→child rollout
-  link survives the recording step).
+- **An input with no assessable content yields `inconclusive`** (`status="inconclusive"`,
+  `reason="insufficient_evidence"`) instead of a confident verdict, enforced by a host-side backstop and
+  exported as a reward-free `inconclusive` label; hard indicator evidence still forces a SIEM signal.
+- **The studio shows the short fields of an unrecognized tool call** in the drawer, the live feed and the
+  trajectory view instead of an empty step, and `deep_classify` keeps a child-rollout link when its
+  backend returns one.
 
 ## 0.2.1
 
 ### Fixed
-- **The studio launches on a subscription with the SAME command as every rlm-harness sibling.** The studio
-  member (`diff-sentry-studio`) was missing a forwarding `subscription` extra, so
-  `uv run --package diff-sentry-studio --extra live --extra subscription uvicorn …` was rejected — a
-  studio-scoped `uv` command resolves extras against the MEMBER, not the root, and the Claude Agent SDK
-  extra lived only on the root. Added `subscription = ["diff-sentry[subscription]"]` to
-  `studio/pyproject.toml` (mirroring the sibling harnesses) + a "Subscription mode" section to the studio
-  README. Closes a cross-downstream drift (same gap fixed in the siblings); the paired-extras convention
-  is documented in rlm-harness's "Building a consumer" guide.
-- **`/v1/config` never surfaces a subscription analyst as the classifier (a config a run couldn't use).**
-  The classifier falls back to the analyst (`DS_CLASSIFIER_LM or DS_SUB_LM`), but the classifier is a
-  `make_model_tool` endpoint and `from_env` REJECTS a subscription classifier — so with `DS_CLASSIFIER_LM`
-  unset and `DS_SUB_LM` a `claude-agent-sdk/…` sentinel, the panel showed a classifier model no run could
-  use. Guard it (`_role_or_none`): fall back to the analyst only when it's a real (non-subscription)
-  model, else `None`; the analyst role itself still shows through. Same class swept from the sibling
-  studios. Studio test added.
+- **The studio starts on a subscription with the same command as the sibling harnesses**, through a new
+  `subscription` extra on `diff-sentry-studio`.
+- **`/v1/config` no longer shows a subscription analyst as the classifier**, since no run can use one.
 
 ## 0.2.0
 
 ### Added
-- **Run the planner + analyst on a Claude Pro/Max SUBSCRIPTION** (no API key). Give `DS_ROOT_LM` /
-  `DS_SUB_LM` a `claude-agent-sdk/<model>` value and that role runs on your personal Claude login
-  through rlm-harness's `rlm_harness.ClaudeAgentLM` (a `dspy.BaseLM` over `claude-agent-sdk`), injected via
-  rlm-harness's `configure(main_lm=, sub_lm=)` seam. Each call is a pure completion — no tools, no
-  filesystem, no settings leakage — so the sandbox stays the only place code runs. Opt-in extra:
-  `uv sync --extra subscription` (installs the Claude Agent SDK the adapter needs); requires the Claude
-  Code CLI logged in and `ANTHROPIC_API_KEY` unset (the adapter refuses to start otherwise). The adapter
-  ships in the rlm-harness wheel behind its own `[subscription]` extra (promoted out of `examples/` —
-  diff-sentry no longer vendors it). Imported lazily via `from rlm_harness import ClaudeAgentLM` (only in
-  `detect.setup()`'s sentinel branch) so `import diff_sentry` stays dspy-free and a proxy-only install
-  never pulls the extra. A sentinel-configured run in an env that never installed the extra fails LOUD
-  with an actionable error naming `uv sync --extra subscription` (`uv lock` records the extra; only sync
-  installs it).
-- **Studio: a page-height three-view stage.** The middle column is ONE verdict-alloy card filling a
-  viewport-height grid — all three columns are independent scroll tracks (feed / card / modules; the
-  page itself never scrolls, the family pattern), a sticky head keeps the view switch reachable, and
-  long attacker-influenced tokens wrap instead of being clipped by the module frame — with a top-right
-  **Verdict / Indicators / Change** switch in triage order — Indicators always reachable, refusal
-  included. Run telemetry leads the right column (the sibling-console convention); the header's
-  `backend:self` chip is gone (API-only metadata now). The Change view is **trace-backed** for pr/issue
-  and replayed runs (their diff never reaches the client): it lazily reads the run's own `run_start`
-  event via `GET /v1/runs/{id}/iterations` — the exact normalized untrusted content the planner saw —
-  through a pure, unit-tested view-state core (`run-core.js:planChangeView`) that can never wedge on
-  loading and never reports a transient fetch error as a gone trace. A `[hidden]`-attribute CSS guard
-  (with a static contract test) fixes the mode panes and the Trajectory handle rendering while hidden.
-- **The classifier ALWAYS stays on its own OpenAI-compatible endpoint**, never the subscription (mixed
-  auth by design). `config.from_env` now REJECTS a `claude-agent-sdk/…` classifier model — set either
-  explicitly (`DS_CLASSIFIER_LM`) or inherited from a subscription `DS_SUB_LM` when `DS_CLASSIFIER_LM`
-  is unset — with an actionable error: `deep_classify` uses an OpenAI client (not the Agent SDK), the
-  tool is ALWAYS registered, and a latent bogus-model-id failure mid-trajectory would burn the one
-  hard-budget attempt (`max_retries=1`). A subscription-only end-to-end run is therefore not supported.
+- **The planner and analyst can run on a Claude Pro/Max subscription** by setting `DS_ROOT_LM` /
+  `DS_SUB_LM` to `claude-agent-sdk/<model>`; this needs `uv sync --extra subscription`, a logged-in
+  Claude Code CLI and no `ANTHROPIC_API_KEY`.
+- **The studio has a page-height, three-column layout with a Verdict / Indicators / Change switch**,
+  and the Change view reads the normalized content from the run's own trace.
+
+### Changed
+- **The classifier must stay on an OpenAI-compatible endpoint**: `config.from_env` rejects a
+  `claude-agent-sdk/…` classifier, set directly or inherited from `DS_SUB_LM`, so a subscription-only
+  run is not supported.
 
 ## 0.1.0
 
-The initial consumer: classify → judgement-only verdict (`ChangeVerdict`, no hits field) →
-deterministic-evidence union on read (`assemble_verdict`, MF3) → response → host-side SIEM signal →
-reward-free trajectory export, fully offline-testable (DummyLM / ScriptedInterpreter / injected fakes;
-the detection-quality corpus pins the indicator suite's hit/miss behavior). Includes the metadata
-sandwich (MF1), the GitHub-allowlisted opt-in enrichment fetch (MF2), the in-loop-safe pure-Python
-indicator suite, the `deep_classify` second-stage seam, progressive-disclosure attack skills, the
-offline hackerbot-claw incident reproduction, and the in-repo studio console (a uv workspace member).
+The initial release: classify a change into a judgement-only verdict, union the deterministic indicator
+evidence on read (MF3), build the response, emit the SIEM signal host-side, and export reward-free
+trajectories, all testable offline. Includes the metadata sandwich (MF1), the GitHub-allowlisted opt-in
+enrichment fetch (MF2), the pure-Python indicator suite, the `deep_classify` second-stage seam,
+progressive-disclosure attack skills, an offline hackerbot-claw reproduction, and the studio console.

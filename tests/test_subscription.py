@@ -67,7 +67,7 @@ def test_from_env_planner_only_subscription_ok(monkeypatch):
 
 
 def test_from_env_proxy_path_unchanged(monkeypatch):
-    """No sentinel anywhere → the classifier still defaults to the analyst (byte-identical to before)."""
+    """No sentinel anywhere → the classifier defaults to the analyst."""
     _clearenv(monkeypatch)
     monkeypatch.setenv("DS_ROOT_LM", "openai/gpt-4o")
     monkeypatch.setenv("DS_SUB_LM", "openai/gpt-4o")

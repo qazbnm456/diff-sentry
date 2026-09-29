@@ -94,9 +94,7 @@ def run_live(
         _cli_run = cli_run
         if _cli_run is None:
             from diff_sentry.cli import run as _cli_run
-        # diff-sentry writes artifacts to `outdir`-relative paths (no chdir hack needed, unlike the
-        # siblings); point it at the studio's artifacts dir so live artifacts land where the GET endpoints
-        # read them. emit=False: the studio never POSTs to a real SIEM.
+        # `outdir` = the studio's artifacts dir, so live artifacts land where the GET endpoints read them.
         arts = _cli_run(event, run_id=run_id, outdir=str(artifacts_dir or "./output"),
                         on_event=trace_event_sink(sink), emit=False)
         on_done(_final_response(arts, run_id, build_failed_response))
@@ -124,8 +122,8 @@ def _describe_exc(exc: BaseException) -> str:
     opaque "Failed to produce a valid 'result' after N attempts"; the real reason (a planner-endpoint
     error, an adapter parse failure) is on `__cause__`. Surfacing it stops an infra hiccup from reading
     like a content/schema problem (diff-sentry's own AGENTS.md: a failed run is infra before it is a
-    schema bug). A non-retryable LM error (rlm-harness >= 1.2.1) arrives unwrapped as the raw
-    `dspy.LMError` subclass, so its own class name already says "fix the credential"."""
+    schema bug). A non-retryable LM error arrives unwrapped as the raw `dspy.LMError` subclass, so its
+    own class name already says "fix the credential"."""
     out = f"{type(exc).__name__}: {exc}"
     cause = exc.__cause__ or exc.__context__
     if cause is not None and cause is not exc:

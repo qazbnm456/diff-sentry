@@ -31,11 +31,11 @@ def test_score_run_unscored_when_never_finalized(no_result_events, demo_task):
     assert "never finalized" in row.unscored_reason
 
 
-def test_score_run_unscored_when_no_usable_verdict(inconclusive_events, demo_task):
-    row = score_run(inconclusive_events, demo_task, stub_judge)
+def test_score_run_unscored_when_no_usable_verdict(empty_verdict_events, demo_task):
+    row = score_run(empty_verdict_events, demo_task, stub_judge)
     assert row.unscored and row.score is None
-    assert "inconclusive" in row.unscored_reason or "no usable verdict" in row.unscored_reason
-    assert build_judge_inputs(inconclusive_events, demo_task) is None   # nothing to judge
+    assert "without a usable verdict" in row.unscored_reason
+    assert build_judge_inputs(empty_verdict_events, demo_task) is None   # nothing to judge
 
 
 def test_score_run_unscored_when_the_judge_fails(scored_events, demo_task):

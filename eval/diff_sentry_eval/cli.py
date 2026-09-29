@@ -8,8 +8,9 @@ stack (DS_* creds + a Deno sandbox), imported lazily so `score` never pulls it. 
 JSON path or the literal `demo` (the built-in offline set). Runs pair to tasks by run_id == task id.
 
 The judge: live iff DSEVAL_MODEL is set (DSEVAL_BASE_URL/API_KEY/TIMEOUT alongside), else the deterministic
-stub; `--stub` forces the stub. Everything is written under --out (default ./output/eval) — never into
-traces/ responses/. The report is a measurement, never a reward.
+stub; `--stub` forces the stub. Output goes under --out (default ./output/eval): `report.json`, plus, for
+`run`, each run's traces/ and responses/ as `diff_sentry.cli.run` writes them. The report is a measurement,
+never a reward.
 """
 
 from __future__ import annotations

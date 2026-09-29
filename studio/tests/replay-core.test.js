@@ -10,7 +10,7 @@ function test(name, fn) {
   catch (e) { failed++; console.error("  FAIL " + name + "\n       " + e.message); }
 }
 
-// ---- the timing math (the resume / speed-change correctness the churn was about) ----
+// ---- the timing math (resume / speed-change correctness) ----
 test("dwellMs: faithful (real − elapsed) ÷ speed", () => {
   assert.strictEqual(RC.dwellMs(38000, 0, 2), 19000);       // 38s real at 2× → 19s dwell
   assert.strictEqual(RC.dwellMs(38000, 20000, 4), 4500);    // 20s consumed → 18s left at 4× → 4.5s
@@ -33,7 +33,7 @@ test("realMsFor: turn → real duration (only when live); else nominal", () => {
   assert.strictEqual(RC.realMsFor({ kind: "init", index: 0 }, its, true), RC.NOMINAL_REAL_MS);
 });
 
-// ---- the stop walk / start resolution (the state-sync bugs were here) ----
+// ---- the stop walk / start resolution ----
 test("buildStops + stopIndex: Init + turns; a tool is not a stop", () => {
   const stops = RC.buildStops([{ index: 0 }, { index: 1 }, { index: 2 }]);
   assert.deepStrictEqual(stops, [
@@ -61,7 +61,7 @@ test("nextStop: advance, or null at the end / off-list", () => {
   const stops = RC.buildStops([{ index: 0 }]);   // [init, t0]
   assert.deepStrictEqual(RC.nextStop(stops, 0), { kind: "turn", index: 0 });
   assert.strictEqual(RC.nextStop(stops, 1), null);    // last → end
-  assert.strictEqual(RC.nextStop(stops, -1), null);   // off-list (would have stalled the replay) → end
+  assert.strictEqual(RC.nextStop(stops, -1), null);   // off-list → end (never stalls the replay)
 });
 
 console.log(failed ? "\n" + failed + " test(s) FAILED" : "\nall passing");

@@ -2,8 +2,8 @@ name: CI
 
 # Offline suite only: no live LLM, no network calls in tests, no Deno sandbox — dspy-bearing paths use
 # DummyLM / rlm-harness's ScriptedInterpreter, transports are injected fakes, and the corpus pins the
-# indicator suite's hit/miss behavior (see AGENTS.md "Verify"). `uv sync` pulls rlm-harness from GitHub
-# (uv.lock pins the exact commit).
+# indicator suite's hit/miss behavior (see AGENTS.md "Verify"). `uv sync` resolves rlm-harness from PyPI
+# at the exact version pinned in pyproject.toml / uv.lock.
 on:
   push:
     branches: [main]
@@ -39,7 +39,7 @@ jobs:
         with:
           enable-cache: true
 
-      # --all-packages brings in the studio workspace member, --all-extras every optional surface
+      # --all-packages brings in the studio and eval workspace members, --all-extras every optional surface
       # (classify/observe/subscription + the studio dev extra) so both suites resolve in one env.
       - name: Sync (core + studio workspace)
         run: uv sync --all-extras --all-packages --python ${{ matrix.python-version }}
@@ -50,8 +50,8 @@ jobs:
       - name: Studio console tests
         run: uv run --python ${{ matrix.python-version }} python -m pytest studio/tests
 
-      # The eval workspace member (diff-sentry-eval) — its OWN offline suite: the reward-free ATLAS
-      # scorecard, stub judge, synthetic traces, no creds. `--all-packages` above already installed it.
+      # The eval workspace member (diff-sentry-eval) has its OWN offline suite: the reward-free ATLAS
+      # scorecard, stub judge, synthetic traces, no creds.
       - name: Eval scorecard tests
         run: uv run --package diff-sentry-eval --python ${{ matrix.python-version }} python -m pytest eval/tests
 
@@ -89,7 +89,7 @@ jobs:
           # tabulate all of the above. Scanning those against our own rules is a guaranteed self-hit
           # (the pipe-to-shell example inside detect.INSTRUCTIONS and the field-separator token quoted
           # in README's rule table both fire), so they are reported without gating while the machinery
-          # and the build/CI/dependency surface stay enforced. Note this file is in the GATED half:
+          # and the build/CI/dependency surface stay enforced. This file is in the GATED half:
           # describe a payload shape here, never quote one.
           report-only-paths: |
             diff_sentry/indicators.py
@@ -121,12 +121,11 @@ jobs:
           ver=$(uv run --no-project --with pyyaml python -c \
                 "import yaml;print(yaml.safe_load(open('action.yml'))['inputs']['version']['default'])")
           echo "action.yml default version: $ver"
-          # The fixture lives under tests/ (a report-only path) rather than inline here. This file is in
-          # the GATED half, so a payload written into it fails our own scan -- which is exactly what
-          # happened to the first version of this job. Payload samples belong where payloads are allowed.
+          # The fixture lives under tests/ (a report-only path) rather than inline here: this file is in
+          # the GATED half, so a payload written into it fails our own scan.
           # FIRST prove the install. `scan` exits 1 when it flags, and uvx ALSO exits 1 when it cannot
           # resolve `diff-sentry==${ver}` -- so the negative check below cannot tell "flagged" from "never
-          # installed". This job passed GREEN on the 0.4.3 release commit while PyPI had no 0.4.3 yet.
+          # installed" (e.g. a release commit whose version is not on PyPI yet).
           got=$(uvx "diff-sentry==${ver}" --version)
           echo "installed: $got"
           case "$got" in *" ${ver}") ;; *) echo "::error::expected version ${ver}, got '$got'"; exit 1;; esac
@@ -147,8 +146,7 @@ jobs:
           enable-cache: true
       - name: Lint
         # PINNED on purpose. `uvx ruff` resolves the latest release at run time, and ruff's DEFAULT
-        # rule set is not a stable contract — 0.16 expanded it far past the pycodestyle/pyflakes
-        # baseline, which would have turned this job red on the next push with no code change. Bump
-        # it deliberately, with the resulting fixes in the same commit, rather than letting a
-        # release do it for you.
+        # rule set is not a stable contract (0.16 widened it well past the pycodestyle/pyflakes
+        # baseline), so an unpinned run can turn this job red with no code change. Bump it
+        # deliberately, with the resulting fixes in the same commit.
         run: uvx ruff@0.16.0 check .
