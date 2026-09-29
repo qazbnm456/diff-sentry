@@ -79,10 +79,10 @@ def to_event(trace_event: dict) -> dict[str, Any] | None:
             "has_code": bool(p.get("code")),
         })
     if t == "sub_call":
-        return _ev("detection.analyst.escalation", {
-            "question": p.get("input"),
-            "answer": p.get("processed") or p.get("raw"),
-        })
+        data = {"question": p.get("input"), "answer": p.get("processed") or p.get("raw")}
+        if p.get("error"):
+            data["error"] = p["error"]                   # an escalation the provider refused
+        return _ev("detection.analyst.escalation", data)
     if t == "result":
         return _ev("detection.result.done", {})          # signal — client GETs the full response
     if t == "run_end":

@@ -69,7 +69,7 @@ endpoint that event carries the full response, and the UI then re-`GET`s `/v1/ru
 | `tool_call: fetch_url` | `detection.fetch` | `{url, ok, status, bytes, note}` (fetch is off by default) |
 | `tool_call: read_skill`/`list_skills` | `detection.skill.read` | `{name}` |
 | `tool_call` (any other tool) | `detection.tool` | `{tool, ok, fields}` (short scalar payload fields only) |
-| `sub_call` (analyst) | `detection.analyst.escalation` | `{question, answer}` |
+| `sub_call` (analyst) | `detection.analyst.escalation` | `{question, answer}`, plus `error` when the provider refused |
 | `result` | `detection.result.done` | `{}` (replay only) |
 | `run_end` | `detection.run.completed` | the `DetectionResponse` (live) / `{}` (replay) |
 

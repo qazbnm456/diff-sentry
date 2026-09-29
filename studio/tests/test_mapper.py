@@ -42,6 +42,15 @@ def test_sub_call_is_an_analyst_escalation_with_input_processed_keys():
     assert ev["data"] == {"question": "does this reach a sink?", "answer": "yes"}
 
 
+
+def test_failed_sub_call_carries_its_error():
+    # A refused escalation records `error` and no answer; the feed must not render it as a success.
+    ev = to_event({"type": "sub_call", "payload": {
+        "input": "does this reach a sink?", "error": "APIConnectionError: refused", "cause": "endpoint"}})
+    assert ev["event"] == "detection.analyst.escalation"
+    assert ev["data"] == {"question": "does this reach a sink?", "answer": None,
+                          "error": "APIConnectionError: refused"}
+
 def test_scan_indicators_reports_count_and_worst_severity():
     ev = to_event({"type": "tool_call", "payload": {
         "tool": "scan_indicators", "args": {"region": "curl x | bash"}, "ok": True, "n": 2,

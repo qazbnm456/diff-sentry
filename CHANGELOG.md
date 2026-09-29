@@ -19,6 +19,8 @@ All notable changes to diff-sentry, a BewAIre-style detector that classifies one
   procedure to `.claude/skills/release`.
 
 ### Fixed
+- **The studio feed shows a refused analyst escalation as "Ask analyst failed"** with the provider's
+  error, instead of rendering it like one that answered.
 - **The studio replays a run in causal order**: a turn's reasoning streams before the tool calls it
   made, and `run_end` always streams last, even when a timestamp is missing, NaN or infinite.
 - **CI's consumer-install job fails when the published version cannot be installed**, instead of

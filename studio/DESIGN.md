@@ -101,7 +101,8 @@ primary line, a right-meta. Families:
 - `detection.scan`: radar, tinted by the worst severity (label **Scan** · meta `N hits · worst`)
 - `detection.classify`: `--ok` when validated, `--warn` when not; `--bad` with label
   **Deep classify · circuit broke** or **Deep classify · error** (meta `verdict conf`, or the error)
-- `detection.analyst.escalation`: `--analyst` (label **Ask analyst**, the question as detail)
+- `detection.analyst.escalation`: `--analyst` (label **Ask analyst**, the question as detail); a refused
+  escalation is `--bad` (label **Ask analyst failed**, the error as detail)
 - `detection.fetch`: download, `--signal` (label **Fetch** · meta `200 · 4.5 KB`); failure → **Fetch
   failed** in `--bad` with the note
 - `detection.skill.read`: book, `#7d8fb3` (label **Read skill** · meta the skill name)
