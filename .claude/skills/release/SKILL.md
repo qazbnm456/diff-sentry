@@ -26,7 +26,12 @@ check it by hand.
    breaking changes and required actions explicit, no debugging story.
 3. Bump sites 1–4, run `uv lock`, then verify: `uv run pytest`, the eval suite
    (`uv run --package diff-sentry-eval --extra dev python -m pytest eval/tests`), `uvx ruff check .`.
-4. Commit (`chore: release X.Y.Z`) and push to `main` once the user approves.
-5. Publishing a GitHub Release tagged `vX.Y.Z` (with "Publish this Action to the GitHub Marketplace"
-   ticked) is what builds, verifies, and uploads to PyPI via Trusted Publishing. The upload is
-   irreversible; confirm with the user before publishing.
+4. Commit (`chore: release X.Y.Z`) and push to `main` once the user approves. CI's `consumer install
+   path (PyPI)` job then goes RED on this commit, by design: it installs `action.yml`'s default version
+   from PyPI, which does not exist until step 5. Every other job must be green before you continue.
+5. Create a DRAFT release (`gh release create vX.Y.Z --draft --target <release sha> --title … --notes-file
+   …`, notes = the CHANGELOG section). The user publishes it in the web UI with "Publish this Action to
+   the GitHub Marketplace" ticked (the CLI cannot tick it). Publishing is what builds, verifies, and
+   uploads to PyPI via Trusted Publishing, and the upload is irreversible.
+6. After `release.yml` succeeds, re-run the failed consumer-install job
+   (`gh run rerun <ci run id> --failed`); green proves the published package installs and scans.
