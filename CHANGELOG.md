@@ -3,6 +3,26 @@
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change
 (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## Unreleased
+
+### Changed
+- **`rlm-harness==1.11.2`**: each exported action's `state` lists its prior actions in causal order
+  (interleaved by time) instead of write order; labels, metrics, rubric facts and the SIEM signal are
+  unchanged.
+- **The agent guide is `AGENTS.md` (formerly `CLAUDE.md`)**, which Claude Code 2.1.277+ and other coding
+  agents read natively. Area-specific invariants moved to path-scoped `.claude/rules/`, and the release
+  procedure to `.claude/skills/release`.
+
+### Fixed
+- **The studio replays a run in causal order**: a turn's reasoning streams before the tool calls it
+  made, and `run_end` always streams last, even when a timestamp is missing, NaN or infinite.
+- **CI's consumer-install job fails when the published version cannot be installed**, instead of
+  passing green because the negative scan check also exits 1.
+
+### Docs
+- **Docs, comments and test docstrings state current facts only**, and claims that had drifted from the
+  code are corrected (studio replay order, `RefusalInfo` reasons, where CI resolves rlm-harness).
+
 ## 0.4.3
 
 Dependencies only: the `diff_sentry` package itself is unchanged.
