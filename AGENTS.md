@@ -73,10 +73,10 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
 - **Indicators are deterministic, pure Python, and in-loop safe.** Rule-level invariants (severity
   tuning, per-file pairing, `pwn-request`, the tool name) live in `.claude/rules/indicators.md`.
 - **A documented installer is enclosed when the shell lexer OR the line-wide floor says so.** `linewide.py` is
-  the rule the project used before the lexer (a line with an odd number of apostrophes or double quotes, or a `<<`,
-  and a word that could run what follows, opens the sixty lines after it), copied unchanged. The lexer
+  the line-wide rule that preceded the lexer (a line with an odd number of apostrophes or double quotes, or a `<<`,
+  and a word that could run what follows, opens the sixty lines after it), kept unchanged. The lexer
   (`shelllex.py`) reads quoting exactly in the raw text, but cannot see a quote that a YAML scalar, a string literal,
-  a `printf`, a variable or Markdown rendering turns into the one a shell is handed. The union makes the old rule's
+  a `printf`, a variable or Markdown rendering turns into the one a shell is handed. The union makes the line-wide rule's
   `critical` a lower bound, except for the removed lines, hunk headers (not their section heading) and `\ No newline` notes of a patch in
   its rendered view (which is of the new file) and a NUL (the text is read without it, as the shells read it). Never drop or narrow the floor, never relax
   the lexer's answer on top of it, and test the lexer's relaxations through quote-free openers

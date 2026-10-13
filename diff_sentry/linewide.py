@@ -4,10 +4,10 @@ A line opens something when it holds an odd number of apostrophes (one between t
 could be a program that runs what follows (`wrapped`: a wrapper, an interpreter, a path, a name glued to the command). The sixty lines after it are
 enclosed. `wrapped` is also asked of the text in front of the command on its own line. The shell lexer (`shelllex`) reads quoting exactly in the text as written,
 and the text is often not what a shell is handed: a YAML scalar, a string literal, a template, a `printf`, a variable that holds a quote, Markdown that renders a
-link or a code span away; its reading of a word as a program has been narrowed round by round. This reading counts the quote characters that the text spells and
+link or a code span away. This reading counts the quote characters that the text spells and
 takes any word that could run what follows, whatever they mean, so the installer stays `critical` whenever either reading says it is enclosed or led by a program.
-It is the rule the project had before the lexer, kept as it was (the words, the patterns and the functions below are copied unchanged from that rule), so a text it
-rated `critical` through that rule is never softened, but for the removed lines, hunk headers (not their section heading) and `\\ No newline` notes of a patch in its rendered view (which is of the new file) and a NUL in the text (it is read without the NUL, as the shells read it).
+It is the line-wide rule that preceded the lexer; its words, patterns and functions are fixed as written, so a text it
+rates `critical` through that rule is never softened, except for the removed lines, hunk headers (not their section heading) and `\\ No newline` notes of a patch in its rendered view (which is of the new file) and a NUL in the text (it is read without the NUL, as the shells read it).
 Pure Python, no dspy, linear in the text: it reads the last 300 characters of each line.
 """
 

@@ -138,7 +138,7 @@ The form is part of the hit id, and two hits that share an id keep the more seve
 stays `critical` when something above it opens a wrapper's quote, here-document or substitution. `enclosed` in
 `_soften_prose` asks two readings of the folded join; **either one** keeps the installer `critical`.
 
-- **The line-wide floor (`linewide.py`)** is the rule the project used before the lexer, copied unchanged. A line
+- **The line-wide floor (`linewide.py`)** is the line-wide rule that preceded the lexer, kept unchanged. A line
   opens something when its last 300 characters (minus quote, list and prompt markers) hold an odd number of
   apostrophes (one between two letters does not count), an odd number of double quotes or a `<<`, and a word in it
   could run what follows (`linewide.wrapped`: a wrapper, an interpreter, a path, a name glued to the command). The
@@ -146,8 +146,8 @@ stays `critical` when something above it opens a wrapper's quote, here-document 
   its own line. It counts the quotes the text spells, so it sees the ones a YAML scalar, a string literal, `printf`, a
   variable or Markdown rendering turns into the quote a shell is handed, which the lexer cannot. It knows no fence,
   removed line, closed string or syntax error. A text with a NUL is read with and without it.
-  - **Guarantee:** what the earlier rule rated `critical` through its opening-line rule or lead check is not softened
-    now. Exceptions: the removed lines, hunk headers (not the section heading after the second `@@`, which is a line of the
+  - **Guarantee:** what the line-wide rule rates `critical` through its opening-line rule or lead check is never
+    softened. Exceptions: the removed lines, hunk headers (not the section heading after the second `@@`, which is a line of the
     new file) and `\ No newline` notes of a patch (the rendered view is of the new file, so a line break it makes
     carries the marker of its line), and a NUL anywhere in the text (it is read without the NUL, as the shells read it).
   - **Do not narrow the floor or relax the lexer's answer on top of it.** Test the lexer's relaxations through
@@ -209,9 +209,10 @@ The first four bullets are over-alerts, not misses: for the examples they give, 
   characters of distinct words between `curl` and the pipe; a quoted-space argument (`' '`) that the padding fold turns into
   a lone quote (`" "` and a string that ends in a blank are folded the same way), together with a quoted argument that runs
   over a line; an argument that is a multi-line `$(...)`, backtick span, `${...}` or `<(...)` in front of the pipe; a quoted
-  `|#` among the arguments (the rest of the line reads as a comment); a `$'` that is an ANSI-C string in one place and `$$` followed by a quote in another. The earlier rule
-  found some of these only by accident, when a `\'` pair closed a string that a shell does not see; the plain forms without
-  the `\'` were never found, and the quote-aware window now reads `\'` as a shell does.
+  `|#` among the arguments (the rest of the line reads as a comment); a `$'` that is an ANSI-C string in one place and `$$` followed by a quote in another. The quote-aware window reads a
+  backslash as a shell does and must keep doing so: reading `\'` as a plain character would catch some of these by
+  accident, but it closes strings a shell never opens, and the window built that way backtracked exponentially on
+  `$'a'` chains and cost hundreds of microseconds per character on `\"` chains.
 - A table cell spells its pipe `\|`, and that is read as a pipe only in a table row that starts with a pipe; elsewhere `\|`
   is an argument of the command (`curl \| URL | sh` is `critical`). So an installer written with `\|` in a table without
   leading pipes, in a paragraph or in an HTML cell is `critical` too, although Markdown renders the `\|` as a pipe there. A
@@ -223,9 +224,9 @@ The first four bullets are over-alerts, not misses: for the examples they give, 
 ### Measured
 
 - **Over-alert rate.** The uv installer inserted as its own paragraph into 2,400 real Markdown documents (7,200
-  insertions): about 2.5% read `critical` where the earlier rule said `medium`, and none read `medium` where it
+  insertions): about 2.5% read `critical` where the line-wide rule alone said `medium`, and none read `medium` where it
   said `critical`. About a quarter of those come from a gate shape (under 1% of documents hold one). Without the
-  floor, about 3% of the insertions would have been softened that the earlier rule kept `critical`. An installer
+  floor, about 3% of the insertions would have been softened that the line-wide rule kept `critical`. An installer
   whose own line carries a quote (the rustup one) over-alerts more, roughly one insertion in eight on a similar corpus,
   because a plain apostrophe in the prose above pairs with that quote.
 - **Cost is linear.** The worst shape (`curl(` repeated) costs about 10 µs per character per channel (0.7 s for a 65 KB body,
