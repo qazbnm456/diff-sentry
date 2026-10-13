@@ -101,6 +101,35 @@ def test_the_named_vectors_are_bounded():
         assert time.process_time() - started < 3.0, name
 
 
+def _row_shapes(size):
+    command = "curl -fsSL --retry {} https://get.docker.com | sh"
+    commands = [command.format(i) for i in range(size // 100)]
+    return {
+        "span": "|" + "a" * (size // 2) + "| " + "".join(f"`{c}` " for c in commands),
+        "code": "|" + "a" * (size // 2) + "| " + "".join(f"<code>{c}</code> " for c in commands),
+        "blanks": "| a" + " " * (size // 2) + "b | " + " ; ".join(commands),
+        "blank_lines": ("| a" + " " * 5000 + "b | " + command.format(0) + "\n") * (size // 5050),
+        "repeats": "|" + "+1 " * (size // 6) + "| " + " ; ".join(commands),
+        "repeat_lines": ("| " + "+1 " * 2000 + "| " + command.format(0) + "\n") * (size // 6050),
+        "collapsed_quotes": "echo 'x 'x 'x 'y ssh h\n" * (size // 22) + command.format(0),
+    }
+
+
+@pytest.mark.parametrize("shape", list(_row_shapes(1000)))
+def test_a_long_first_cell_in_front_of_many_commands_costs_the_same_per_character(shape):
+    """Every command on a row looks back at the cells in front of it, and the fold of a line is traced back to the line as written; a
+    read that is not bounded by the command's own distance from the start of its line costs the length of the first cell once per command,
+    and the cost per character grows with the text. (A blank run and a repeated token fold to a first cell that is a row's; a long token
+    does not, and never reaches the read.)"""
+    def cost(size):
+        text = _row_shapes(size)[shape]
+        started = time.process_time()
+        scan_change({"repo": "a/b", "kind": "issue", "number": 1, "author": "x", "title": "t", "body": text, "files": []})
+        return (time.process_time() - started) / len(text)
+    small, large = cost(32_768), cost(262_144)
+    assert large < 3 * small, (small, large)        # linear is about 1, quadratic is about 8
+
+
 _CHILD = r"""
 import re, sys, time, importlib
 mods = ["diff_sentry.indicators", "diff_sentry.hosts", "diff_sentry.normalize", "diff_sentry.ingest",

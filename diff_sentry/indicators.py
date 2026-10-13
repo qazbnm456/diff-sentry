@@ -464,9 +464,9 @@ _SUBST_TITLE = "download-and-execute through a command substitution"
 _PS_TITLE = "PowerShell download-and-execute"
 
 
-def _scan_shell(text: str) -> list[IndicatorHit]:
+def _scan_shell(text: str, diff: bool = True) -> list[IndicatorHit]:
     hits: list[IndicatorHit] = []
-    joined = _join_lines(text)
+    joined = _join_lines(text, diff)
     for m in _IFS_RE.finditer(text):
         hits.append(_hit("ci-shell-injection", "high",
                          "`${IFS}` shell field-separator trick (space-evasion in a command)",
@@ -521,7 +521,7 @@ def _scan_obfuscation(text: str) -> list[IndicatorHit]:
         # Only flag base64 that DECODES to something suspicious — a plain data blob isn't an indicator.
         # (Rescan shell/exfil/URL/callback-domain payloads; CI-skip and permission markers aren't usefully
         # base64-wrapped, so they're not in the inner set.)
-        inner = (_scan_shell(decoded) + _scan_urls(decoded) + _scan_exfil(decoded)
+        inner = (_scan_shell(decoded, False) + _scan_urls(decoded) + _scan_exfil(decoded)
                  + _scan_exfil_domains(decoded) + _scan_js_exec(decoded))
         if inner:
             worst = max((h.severity for h in inner), key=lambda s: _sev_rank(s))
@@ -899,7 +899,75 @@ _BLOCK_OPEN_RE = re.compile(r"<(?:br|hr|p|li|td|th|tr|dd|dt|div|ul|ol|dl|table|h
 # the cells in front of a command in a Markdown table row: `| docker | <code>curl …`
 # (only from a line start; a single leading pipe counts when the row also ENDS in one: `| <code>curl … \| sh</code> |`)
 _TABLE_CELL = r"(?:[^|\n;'\"`$\\&]|&(?:[A-Za-z]{2,8}|#[0-9]{1,6}|#[xX][0-9A-Fa-f]{1,6});|&(?!&)|`[^`|\n]{0,40}`|\"[^\"|\n]{0,40}\"|\$(?![({])){0,80}"
-_TABLE_PREFIX_RE = re.compile(rf"^[ \t+]*(?:>[ \t]+)*\|(?:{_TABLE_CELL}(?<!>)\|){{0,5}}[ \t]*", re.MULTILINE)
+# a Markdown table row: a leading pipe (after blanks, a diff `+`, quote markers) and a first cell of plain text
+_TABLE_ROW_RE = re.compile(rf"^\+?[ \t]*(?:>[ \t]+)*\|{_TABLE_CELL}(?<!>)\|", re.MULTILINE)        # (only from a line start)
+_TABLE_ROW_COMPAT_RE = re.compile(rf"^[ \t+]*(?:>[ \t]+)*\|{_TABLE_CELL}(?<!>)\|", re.MULTILINE)             # what a492ab2 called a row
+_TABLE_ROW_TEXT_RE = re.compile(rf"^[ \t]*(?:>[ \t]+)*\|{_TABLE_CELL}(?<!>)\|", re.MULTILINE)       # (no diff marker: `+` is a word)
+
+
+def _reads_as_shell(row: str) -> bool:
+    """Whether a shell that is inside a construct opened on an earlier line can read this line as more than text. It can when the
+    line holds a quote character (a backslash does not hide it: `\\'` ends a single-quoted string); a `)`, `}` or `]` that does
+    not close the bracket opened last on the line, so it closes something opened above (brackets must nest: `${$((}))` is
+    not read as balanced; a `{` opens a `}` only as an unescaped, undoubled `${`, because it is a literal anywhere else); an
+    odd number of backticks; or a substitution of its own (`$(`, `<(`, `>(`) still open at the end of the line, so that the pipe
+    after it is a live one inside a string or a here-document (`bash <(curl …)` closes on the line and is text). The brackets
+    between a pair of backticks belong to that substitution and are not counted. A line with none of these is text in whatever
+    construct is above it, except for one shape that a row cannot be told from: an even number of backticks, the first closing a
+    substitution from above and the next opening another."""
+    closes = {")": ("(", "$("), "}": ("${",), "]": ("[",)}
+    stack: list[str] = []                    # the brackets open on this line, innermost last
+    ticks = dollars = i = 0                  # dollars: the unescaped `$` right before the character at `i`
+    while i < len(row):
+        c = row[i]
+        if c == "\\":
+            if row[i + 1:i + 2] in ("'", '"'):
+                return True
+            dollars = 0
+            i += 2
+            continue
+        if c in "'\"":
+            return True
+        if c == "$":
+            dollars += 1
+            i += 1
+            continue
+        if c == "`":
+            ticks += 1
+        elif ticks % 2 == 0:
+            if c == "(":
+                stack.append("$(" if dollars % 2 or row[i - 1:i] in ("<", ">") else "(")
+            elif c == "{":
+                if dollars % 2:
+                    stack.append("${")
+            elif c == "[":
+                stack.append("[")
+            elif c in closes:
+                if not stack or stack[-1] not in closes[c]:
+                    return True
+                stack.pop()
+        dollars = 0
+        i += 1
+    return ticks % 2 == 1 or "$(" in stack
+
+
+def _is_table_row(text: str, line_start: int, pipe: int, diff: bool = True) -> bool:
+    """Whether the physical line from `line_start` up to the pipe at `pipe` is a Markdown table row rather than the tail of a shell
+    construct: it starts with a pipe and a plain cell and `_reads_as_shell` is false. In a shell a line can start with a pipe
+    only inside a construct opened above (a string, a here-document, `$((…))`, `${…}`, a backtick substitution; anywhere else it is
+    a syntax error), and the pipe at the end of this line is a live one only if the line closes that construct or opens a command
+    of its own, which `_reads_as_shell` looks for without parsing the shell. A `+` in front of the pipe is a diff marker in a
+    patch (`diff`) and a command word anywhere else. What is left is a backtick that closes a substitution above and opens the next
+    one (`echo `echo a⏎| b ` x=`curl X |⏎sh``): a row with a code span cannot be told from it (an accepted miss)."""
+    row_re = _TABLE_ROW_RE if diff else _TABLE_ROW_TEXT_RE
+    return bool(row_re.match(text, line_start)) and not _reads_as_shell(text[line_start:pipe])
+
+
+_TABLE_PREFIX_RE = re.compile(rf"^\+?[ \t]*(?:>[ \t]+)*\|(?:{_TABLE_CELL}(?<!>)\|){{0,5}}[ \t]*", re.MULTILINE)
+_TABLE_PREFIX_TEXT_RE = re.compile(rf"^[ \t]*(?:>[ \t]+)*\|(?:{_TABLE_CELL}(?<!>)\|){{0,5}}[ \t]*", re.MULTILINE)
+# where a row starts, for the line as it was written (the fold may turn `+ +|` into `+|`)
+_TABLE_HEAD_RE = re.compile(r"^\+?[ \t]*(?:>[ \t]+)*\|", re.MULTILINE)
+_TABLE_HEAD_TEXT_RE = re.compile(r"^[ \t]*(?:>[ \t]+)*\|", re.MULTILINE)
 _LONE_OPERATOR_RE = re.compile(r"(?<=\s)\d{0,3}[<>]+&?\d{0,3}(?=\s)")
 _LEAD_PUNCT_WORD_RE = re.compile(
     r"(?:\(?\d{1,3}[.):]|\([A-Za-z]{1,3}\)|[A-Za-z]{1,3}\)|[A-Za-z][.]|\[[A-Za-z0-9]{1,3}\]|={1,3}>|-{1,3}>|[:,.;)\]}])+([A-Za-z./~][\w./-]{0,100})")
@@ -1062,7 +1130,16 @@ _SCRIPT_OPERAND = re.compile(
     # (not a closing tag or a parenthetical: `</code>`, `(macOS/Linux)`)
     r"(?:(?:[./]|~(?!~))\S{1,200}|(?![(\[<])(?:\S{0,200}/\S{0,200}|\S{1,200}\.[A-Za-z0-9]\S{0,200}))")
 _END_OF_FLAGS = re.compile(r"(?:^|\s)--(?:\s|$)")
+_ENCLOSED_LINES = 60      # how far above a wrapper's line its quote may still be open, and how far above a pipe-led line a quote left odd counts
+_SINGLE_QUOTE_RE = re.compile(r"(?<![A-Za-z])'|'(?![A-Za-z])")        # an apostrophe inside a word ("you'll") opens nothing
 _LEAD_MARKUP_RE = re.compile(r"^(?:[\s>#*+\-`'\"]|\$(?=[ \t]))*")           # `$ curl`, not `$(./evil) curl` or `$R curl`
+
+
+def _odd_quotes(text: str) -> bool:
+    """Whether a single or a double quote is left open when `text` ends (an apostrophe inside a word opens nothing)."""
+    return bool(len(_SINGLE_QUOTE_RE.findall(text)) % 2 or text.count('"') % 2)
+
+
 # Files that are documentation. A docs PR quotes the installer and the phrase "system prompt" all the time.
 _PROSE_FILE_EXTS = (".md", ".mdx", ".markdown", ".rst", ".adoc", ".ipynb", ".html", ".htm")
 
@@ -1078,12 +1155,15 @@ def _lf(text: str) -> str:
 _YAML_BLOCK_PREFIX = re.compile(r"[+ ]?[ \t]{0,40}(?:-[ \t]{1,4}){0,4}(?:[\w.\"'-]{1,60}:[ \t]{0,4})?")
 
 
-def _join_lines(text: str, *, tables: bool = False) -> str:
+def _join_lines(text: str, diff: bool = True, fold: bool = True) -> str:
     """The commands as the shell reads them: a backslash continuation, or a pipe at the end of a line, joins two
-    physical lines (a diff adds its own `+` marker to the second). The `|` that opens a YAML block scalar does not. With `tables`
-    (the prose softening's reading, never the scan's) a line that starts with `|` is a Markdown table row, and its closing pipe
-    does not join the next row: a shell can start a line with `|` inside a multi-line quoted argument, and the scan must still
-    see that pipeline."""
+    physical lines (a diff adds its own `+` marker to the second). The `|` that opens a YAML block scalar does not, and neither
+    does the closing pipe of a Markdown table row (`_is_table_row`: the row starts with a pipe and a PLAIN cell and cannot be read
+    by a shell as more than text; a shell can also start a line with `|` inside a construct opened above, but then the line closes
+    it or opens a command of its own, so it is not a row and its pipeline is joined). The scan and the prose softening both read
+    this one text."""
+    extras: list[str] = []
+
     def join(m: re.Match[str]) -> str:
         if "\n" not in m.group(0):
             return m.group(0)             # a pipe with a comment (or nothing) after it on its own line: not a continuation
@@ -1100,10 +1180,26 @@ def _join_lines(text: str, *, tables: bool = False) -> str:
         continued = i > 0 and text[i - 1] == "\\"
         if not continued and m.start() - line_start <= 120 and _YAML_BLOCK_PREFIX.fullmatch(text[line_start:m.start()]):
             return m.group(0)
-        if tables and not continued and text[line_start:line_start + 40].lstrip(" \t+>").startswith("|"):
-            return m.group(0)             # a Markdown table row ends in `|`: the next row is not a stage of a pipeline
+        if not continued and re.fullmatch(r"[ \t+]*(?:>[ \t]*)*", text[line_start:m.start()] if m.start() - line_start <= 40 else "x"):
+            return m.group(0)             # a lone pipe on its own line (behind a quote marker): a shell cannot start a pipeline with it
+        if not continued and _is_table_row(text, line_start, m.start(), diff):
+            return m.group(0)             # a Markdown table row ends in `|`: what follows is not a stage of a pipeline
+        before = text[line_start:m.start()]
+        if ("#" in m.group(0) and not continued and _TABLE_ROW_COMPAT_RE.match(text, line_start)
+                and not any(q in before for q in "'\"")):
+            # `_CONTINUATION_RE` took a `#` for a comment and swallowed what follows it. The line was a row to a492ab2, which left its
+            # text as it was: it may be the text of a string above (`| b ) | # c' ; curl X | sh`) and erasing it would hide more
+            # than the row rule used to. The line is not a row to `_is_table_row` (a closer or an opener in it), so the pipeline is
+            # joined as well: the `#` may be the comment of a command the line opened (`| a | $(curl X | # c⏎sh)`). The joined line goes
+            # to the end of the text, so that nothing the original lines hold moves: a `$(` at the end of this line still meets
+            # the `curl` on the next, a quoted argument keeps its length, and the lines keep their count.
+            eol = text.find("\n", m.end())
+            extras.append(before + " | " + text[m.end():len(text) if eol < 0 else eol])
+            return m.group(0)
         return " | "
-    return _fold_padding(_CONTINUATION_RE.sub(join, text))
+    joined = _CONTINUATION_RE.sub(join, text)
+    joined = (joined + "\n" + "\n".join(extras)) if extras else joined
+    return _fold_padding(joined) if fold else joined
 
 
 def _fold_padding(text: str) -> str:
@@ -1111,12 +1207,52 @@ def _fold_padding(text: str) -> str:
     more than 120 characters (a URL padded to a kilobyte; its head and tail stay, which is where the host and a
     `|sh` are), and a token repeated (`-s -s -s …`). None of them changes what the command does."""
     text = _BLANKS_RE.sub(" ", text)
-    # a path padded with slashes is the same path: per run of a word with no shell syntax in it (so a glued `|`, `;` or
-    # `#http://a` cannot exempt it), and not in a URL, where a repeated slash is a way of spelling a different path
-    text = _PATH_TOKEN_RE.sub(lambda m: m.group(0) if "://" in m.group(0) else _DOT_PAD_RE.sub("", _PATH_PAD_RE.sub("/", m.group(0))), text)
-    text = _LONG_TOKEN_RE.sub(lambda m: m.group(0)[:80] + m.group(0)[-40:], text)
+    text = _PATH_TOKEN_RE.sub(_fold_path, text)
+    text = _LONG_TOKEN_RE.sub(_fold_long_token, text)
     text = _LONG_WORD_RE.sub(_fold_word, text)
     return _REPEAT_RE.sub(r"\1", text)
+
+
+def _fold_path(m: re.Match[str]) -> str:
+    """A path padded with slashes is the same path: per run of a word with no shell syntax in it (so a glued `|`, `;` or
+    `#http://a` cannot exempt it), and not in a URL, where a repeated slash is a way of spelling a different path."""
+    return m.group(0) if "://" in m.group(0) else _DOT_PAD_RE.sub("", _PATH_PAD_RE.sub("/", m.group(0)))
+
+
+def _fold_long_token(m: re.Match[str]) -> str:
+    return m.group(0)[:80] + m.group(0)[-40:]
+
+
+_ESCAPED_PIPE_RE = re.compile(r"\\\|")
+
+
+def _fold_with_origin(text: str) -> tuple[str, list[int]]:
+    """`_fold_padding(text).replace("\\|", "|")` (what `_soften_prose` reads) and, for every character of it, the index in `text` it came
+    from: the character itself where the fold kept it, `-1 - i` where the fold made it up out of what began at `i`. So the text that the
+    first characters of a folded line came from can be read as it was written, when the character that follows them was kept."""
+    origin = list(range(len(text)))
+    for regex, repl in ((_BLANKS_RE, lambda m: " "), (_PATH_TOKEN_RE, _fold_path), (_LONG_TOKEN_RE, _fold_long_token),
+                        (_LONG_WORD_RE, _fold_word), (_REPEAT_RE, lambda m: m.group(1)), (_ESCAPED_PIPE_RE, lambda m: "|")):
+        parts: list[str] = []
+        kept: list[int] = []
+        last = 0
+        for m in regex.finditer(text):
+            parts.append(text[last:m.start()])
+            kept += origin[last:m.start()]
+            new = repl(m)
+            parts.append(new)
+            if regex is _REPEAT_RE:                                  # the first copy stays, and keeps its places
+                kept += origin[m.start(1):m.end(1)]
+            elif new == m.group(0):
+                kept += origin[m.start():m.end()]
+            else:
+                at = origin[m.start()]
+                kept += [-1 - (at if at >= 0 else -1 - at)] * len(new)
+            last = m.end()
+        parts.append(text[last:])
+        kept += origin[last:]
+        text, origin = "".join(parts), kept
+    return text, origin
 
 
 def _fold_word(m: re.Match[str]) -> str:
@@ -1128,7 +1264,7 @@ def _fold_word(m: re.Match[str]) -> str:
     return word[:80] + carried + "".join(_SYNTAX_PIECE_RE.findall(middle[len(carried):])) + word[-40:]
 
 
-def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file: bool = False
+def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file: bool = False, diff: bool = True
                   ) -> list[IndicatorHit]:
     """Prose (a title, a body, a comment, a documentation file) quotes things a payload would also say. Four of
     those are downgraded to the sub-floor `medium`, still recorded as evidence:
@@ -1150,7 +1286,11 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
     if not hits or not (kind in ("title", "body", "comment") or prose_file):
         return hits
     text = _lf(text)
-    joined = _join_lines(text, tables=True).replace("\\|", "|")            # a table cell can only spell its pipe `\\|`
+    unfolded = _join_lines(text, diff, fold=False)
+    joined = _fold_padding(unfolded).replace("\\|", "|")            # a table cell can only spell its pipe `\\|`
+    # `_fold_padding` turns a repeated token into one (`)) ))`, `'a 'a`, `+ +`) and never removes a newline: the guards that ask what a
+    # line is to a shell read the line as it was, the windows read the folded one
+    raw_lines = unfolded.split("\n")
     # The first place anything is set up that changes what a later `curl` does. Found ONCE per segment: searching
     # the prefix again for every command is quadratic in the number of commands.
     hijack = _HIJACK_RE.search(joined)
@@ -1172,19 +1312,64 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
     def enclosed(first: int) -> bool:
         """A wrapper on one of the sixty lines above whose quote or heredoc may still be open when this line begins
         (`ssh host '⏎curl … | sh⏎'`, `docker run x sh -c '⏎…`, `ssh host <<'EOF'⏎…⏎curl … | sh⏎EOF`): the whole pipeline
-        runs inside it. An apostrophe inside a word ("you'll") opens nothing. Found once per segment."""
+        runs inside it. A line with an odd quote count opens one, and so does a pipe-led line that holds a quote within sixty
+        lines of such a line (it may close that string and open the wrapper's argument). An apostrophe inside a word ("you'll")
+        opens nothing. Found once per segment."""
         nonlocal openers
         if openers is None:
             openers, begin = [], 0
+            last_odd = -_ENCLOSED_LINES - 1             # the last line that left a quote odd
             for i, end in enumerate([*newlines, len(joined)]):
+                line = raw_lines[i].replace("\\|", "|") if len(raw_lines) == len(newlines) + 1 else joined[begin:end]
                 tail = _LEAD_MARKUP_RE.sub("", joined[max(begin, end - 300):end])
-                if tail.strip() and (len(re.findall(r"(?<![A-Za-z])'|'(?![A-Za-z])", tail)) % 2 or tail.count('"') % 2
-                                     or "<<" in tail) and _wrapped(tail + " "):
+                # the quotes of the last 300 characters of the folded line (what a492ab2 counted: where the heuristic is wrong about
+                # `\'`, `'\''`, `$'…'` or a word-internal apostrophe, a fold that collapses `'z 'z` can make it right by accident) or, where
+                # the fold collapsed a quote away, of the text those 300 characters were folded from: either one odd opens a wrapper
+                odd = _odd_quotes(tail)
+                folded_line = joined[begin:end]
+                if not odd and len(raw_lines) == len(newlines) + 1 and line.count("'") + line.count('"') != folded_line.count("'") + folded_line.count('"'):
+                    origin = trace(i, begin)
+                    k = max(begin, end - 300) - begin
+                    if origin is None or k >= len(origin):
+                        written = line[-300:]
+                    else:
+                        written = raw_lines[i][origin[k] if origin[k] >= 0 else -1 - origin[k]:]
+                    odd = _odd_quotes(_LEAD_MARKUP_RE.sub("", written))
+                # A line that starts with a pipe is inside a construct opened above; when a line above left a quote odd, any quote on it
+                # may close that string and the next may open a wrapper's argument (`echo 'a⏎| b'c ; ssh host 'x⏎…`). Which one does
+                # depends on escapes, `$'…'`, word-internal apostrophes: the line counts as an opener whatever the quotes are.
+                piped = i - last_odd <= _ENCLOSED_LINES and line.lstrip(" \t+>").startswith("|") and ("'" in line or '"' in line)
+                if tail.strip() and (odd or piped or "<<" in tail) and _wrapped(tail + " "):
                     openers.append(i)
+                if len(_SINGLE_QUOTE_RE.findall(line)) % 2 or line.count('"') % 2:
+                    last_odd = i
                 begin = end + 1
         here = bisect.bisect_left(newlines, first)
         j = bisect.bisect_left(openers, here)
-        return j > 0 and here - openers[j - 1] <= 60
+        return j > 0 and here - openers[j - 1] <= _ENCLOSED_LINES
+
+    origins: dict[int, list[int] | None] = {}
+
+    def trace(at: int, first: int) -> list[int] | None:
+        """Where each character of the folded line `at`, which starts at `first`, came from in the line as written (see
+        `_fold_with_origin`), or None when the fold of that line is not the folded line."""
+        if at not in origins:
+            folded, origin = _fold_with_origin(raw_lines[at])
+            origins[at] = origin if folded == joined[first:line_end(first)] else None
+        return origins[at]
+
+    def written_before(first: int, end: int) -> str | None:
+        """The text the first `end - first` characters of the line that starts at `first` were folded from, as it was written, or None
+        when that cannot be told: the character at `end` is one the fold made up (a word of more than 120 characters, a padded path), or
+        the fold of the line is not the folded line."""
+        if len(raw_lines) != len(newlines) + 1:
+            return None
+        at = bisect.bisect_left(newlines, first)
+        origin = trace(at, first)
+        if origin is None:
+            return None
+        k = end - first
+        return raw_lines[at][:origin[k]] if k < len(origin) and origin[k] >= 0 else None
 
     def on_its_own(start: int) -> bool:
         """Nothing earlier changed how `curl` behaves, and nothing on its logical line feeds it or precedes it."""
@@ -1211,9 +1396,14 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
                 return False          # a backtick that does not open a span (`xargs -E '`' curl`) reads the whole line
         elif start - line_start > _MAX_PROSE_LEAD:
             return False              # deep in a sentence, not in a span; also what keeps a line of commands linear
-        table = _TABLE_PREFIX_RE.match(joined[line_start:start])
+        prefix_re, head_re = (_TABLE_PREFIX_RE, _TABLE_HEAD_RE) if diff else (_TABLE_PREFIX_TEXT_RE, _TABLE_HEAD_TEXT_RE)
+        table = prefix_re.match(joined[line_start:start])
         if table is not None and (table.group(0).count("|") >= 2 or joined[line_start:line_end(start)].rstrip().endswith("|")):
-            line_start += table.end()               # `| docker | <code>curl … \\| sh</code> |`: a cell is a cell
+            # the cells that are dropped are the folded ones, and the fold can turn `)) ))` into `))` or `| | |` into `|`: they are read as
+            # they were written. (A cell can begin in a span only where a prompt or an environment variable stands in front of it: no.)
+            written = written_before(first, line_start + table.end()) if line_start == first else None
+            if written is not None and head_re.match(written) is not None and not _reads_as_shell(written):
+                line_start += table.end()               # `| docker | <code>curl … \\| sh</code> |`: a cell is a cell
         before = _SAFE_ENV_RE.sub("", _PROMPT_RE.sub("", _LEAD_MARKUP_RE.sub("", _MARKUP_RE.sub(" ", _CLOSING_TAG_RE.sub(": ", _BLOCK_OPEN_RE.sub(": ", html.unescape(joined[line_start:start]))))),
                                                        count=1), count=1)
         # a backtick still open in front of the command is another substitution or span: `evil` curl … | sh
@@ -1370,15 +1560,6 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
         _SUBST_TITLE: bool(all_substs) and all(subst_as_written(m) for m in substs),
         _PS_TITLE: bool(shells) and all(powershell_as_written(m) for m in shells),
     }
-    scanned = _join_lines(text).replace("\\|", "|")
-    if scanned != joined:
-        def found(j: str) -> list[list[str]]:
-            limit = 4 * _SHELL_MATCH_LIMIT
-            return [sorted(m.group(0) for rx in rxs for m in islice(rx.finditer(j), limit))
-                    for rxs in ((_CURL_PIPE_RE, _CURL_PIPE_PLAIN_RE), (_CURL_SUBST_SHELL_RE,), (_IWR_IEX_RE,))]
-        for title, a, b in zip((_PIPE_TITLE, _SUBST_TITLE, _PS_TITLE), found(scanned), found(joined), strict=True):
-            if a != b:                      # a match only one reading sees (or one that is longer in one): not a documented one
-                soft_titles[title] = False
     phrases = {re.sub(r"[\s\-]+", " ", m.group(0).lower()) for m in _INJECTION_RE.finditer(text)}
     # A diff line begins with its own `+`/space marker; strip it so "+Ignore the system prompt" is a sentence start.
     flat = re.sub(r"(?m)^[+ ]", "", text) if kind == "file" else text
@@ -1456,7 +1637,7 @@ def _worst_by_title(hits: list[IndicatorHit]) -> dict[str, int]:
 
 
 def _rendered_extras(hits: list[IndicatorHit], text: str, kind: str, scan: Callable[[str], list[IndicatorHit]], *,
-                     prose_file: bool = False) -> list[IndicatorHit]:
+                     prose_file: bool = False, diff: bool = True) -> list[IndicatorHit]:
     """The download-and-execute hits only the rendered view of a prose segment has. A command the raw text already matched is
     found there too, so the extra hits are added only when the rendered view has MORE hits of a form than the raw one, or a
     MORE SEVERE one (markup inside a wrapper's name, `do<b></b>cker run x curl …`, softens the raw hit and not the rendered
@@ -1464,7 +1645,7 @@ def _rendered_extras(hits: list[IndicatorHit], text: str, kind: str, scan: Calla
     seen = _rendered(text)
     if seen == text:
         return []
-    extra = [h for h in _soften_prose(scan(seen), seen, kind, prose_file=prose_file) if h.rule == "curl-pipe-shell"]
+    extra = [h for h in _soften_prose(scan(seen), seen, kind, prose_file=prose_file, diff=diff) if h.rule == "curl-pipe-shell"]
     raw_n = Counter(h.title.split(" — ")[0] for h in hits if h.rule == "curl-pipe-shell")
     more_n = Counter(h.title.split(" — ")[0] for h in extra)
     raw_w, more_w = _worst_by_title(hits), _worst_by_title(extra)
@@ -1482,9 +1663,11 @@ def scan_content(event: dict) -> list[IndicatorHit]:
     deduped: dict[str, IndicatorHit] = {}
     for label, text, kind, who in content_segments_ex(event):
         prose_file = kind == "file" and label.lower().endswith(_PROSE_FILE_EXTS)
-        hits = _soften_prose(scan_indicators(text, location=label), text, kind, prose_file=prose_file)
+        diff = kind == "file"                                                  # a patch carries its own `+` markers; a body does not
+        hits = _soften_prose(scan_indicators(text, location=label, diff=diff), text, kind, prose_file=prose_file, diff=diff)
         if kind != "file" or prose_file:                                       # prose: what the reader sees, too
-            hits += _rendered_extras(hits, text, kind, lambda t, _l=label: scan_indicators(t, location=_l), prose_file=prose_file)
+            hits += _rendered_extras(hits, text, kind, lambda t, _l=label, _d=diff: scan_indicators(t, location=_l, diff=_d),
+                                     prose_file=prose_file, diff=diff)
         for h in hits:
             if who:
                 h = h.model_copy(update={"via": who})
@@ -1495,7 +1678,8 @@ def scan_content(event: dict) -> list[IndicatorHit]:
 def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
     """`scan_indicators` with per-file scoping — a paired rule can only fire when ONE file carries both
     halves. Non-diff input (a region the planner pulled out, a plain file) falls through to a single
-    whole-text scan, so this is safe as the entry point for either shape."""
+    whole-text scan, so this is safe as the entry point for either shape. Both are read as a patch (a leading `+` is a diff marker):
+    the host-side baseline reads every channel with its own flag, and the union keeps its stricter hit."""
     text = _lf(text or "")
     segments = split_diff_by_file(text)
     if not segments:
@@ -1514,7 +1698,7 @@ _DETECTORS = (
 )
 
 
-def scan_indicators(text: str, *, location: str = "") -> list[IndicatorHit]:
+def scan_indicators(text: str, *, location: str = "", diff: bool = True) -> list[IndicatorHit]:
     """Run every detector over `text` and return the DEDUPED union of hits (by deterministic id).
 
     `location` labels hits that don't carry their own (a filename/region tag). Deterministic and
@@ -1523,7 +1707,7 @@ def scan_indicators(text: str, *, location: str = "") -> list[IndicatorHit]:
     all_hits: list[IndicatorHit] = []
     for detector in _DETECTORS:
         try:
-            all_hits += detector(text)
+            all_hits += detector(text, diff) if detector is _scan_shell else detector(text)
         except Exception as exc:  # noqa: BLE001 — fail CLOSED: a detector that crashed on this input is evidence
             # An input that crashes a detector must not silently disable the rest, or the whole change goes
             # unscanned. Record it as a finding (stable evidence, so it dedupes) and keep scanning.

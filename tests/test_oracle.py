@@ -70,7 +70,7 @@ def test_every_download_a_real_shell_runs_is_critical_in_prose_too():
     with no spaces, in typographic quotes, behind a label, is still a payload)."""
     rng = random.Random(_SEED)
     candidates = [grammar.payload(rng, prose=True) for _ in range(_N)]
-    forced = [(c, ctx) for c in grammar.DIVERGENT for ctx in grammar.CO_RESIDENT]       # a known installer beside each
+    forced = [(c, ctx) for c in grammar.LEADING_PIPE for ctx in grammar.CO_RESIDENT]       # a known installer beside each
     candidates += [c for c, _ in forced]
     misses = []
     # what a reader copies out of the rendered text is what runs: `curl … | <b>sh</b>` is `curl … | sh`
@@ -112,6 +112,9 @@ def test_what_the_prose_softening_reduces_to_medium_fetches_only_known_installer
         context = rng.choice(grammar.CRUMBS if crumbs and not whole and "`" not in x else contexts).format(x=x)
         prologue = rng.choice(grammar.PROLOGUE)
         cases.append((prologue + context, grammar.rendered(prologue) + grammar.rendered(context if whole else x)))
+    for lead, suffix in grammar.PIPE_LEADS:                  # a line that looks like a table row, with `evil` as a stage in front
+        for _ in range(max(4, _N // 200)):
+            cases.append((lead + (x := grammar.documented(rng)) + suffix, lead + x + suffix))
     softened = [(text, run) for text, run in cases if any(_in_prose(text, where) == "medium" for where in _CHANNELS)]
     assert softened, "the generator produced no documented-installer command at all"
     rows = harness.execute([run for _, run in softened])

