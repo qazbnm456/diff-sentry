@@ -3,6 +3,68 @@
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change
 (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.6.0
+
+Upgrade from 0.5.0: the scan now reads the branch name, the author's and outsiders' comments and the
+account's history, and rates some documentation text lower, so a SIEM that alerts on severity sees both more
+and fewer signals than before (see **Changed**). Nothing needs configuring; `watch` and its settings are
+opt-in, and `rlm-harness==1.14.0` is unchanged.
+
+### Added
+- **`diff-sentry watch` monitors a watchlist of repositories**: it polls, screens every change
+  deterministically, orders the queue by that screen, and runs one model trajectory per change on a single
+  worker. The SIEM gets an early alert (`stage: "screen"`) once deterministic evidence reaches the signal
+  floor and the model's signal (`stage: "final"`) under the same `run_id`; a change the model never judged is
+  `status="inconclusive"` with `reason="not_escalated"`. `--screen-only` needs no model credentials, and the
+  `DS_WATCH_*` settings in `.env.example` leave the queue and hourly caps off by default.
+- **An actor store remembers what each account did before**, and `diff-sentry actor <login>` prints its
+  dossier. It reaches the signal only through five indicators: `actor-known-bad` and `ioc-reuse` (`high`),
+  and `actor-prior-flag`, `actor-burst` and `actor-multi-repo` (`medium`).
+- **A snapshot archive keeps the first copy of every change and each edit as a new revision**;
+  `diff-sentry archive verify` re-hashes it and `archive show <sha>` prints a capture. `evidence-scrubbed`
+  (`high`) fires when floor-level evidence from an earlier revision is gone after an edit, and
+  `content-edited` (`low`) records any other edit.
+- **The head branch name and the comments of the change's author or an outsider (not maintainers or bots)
+  are scanned**, because the author controls them and no diff holds them. `branch-name-injection` flags shell
+  syntax in a branch name (`high`, `medium` for an owner, member or collaborator), `branch-name-metachar`
+  flags metacharacters (`medium`), and `slash-command-trigger` flags a slash command in a comment (`medium`
+  when the author types it within an hour of opening the change, otherwise `low`). A hit from a comment names
+  the commenter in the new `via` field.
+- **Four more provenance indicators, all `medium`**: `brand-new-account` (under 14 days old),
+  `agent-self-description` (an unestablished account whose profile calls it an autonomous or LLM-driven
+  agent),
+  `head-repo-deleted` and `files-not-fully-read` (a PR with more files than GitHub lists).
+- **`curl-pipe-shell` is `critical` in more spellings**: `bash <(curl ...)`, `bash -c "$(curl ...)"`,
+  PowerShell's `iwr ... | iex`, a pipe into `sudo bash` or `python3 -`, commands that are quoted, wrapped,
+  joined across lines or written in Markdown or HTML.
+- **`invisible-unicode` also covers Unicode tag characters, the variation-selector supplement, the Hangul
+  fillers and the word joiner.**
+- **A detector that raises is recorded as a `high` `scanner-error` hit** while the other detectors still run.
+- **An opt-in shell oracle** (`DS_ORACLE=1 uv run pytest tests/test_oracle.py`, needs Docker) holds the
+  download rules to what real `bash` and `dash` run in a no-network container.
+
+### Changed
+- **A documented installer in prose is `medium` instead of `critical`**: the uv, nvm or rustup one-liner in a
+  README, a PR body or a comment no longer raises a signal. The same text in a code file, from another host,
+  with other flags, or inside a wrapper such as `ssh host '...'` stays `critical`.
+- **A bare "system prompt" is `medium` instead of `high`**; an override phrase (`ignore previous
+  instructions`) stays `high`.
+- **`pwn-request` shown in a body, a comment or a documentation file is `medium`**; in a workflow file it
+  stays `critical`. `diff-viewport-evasion` is `medium` in a comment and stays `high` in a file.
+- **A zero-width space right after `@` no longer fires `invisible-unicode`**, because Dependabot renders
+  `@user` that way.
+- **A SIEM payload lists the 100 most severe indicators** and gains `stage` and `indicator_count`; the full
+  list stays in the response file. Hits are capped at 25 per rule, place and title, most severe first, so
+  decoys cannot push out the `critical` behind them.
+
+### Fixed
+- **A hit built from text with a lone surrogate (a JSON `\ud800` escape) serializes**, so the change that
+  carried it is no longer lost.
+
+### Docs
+- **`.claude/rules/indicators.md` lists the installer softening's accepted over-alerts and known gaps.** The
+  softening is a brake on false positives, not a proof.
+
 ## 0.5.0
 
 Upgrade from 0.4.3: dspy 3.4.0 removed the interface rlm-harness 1.10.1 hands its sandbox through, so a
