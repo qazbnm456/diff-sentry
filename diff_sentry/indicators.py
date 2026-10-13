@@ -2302,8 +2302,24 @@ def _pipe_of_a_cell(m: re.Match[str]) -> str:
     return m.group(0) if (m.start() - i) % 2 else "|"
 
 
+_ROW_LINE_RE = re.compile(r"^[ \t+>]*\|[^\n]*", re.MULTILINE)          # a line of a table row (a patch's `+` or a quote marker in front of it)
+
+
+def _cell_pipes(text: str):
+    """The `\\|` of the table rows of `text`: outside a row a backslash in front of a pipe is the shell's (`curl \\| URL | sh` hands curl an argument `|`)."""
+    for row in _ROW_LINE_RE.finditer(text):
+        yield from _ESCAPED_PIPE_RE.finditer(text, row.start(), row.end())
+
+
 def _unescape_pipes(text: str) -> str:
-    return _ESCAPED_PIPE_RE.sub(_pipe_of_a_cell, text)
+    out: list[str] = []
+    last = 0
+    for m in _cell_pipes(text):
+        out.append(text[last:m.start()])
+        out.append(_pipe_of_a_cell(m))
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out)
 
 
 def _fold_with_origin(text: str) -> tuple[str, list[int]]:
@@ -2316,7 +2332,7 @@ def _fold_with_origin(text: str) -> tuple[str, list[int]]:
         parts: list[str] = []
         kept: list[int] = []
         last = 0
-        for m in regex.finditer(text):
+        for m in (_cell_pipes(text) if regex is _ESCAPED_PIPE_RE else regex.finditer(text)):
             parts.append(text[last:m.start()])
             kept += origin[last:m.start()]
             new = repl(m)
@@ -2755,6 +2771,7 @@ def _rendered_extras(hits: list[IndicatorHit], text: str, kind: str, scan: Calla
         base = _new_file(text)
     else:
         base = text
+    base = _unescape_pipes(base)          # a table cell's `\\|` is a pipe before the rendering splits the cell off its row (`<pre>` is a line break)
     found: dict[str, IndicatorHit] = {}
     for view in _rendered_views(base):
         if diff:
@@ -2925,14 +2942,25 @@ def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
     halves. Non-diff input (a region the planner pulled out, a plain file) falls through to a single
     whole-text scan, so this is safe as the entry point for either shape. Both are read as a patch (a leading `+` is a diff marker):
     the host-side baseline reads every channel with its own flag, and the union keeps its stricter hit."""
-    text = _lf(text or "")
+    raw = text or ""
+    text = _lf(raw)
     segments = split_diff_by_file(text)
     if not segments:
-        return scan_indicators(text, location=location)
+        return scan_indicators(raw, location=location)
     deduped: dict[str, IndicatorHit] = {}
     for path, segment in segments:
         for h in scan_indicators(segment, location=path or location):
             keep_worse(deduped, h)
+    if _LONE_CR_RE.search(raw):
+        # `scan_indicators` reads a lone CR as a character of a word for a text it is handed as it is; the files of a diff were cut out of the text with the CR made a newline
+        letters = _lf(_LONE_CR_RE.sub("x", raw))
+        try:
+            for path, segment in split_diff_by_file(letters) or [("", letters)]:
+                for h in _scan_shell(segment, True):
+                    keep_worse(deduped, h.model_copy(update={"location": path or location}) if (path or location) and not h.location else h)
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED, as `scan_indicators` does
+            keep_worse(deduped, _hit("scanner-error", "high", "the shell rules raised on this input with each lone CR read as a letter, so it was not fully scanned",
+                                     f"_scan_shell: {type(exc).__name__}"))
     return list(deduped.values())
 
 
@@ -2948,7 +2976,8 @@ def scan_indicators(text: str, *, location: str = "", diff: bool = True) -> list
 
     `location` labels hits that don't carry their own (a filename/region tag). Deterministic and
     side-effect-free — safe to run host-side (baseline) and in-loop (tool)."""
-    text = _lf(text or "")
+    raw = text or ""
+    text = _lf(raw)
     all_hits: list[IndicatorHit] = []
     for detector in _DETECTORS:
         try:
@@ -2959,6 +2988,14 @@ def scan_indicators(text: str, *, location: str = "", diff: bool = True) -> list
             all_hits.append(_hit("scanner-error", "high",
                                  f"a detector raised on this input ({detector.__name__}), so it was not fully scanned",
                                  f"{detector.__name__}: {type(exc).__name__}"))
+    if _LONE_CR_RE.search(raw):
+        # A line ends at a lone CR for a reader and for the rules above, but a shell reads it as an ordinary character of a word
+        # (`curl URL<CR>| sh` runs, `\\<CR>` is an escaped CR): the shell rules read the text once more with each lone CR as a letter
+        try:
+            all_hits += _scan_shell(_lf(_LONE_CR_RE.sub("x", raw)), diff)
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED
+            all_hits.append(_hit("scanner-error", "high", "the shell rules raised on this input with each lone CR read as a letter, so it was not fully scanned",
+                                 f"_scan_shell: {type(exc).__name__}"))
     deduped: dict[str, IndicatorHit] = {}
     for h in all_hits:
         if location and not h.location:

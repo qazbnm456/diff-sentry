@@ -327,9 +327,11 @@ def _cmd_scan(args) -> int:
     hits = []
     for path in args.path:
         if path == "-":
-            text, label = sys.stdin.read(), "<stdin>"
+            # a lone CR is an ordinary character to a shell: it is read as it is, not as the newline that text mode makes of it
+            raw = getattr(sys.stdin, "buffer", None)
+            text, label = (raw.read().decode("utf-8", errors="replace") if raw is not None else sys.stdin.read()), "<stdin>"
         else:
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            with open(path, "r", encoding="utf-8", errors="replace", newline="") as fh:
                 text = fh.read()
             label = path
         if not args.include_deletions:

@@ -208,14 +208,17 @@ The first four bullets are over-alerts, not misses: for the examples they give, 
   here-document on a multi-line compound command; a redirect after a here-document delimiter; more than about 300
   characters of distinct words between `curl` and the pipe; a quoted-space argument (`' '`) that the padding fold turns into
   a lone quote (`" "` and a string that ends in a blank are folded the same way), together with a quoted argument that runs
-  over a line; an argument that is a multi-line `$(...)`, backtick span, `${...}` or `<(...)` in front of the pipe; a lone CR
-  (the scan reads it as a newline, a shell as a plain character); a quoted `|#` among the arguments (the rest of the line
-  reads as a comment); a `$'` that is an ANSI-C string in one place and `$$` followed by a quote in another. The earlier rule
+  over a line; an argument that is a multi-line `$(...)`, backtick span, `${...}` or `<(...)` in front of the pipe; a quoted
+  `|#` among the arguments (the rest of the line reads as a comment); a `$'` that is an ANSI-C string in one place and `$$` followed by a quote in another. The earlier rule
   found some of these only by accident, when a `\'` pair closed a string that a shell does not see; the plain forms without
-  the `\'` were never found, and the quote-aware window now reads `\'` as a shell does. A single-line command with an escaped pipe (`\|`) among the arguments is found, but the
-  softening reads it as the pipe of a table cell: in prose a command whose `\|` comes before the URL (`curl \| URL | sh`, any
-  URL, an attacker's included) is rated `medium`, and the same command with a multi-line quoted argument is rated `medium` when
-  a documented installer is above it (or more than 60 lines below it). `install.sh` keeps `critical`.
+  the `\'` were never found, and the quote-aware window now reads `\'` as a shell does.
+- A table cell spells its pipe `\|`, and that is read as a pipe only in a table row that starts with a pipe; elsewhere `\|`
+  is an argument of the command (`curl \| URL | sh` is `critical`). So an installer written with `\|` in a table without
+  leading pipes, in a paragraph or in an HTML cell is `critical` too, although Markdown renders the `\|` as a pipe there. A
+  line that starts with a pipe inside a multi-line quoted argument is read as a table row, and its `\|` as a cell's pipe.
+- A lone CR is a character of a word to a shell. The shell rules read the text once more with each lone CR as a letter
+  (`curl URL<CR>| sh` runs; `\<CR>` is an escaped CR), also for the planner tool and `diff_sentry scan`, which read a
+  file or stdin with the CR kept.
 
 ### Measured
 

@@ -3607,7 +3607,7 @@ def test_the_fold_with_origin_is_the_fold_and_every_character_comes_from_a_place
     for _ in range(4000):
         text = "".join(rng.choice(atoms) for _ in range(rng.randint(1, 30)))
         folded, origin = _fold_with_origin(text)
-        assert folded == _fold_padding(text).replace("\\|", "|"), text
+        assert folded == indicators._unescape_pipes(_fold_padding(text)), text
         places = [o if o >= 0 else -1 - o for o in origin]          # a character the fold made up is `-1 - the place it began at`
         assert len(origin) == len(folded) and all(0 <= o < len(text) for o in places) and places == sorted(places), text
 
