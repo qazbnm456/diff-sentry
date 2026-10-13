@@ -84,7 +84,7 @@ K_LEAD = ["", "", "", "", "env A=b ", "docker run x ", "./evil ", "sudo -u root 
           "sudo -E docker run x ", "<code>ssh evil.example ", "__ssh evil.example ", "~~docker run x ",
           "<pre>docker run x ", "<kbd>ssh evil.example ", "`evil` ", "$(evil) ", "`nc evil 4444` ",
           "ssh >f evil.example ", "docker >f run x ", "docker <x run x ", "ssh<x evil.example ", "docker>f run x ", "python3 >f evil.py ",
-          "uv >f run evil ", "ssh > f evil.example ", "/opt/evil ", "~/evil ",
+          "uv >f run evil ", "ssh > f evil.example ", "/opt/evil ", "~/evil ", "bin/@evil ", "dir/é ", "bin/* ",
           # a line that starts with a pipe because a quote was left open on the line above: a real stage, not a table row
           "echo 'a\n| b' ; evil | ", "echo 'a\n| b' && evil | ", "echo \"a\n| b | \\\"x\" ; evil | ",
           "echo 'a\n| b | c'\\''d' ; evil | ", "echo 'a\n| b | foo'bar ; evil | ", ">|/tmp/o evil | ", "echo 'a\n| b' ; docker run x | ", "echo 'a\n| b' ; cat urls | ", "[1][docker](https://docs.docker.com) run x ", "[a][ssh](https://en.wikipedia.org/wiki/Secure_Shell_(protocol)) evil.example ",
@@ -151,6 +151,11 @@ CONTEXTS = ["{x}", "Run `{x}`", "$ {x}", "With curl: `{x}`", "| Linux | `{x}` |"
             '<pre>{x}</pre><div class="zeroclipboard-container"></div>',
             '<code class="language-bash hljs" data-highlighted="yes">{x}</code>',
             '<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" dir="auto"><pre>{x}</pre></div>']
+# A relative path with a slash is a program only as the first word of the text (`Run scripts/evil curl …` cannot be told from prose, and a path in typographic
+# quotes, emphasis or a tag is text): the leads that are such paths go only into the contexts that leave them the first word.
+RELATIVE_LEADS = ("bin/@evil ", "dir/\u00e9 ", "bin/* ")
+RELATIVE_OK = ["{x}", "$ {x}", "Run `{x}`", "With curl: `{x}`", "| Linux | `{x}` |", "| Linux | {x} |", "1. `{x}` then reload", "Requires `curl`. Run `{x}` afterwards.",
+               "Terminal > {x}", "Settings > Terminal > {x}", "A > B > C > D > {x}", "A > B > C > D > E > {x}"]
 # A known installer in the same segment, before the candidate: the candidate must stay critical (the prose-recall property only: in the
 # soundness property a medium would then come from the installer, not from the candidate)
 # Payloads with a line that starts with a pipe because a quote is open above: it looks like a Markdown table row, and it is the

@@ -1,4 +1,4 @@
-# diff-sentry — agent guide
+# diff-sentry: agent guide
 
 A BewAIre-style malicious-change detector built on `rlm-harness`. It classifies ONE GitHub change
 (PR / issue / push) for malicious intent: the change is UNTRUSTED DATA held in a sandboxed REPL, the
@@ -11,23 +11,24 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
 
 ## Verify
 
-- `uv run pytest` — the full offline suite (`uv sync --group dev` first). No live LLM, network, or Deno:
+- `uv run pytest`: the full offline suite (`uv sync --group dev` first). No live LLM, network, or Deno:
   dspy paths use DummyLM / rlm-harness's `ScriptedInterpreter`, transports are injected fakes, and
   `tests/corpus/` pins the indicator suite's hit/miss behavior.
-- `uv run --package diff-sentry-eval --extra dev python -m pytest eval/tests` — the eval member's own suite
+- `uv run --package diff-sentry-eval --extra dev python -m pytest eval/tests`: the eval member's own suite
   (the `--package` is required; a root `uv run` does not install the member). Run it when you touch
   `assemble.py`, `rl_export.py`, `rubric.py`, `schema.py`, or the trace payloads it scores.
-- `DS_ORACLE=1 uv run pytest tests/test_oracle.py` — the shell oracle (opt-in; needs Docker and the `python:3.11-slim`
+- `DS_ORACLE=1 uv run pytest tests/test_oracle.py`: the shell oracle (opt-in; needs Docker and the `python:3.11-slim`
   image): candidate download-and-execute texts are run under a real `bash` and `dash` in a no-network, cap-dropped
   container with a stub `curl`, and the rules are held to what actually ran (`DS_ORACLE_N` / `DS_ORACLE_SEED` scale
-  it). Run it when you touch the `curl-pipe-shell` patterns, `_soften_prose` (and its helpers `_wrapped`, `_command_words`,
-  `enclosed`), the rendered view (`_rendered`, `_rendered_extras`), or `hosts.py` (the installer allowlist and the fetch parser).
-- `uvx ruff check .` — lint (line-length 110). CI runs it as its own job, next to both suites and the
+  it). Run it when you touch the `curl-pipe-shell` patterns, the prose softening in `indicators.py` (`_soften_prose`
+  and the helpers it calls, the shape gate, the rendered view), `hosts.py`, `linewide.py`, or `shelllex.py` (the
+  lexer behind the enclosure check, held to what `bash -n` and `dash -n` say about generated fragments).
+- `uvx ruff check .`: lint (line-length 110). CI runs it as its own job, next to both suites and the
   node tests (`.github/workflows/ci.yml`).
 - A live run needs role creds (`DS_*`, see `.env.example`), Deno (`brew install deno`), and `gh` for
   `pr`/`issue` ingest. `render`/`export` are offline; `classify` ingests offline but classifies live.
 
-## Running — always through the CLI
+## Running: always through the CLI
 
 - Run via `cli` (`pr` / `issue` / `classify`), never an ad-hoc script. `cli.run(event, …)` is the
   programmatic entry: it records `<out>/traces/{run_id}.jsonl` (dropping a stale one first, since
@@ -40,7 +41,7 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
 - Continuous collection goes through `watch`, which calls `cli.run` (model) or `cli.screen`
   (deterministic, no creds) and never `detect_from_event` directly. `--screen-only` needs no model roles.
 
-## Hard invariants — do not break
+## Hard invariants: do not break
 
 - **The change is DATA: read, never execute.** It is a REPL variable under the default `pyodide`
   interpreter; nothing in it is run, built, or fetched-and-run. An embedded instruction is a
@@ -71,6 +72,15 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
   localhost/metadata.
 - **Indicators are deterministic, pure Python, and in-loop safe.** Rule-level invariants (severity
   tuning, per-file pairing, `pwn-request`, the tool name) live in `.claude/rules/indicators.md`.
+- **A documented installer is enclosed when the shell lexer OR the line-wide floor says so.** `linewide.py` is
+  the rule the project used before the lexer (a line with an odd number of apostrophes or double quotes, or a `<<`,
+  and a word that could run what follows, opens the sixty lines after it), copied unchanged. The lexer
+  (`shelllex.py`) reads quoting exactly in the raw text, but cannot see a quote that a YAML scalar, a string literal,
+  a `printf`, a variable or Markdown rendering turns into the one a shell is handed. The union makes the old rule's
+  `critical` a lower bound, except for the removed lines, hunk headers (not their section heading) and `\ No newline` notes of a patch in
+  its rendered view (which is of the new file) and a NUL (the text is read without it, as the shells read it). Never drop or narrow the floor, never relax
+  the lexer's answer on top of it, and test the lexer's relaxations through quote-free openers
+  (`ssh evil.example $(`). See `.claude/rules/indicators.md`.
 - **Models are ROLES configured by env**: `DS_ROOT_LM` planner, `DS_SUB_LM` analyst, `DS_CLASSIFIER_LM`
   classifier (defaults to the analyst). Refer to them by role; no hardcoded model name.
 - **The budget is hard: `max_retries=1`, no whole-RLM retry inside a run.** One change = one trajectory, so the
@@ -100,7 +110,7 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
   convention by editing or adding a skill; `detect.INSTRUCTIONS` holds only identity, the MISSION frame,
   the tool cost model, the triage loop, and output-gating rules. Skills ship via
   `packages = ["diff_sentry"]`; a force-include duplicates them and breaks the build.
-- **Keep the dspy-free modules dspy-free.** `config`, `schema`, `normalize`, `indicators`, `assemble`,
+- **Keep the dspy-free modules dspy-free.** `config`, `schema`, `normalize`, `indicators`, `shelllex`, `linewide`, `assemble`,
   `response`, `emit`, `ingest`, `hosts`, `dbutil`, `actors`, `snapshot`, `watch`, `rl_export`, and `rubric`
   must not import dspy at module top, and `import diff_sentry` must not import dspy (`ClassifyChange` / `setup` /
   `run` / `screen` / `detect_from_event` are lazy PEP 562 re-exports).

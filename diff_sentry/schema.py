@@ -12,7 +12,9 @@ Pure pydantic; no dspy — trivially unit-testable.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
 
 # reward-free rubric TYPES — rlm-harness's shared, taxonomy-agnostic primitives, re-exported so
 # `from .schema import Criterion, ...` resolves here.
@@ -87,6 +89,18 @@ class IndicatorHit(BaseModel):
         "", description="The login whose COMMENT carried the text this hit fired on, else empty. A structured "
         "field, not a substring of `location` (a file path is free-form and could be named to match), so the "
         "actor store attributes a comment to its writer and never to the change's author.")
+
+    @field_validator("title", "evidence", "location", "decoded", "via")
+    @classmethod
+    def _encodable(cls, value: str | None) -> str | None:
+        """The text without lone surrogates. A JSON escape such as `\\ud800` in a change decodes to one, and a hit that held it could not be serialized: the change it came from
+        would be lost with it."""
+        return None if value is None else value.encode("utf-8", "replace").decode("utf-8")
+
+    def model_copy(self, *, update: dict[str, Any] | None = None, deep: bool = False) -> IndicatorHit:
+        """A copy whose updated fields go through the same validation as a new hit (`model_copy` alone skips it, and the copy of a hit whose location or `via` holds a lone surrogate could not be encoded)."""
+        copy = super().model_copy(update=update, deep=deep)
+        return IndicatorHit(**copy.model_dump()) if update else copy
 
 
 # ── the planner's SUBMIT: JUDGEMENT only (the RLMTask output_model) ───────────────────────────────

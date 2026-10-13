@@ -47,15 +47,13 @@ paths:
   payload-host link: a local model has a real false-benign rate, and letting its verdict erase evidence would
   let one missed payload launder a campaign. `actor-known-bad` needs a `malicious` verdict. The account-level
   rules do not apply to `Bot` accounts; the change-level ones do.
-- **The first copy is kept.** `SnapshotStore.put` runs before anything else touches a change; objects are
-  never rewritten and the index is append-only. An edit is a new revision with its own run id (`-r1`), so
-  its trace never overwrites the original's, and `prior_indicators` carry the earlier hits forward so a
-  removed payload cannot remove the evidence. `evidence-scrubbed` counts only floor-level hits (dropping a
-  backtick from prose is an edit), matches a prior hit by rule and location rather than id, counts a kind that is
-  still there but now below the floor (a payload rewritten to read as prose) as gone, and its evidence
-  names the vanished hit ids, so a later edit that still lacks them is the same finding and does not page again.
-  Snapshot the event as ingested (before correlation attaches facts) so the archive holds what GitHub said,
-  not what we derived.
+- **The first copy is kept.** `SnapshotStore.put` runs before anything else touches a change; objects are never
+  rewritten and the index is append-only. An edit is a new revision with its own run id (`-r1`), so its trace never
+  overwrites the original's, and `prior_indicators` carry the earlier hits forward so a removed payload cannot
+  remove the evidence. `evidence-scrubbed` fires when a floor-level hit of an earlier revision is gone (matched by
+  rule and location, not id; a payload rewritten to read as prose counts as gone) and names the vanished hit ids,
+  so a later edit that still lacks them is the same finding and does not page again. Snapshot the event as
+  ingested, before correlation attaches facts, so the archive holds what GitHub said and not what we derived.
 - **Time is the cost, not money.** With a local model every change reaches the model by default; the screen
   sets the order (`_priority`), not eligibility. The caps (`deep_min_severity`, `max_queue`,
   `max_deep_per_hour`) default off. A shed change keeps its `screened/` record and a `shed` state.
@@ -63,25 +61,23 @@ paths:
   rollout corpus stays trajectories. Its early alert is `stage=screen`; the run's own is `stage=final`.
 - **One model worker.** dspy's global configuration is bound to the thread that first set it up. The poller
   is a second thread and touches no model. Do not add a worker pool without proving `setup` is safe there.
-- **A failed change must not block the ones behind it, and must be retried.** A failure holds the
-  watermark below it and withholds the page-1 ETag (or the next listing answers 304 and it is never
-  retried), backs off exponentially, and after `_MAX_FAILS` is parked as `error` so it stops holding the
-  listing. The others are skipped by their stored `updated_at`. A listing deeper than `_MAX_PAGES` is reported
-  as truncated, never advanced past silently. A rate-limit refusal (`429`, or `403` saying so) is not a failure
-  of the change: wait for the reset, and `_ingest` subtracts the calls it made from the budget the list
-  responses report.
+- **A failed change must not block the ones behind it, and must be retried.** A failure holds the watermark below it
+  and withholds the page-1 ETag (otherwise the next listing answers 304 and it is never retried), backs off
+  exponentially, and after `_MAX_FAILS` is parked as `error` so it stops holding the listing. The others are skipped
+  by their stored `updated_at`. A listing deeper than `_MAX_PAGES` is reported as truncated, never advanced past
+  silently. A rate-limit refusal (`429`, or `403` saying so) is not a failure of the change: wait for the reset, and
+  `_ingest` subtracts the calls it made from the budget the list responses report.
 - **A read that failed is not a change.** `_comments` returns None on failure and the event carries
   `comments_incomplete`; the watcher then keeps what it has instead of judging the empty thread as an edit.
   Anything that feeds the digest must distinguish "none" from "could not read".
-- **Run ids are unambiguous.** `owner__name-pr-7` (`-r1` per revision; the one-off `pr`/`issue` commands keep their
-  older `owner-name-pr-7` scheme, which can collide across repositories): owners cannot contain `_`, so two
-  repositories never collide. A run that fails is retried with backoff up to `_MAX_ATTEMPTS` (about four
-  hours: a local model restarting must not fail the queue) and `cli.run` is told `emit_failed=False`, so a
-  failed attempt pages nothing, then buried (`claimed=2`, event kept) for
-  `--requeue-failed`. Claiming counts as an attempt, so an input that kills the process cannot loop across
-  restarts. The queue row stays claimed until the run completes, and `recover()` (called by `serve` and
-  `--once`, never by a read-only look) requeues it under a per-directory `flock`. Neither thread may die on
-  an unexpected exception.
+- **Run ids are unambiguous.** `owner__name-pr-7` (`-r1` per revision). Owners cannot contain `_`, so two
+  repositories never collide; the one-off `pr`/`issue` commands keep their older `owner-name-pr-7` scheme, which can.
+- **A failed model run is retried, and pages nothing.** It backs off up to `_MAX_ATTEMPTS` (about four hours, so a
+  local model restarting does not fail the queue) with `cli.run` told `emit_failed=False`, then is buried
+  (`claimed=2`, event kept) for `--requeue-failed`. Claiming counts as an attempt, so an input that kills the process
+  cannot loop across restarts. The queue row stays claimed until the run completes, and `recover()` (called by
+  `serve` and `--once`, never by a read-only look) requeues it under a per-directory `flock`. Neither thread may die
+  on an unexpected exception.
 - **Undelivered alerts are retried a few at a time.** `_retry_alerts` re-sends at most `_ALERT_RETRIES_PER_POLL`
   (5) per poll, so a SIEM that hangs (a POST is bounded by 15 s) cannot stall polling for a whole backlog.
 - **An alert counts once delivered.** `changes.alerted` gains ids only after the SIEM answered 2xx

@@ -11,6 +11,7 @@ from pathlib import Path
 
 IMAGE = "python:3.11-slim"
 _RUNNER = Path(__file__).with_name("runner.py").read_text(encoding="utf-8")
+_LEX_RUNNER = Path(__file__).with_name("lexrunner.py").read_text(encoding="utf-8")
 
 
 def docker_ready() -> bool:
@@ -100,3 +101,71 @@ def _positional(args: list[str]) -> list[str]:
         else:
             out.append(a.strip("'\""))
     return out
+
+
+# What a shell says when a fragment ends inside a construct (as opposed to any other syntax error, which stops it earlier).
+# A quote, a substitution, `${…}`, a subshell or a here-document left open; a compound command left open (`case`, `{`, `[[`) swallows nothing.
+_UNTERMINATED = {"bash": re.compile(r"unexpected EOF while looking for matching|here-document at line \d+ delimited by end-of-file"),
+                 "dash": re.compile(r"Unterminated quoted string|Missing '\}'|Missing '\)\)'|end of file unexpected \(expecting \"\)\"\)")}
+_OTHER_ERROR = re.compile(r"syntax error|Syntax error|bad substitution|unexpected token|not found|cannot execute binary file")      # bash refuses a NUL in the first line
+
+
+def read_diagnostics(shell: str, message: str) -> bool | None:
+    """What `-n` said about a fragment: True if a construct is still open where the text ends, False if it parses cleanly, None if the shell
+    stopped at another syntax error first (bash goes on reading to the end of that line, so a later report of an open construct does not
+    count) or did not answer in time."""
+    if message == "timeout":
+        return None
+    lines = message.split("\n")
+    end = next((k for k, ln in enumerate(lines) if _UNTERMINATED[shell].search(ln)), None)
+    other = next((k for k, ln in enumerate(lines) if _OTHER_ERROR.search(ln) and not _UNTERMINATED[shell].search(ln)), None)
+    return None if other is not None and (end is None or other < end) else end is not None
+
+
+def _messages(texts: list[str], batch: int = 400) -> list[dict[str, str]]:
+    """What `bash -n` and `dash -n` printed for each text, from a container with no network, no capabilities and a read-only root."""
+    out: list[dict[str, str]] = []
+    for i in range(0, len(texts), batch):
+        chunk = texts[i:i + batch]
+        name = f"ds-oracle-{uuid.uuid4().hex[:12]}"
+        cmd = ["docker", "run", "--rm", "--init", "-i", "--name", name, "--network=none", "--cap-drop=ALL", "--memory=256m",
+               "--pids-limit=128", "--read-only", "--tmpfs", "/tmp:exec,nosuid,size=64m", IMAGE, "python", "-u", "-c", _LEX_RUNNER]
+        try:
+            done = subprocess.run(cmd, input=json.dumps(chunk), capture_output=True, text=True, timeout=60 + len(chunk))
+        finally:
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30)
+        if done.returncode != 0:
+            raise RuntimeError(f"the oracle container failed: {done.stderr[-500:]}")
+        out.extend(json.loads(done.stdout))
+    return out
+
+
+def open_at_end(fragments: list[str], *, batch: int = 400) -> list[dict[str, bool | None]]:
+    """For each fragment, per shell: `read_diagnostics` of what `bash -n` and `dash -n` said."""
+    return [{shell: read_diagnostics(shell, message) for shell, message in said.items()} for said in _messages(fragments, batch)]
+
+
+_QUOTE_UNTERMINATED = {
+    "'": {"bash": re.compile(r"unexpected EOF while looking for matching `'"), "dash": re.compile(r"Unterminated quoted string")},
+    '"': {"bash": re.compile(r"unexpected EOF while looking for matching `\""), "dash": re.compile(r"Unterminated quoted string")},
+}
+
+
+def read_probe(shell: str, quote: str, message: str) -> bool | None:
+    """A fragment that nothing is open in, followed by a line holding one `quote`: True if the shell did NOT call that quote unterminated (it
+    swallowed the line: it was inside a string, a here-document or a substitution), False if it did, None if it stopped at another syntax
+    error first or did not answer."""
+    if message == "timeout":
+        return None
+    lines = message.split("\n")
+    reported = next((k for k, ln in enumerate(lines) if _QUOTE_UNTERMINATED[quote][shell].search(ln)), None)
+    other = next((k for k, ln in enumerate(lines) if _OTHER_ERROR.search(ln) and not _UNTERMINATED[shell].search(ln)), None)
+    if other is not None and (reported is None or other < reported):
+        return None
+    return reported is None
+
+
+def probe_swallowed(fragments: list[str], quote: str) -> list[dict[str, bool | None]]:
+    """For each fragment, per shell: `read_probe` after a line with one `quote` has been put behind it."""
+    return [{shell: read_probe(shell, quote, message) for shell, message in said.items()}
+            for said in _messages([f + quote + "\n" for f in fragments])]

@@ -7,391 +7,271 @@ paths:
   - "diff_sentry/hosts.py"
   - "tests/oracle/**"
   - "tests/test_oracle.py"
+  - "tests/test_oracle_harness.py"
+  - "diff_sentry/shelllex.py"
+  - "diff_sentry/linewide.py"
+  - "tests/test_shelllex.py"
+  - "tests/test_enclosure.py"
+  - "tests/test_linewide.py"
+  - "tests/test_gate_edges.py"
+  - "tests/test_metadata_rules.py"
+  - "tests/test_adversarial_input.py"
   - "tests/test_detection_quality.py"
   - "tests/test_incident_*.py"
 ---
 
 # Indicator rules
 
-- **Deterministic, pure Python, no subprocess.** A subprocess spawned inside the live dspy.RLM/asyncio
-  process hangs; any heavier scanner belongs host-side, after the run. `mint_id` is a sha1 over
-  rule+evidence (no time, no randomness), so a baseline hit and an in-loop re-scan of the same content
-  dedupe to ONE union member. Hit evidence is a bounded snippet (`_MAX_EVIDENCE`), never the whole diff.
-- **Severities are tuned, not monotone-paranoid.** A plain workflow-file edit is `medium`, below the
-  signal floor on purpose: a benign workflow PR must not force a SIEM signal, and a real payload inside
-  the workflow fires the high/critical shell/obfuscation rules itself. A CODEOWNERS reassignment is
-  `high`. A bare `pull_request_target` (the ordinary label-bot shape) is `medium`; the same trigger
-  checking out the PR head is `pwn-request` / `critical` (untrusted code with the base repo's secrets).
-  `dev-tunnel-endpoint`, `content-addressed-host` (IPFS) and `dynamic-code-eval` are sub-floor
-  corroborators; pairs with no innocent reading (`child_process` + `detached`, network-fetch +
-  file-write) are `high`. Requiring both halves is how a common primitive becomes evidence without
-  becoming noise.
+## Rules that hold for every indicator
+
+- **Deterministic, pure Python, no subprocess.** A subprocess spawned inside the live dspy.RLM/asyncio process
+  hangs; a heavier scanner belongs host-side, after the run. `mint_id` is a sha1 over rule and evidence (no time,
+  no randomness), so a baseline hit and an in-loop re-scan of the same content dedupe to one union member.
+  Evidence is a bounded snippet (`_MAX_EVIDENCE`), never the whole diff.
+- **Severities are tuned, not paranoid.** A plain workflow-file edit is `medium`, below the signal floor on
+  purpose: a benign workflow PR must not force a SIEM signal, and a real payload inside the workflow fires the
+  high/critical shell and obfuscation rules itself. A CODEOWNERS reassignment is `high`. A bare
+  `pull_request_target` (the ordinary label-bot shape) is `medium`; the same trigger checking out the PR head is
+  `pwn-request` / `critical`. `dev-tunnel-endpoint`, `content-addressed-host` (IPFS) and `dynamic-code-eval` are
+  sub-floor corroborators; pairs with no innocent reading (`child_process` + `detached`, network-fetch +
+  file-write) are `high`. Requiring both halves is how a common primitive becomes evidence without becoming noise.
 - **Every rule ships with its negative case**, and `tests/corpus/` pins the suite's hit/miss behavior.
-- **`pwn-request` has three checkout forms, each requiring the privileged trigger:** the head expression
-  on a `ref:` (directly or one binding hop away), a hand-rolled `git fetch` / `gh pr checkout`, and
-  `allow-unsafe-pr-checkout: true` (the actions/checkout v5.1+ opt-in to the fork-PR checkout it blocks
-  by default; the line states the intent, so no dataflow is needed). Each form has its own title: calling
-  an opt-in "checks out the PR HEAD" sends a reader hunting for a `ref:` that is not there.
-- **A paired rule only pairs within one file.** `scan_diff` splits a unified diff on its file headers;
-  `scan_content` does the same for an event, whose files `raw_content` would otherwise join into one
-  header-less blob. `scan` and the in-loop tool use `scan_diff`, the host-side baseline uses
-  `scan_content`, and `normalize.content_segments` is the single definition both `raw_content` and the
-  baseline build on. Per-file scoping stops two halves from different files composing into a `critical`
-  no file contains, and keeps a hit id byte-stable between a whole-diff and a single-file scan, which is
-  what lets the baseline and an in-loop scan dedupe (MF3). Non-diff input falls through to a whole-text
-  scan; keep that fallback.
-- **The in-loop tool registers as exactly `scan_indicators`.** dspy registers a tool under its
-  `__name__` and the prompt calls `scan_indicators(region)`; any other name makes every sandbox call a
-  NameError. The inner callable is renamed on purpose (`make_indicator_tool`); keep it.
-- **`invisible-unicode` exempts the ZWSP GitHub puts after an `@`.** Dependabot's generated release notes
-  render `@\u200buser` so a mention pings no one, which put a `high` signal on nearly every Dependabot PR
-  body. A ZWSP anywhere else, and every bidi override, still fires; keep both halves pinned in
-  `test_indicators.py`.
-- **Prose is read more gently than code, in four ways, all in `indicators._soften_prose`.** Prose is a `title`,
-  `body` or `comment` segment, or a documentation FILE (`.md .mdx .markdown .rst .adoc .ipynb .html .htm`; not `.txt`, which
-  is also `requirements.txt`); the segment KIND decides, never a label (a file named `comment:install.sh` is a
-  file). Line endings are normalised to LF first (`_lf`: CRLF and a lone CR, in every scan entry point). In prose:
-  * `curl-pipe-shell` is `medium` for each of its three FORMS separately (the pipe, the command substitution, and
-    PowerShell's), so an installer beside a payload of another form never softens it. The form is part of the hit
-    id (`mint_id(…, form=)`): two forms on one short line share an evidence window, and a shared id would let the
-    first one recorded stand for both. Two hits that still share an id keep the MORE severe (`keep_worse`), so a
-    softened copy never hides a strict one. The conditions, all of which must hold for every download of the form in
-    the segment:
-    - it names only known installers (`hosts.KNOWN_INSTALLERS`: exact hosts, and exact path patterns for shared ones
-      like `raw.githubusercontent.com/nvm-sh/nvm/v…/install.sh`), or, for the pipe form, no target at all (a sentence
-      mentioning the pipe). `hosts.installer_only` is strict: every FLAG is on an allowlist (`-sSfL`, `-o-`,
-      `--proto '=https'`, `--retry N`, …; `--proxy`, `--config`, `--input-file`, `--next`, attached `-xURL` all fail
-      it), every argument is a clean URL (no userinfo, non-default port, query, encoding, dot segments, shell syntax,
-      non-ASCII, or unreadable target), a `2>/dev/null` redirect is not a target, and neither is a stand-in for one (`…`, `...`, `<url>`, `URL`): the
-      sentence "pipes `curl … | sh` into a shell" names no download. A `|` inside the download's own
-      arguments (a quoted one) fails the pipe form, since `installer_only` reads no further than the first `|`.
-      `hosts.powershell_installer_only` applies the same test to every URL of a PowerShell command, read the way
-      PowerShell reads it (spaces around the pipe are optional, and `irm bun.sh/install.ps1` has an implied
-      `https://`), which may carry nothing else but the cmdlets, the pipe, `-Uri` and `-UseBasicParsing`; Never add a whole platform (github.com, raw.githubusercontent.com) to the
-      list: it is the classic payload host;
-    - the pipe form ends in a SHELL: `[sudo [-u USER]] sh|bash|zsh|…`, a bare name or under `/bin` `/usr/bin`
-      `/usr/local/bin`, with plain flags and no `-c` (`sh -c '…'` runs its own text; after `-s --` a `-c` belongs to the
-      installer, but without `-s` the whole argument list is searched, since `--rcfile -- -c '…'` is an option value),
-      no script operand written as a path or a file name (`sh ./evil.sh`, `sh /tmp/x`, `sh bin/evil`, `bash evil.py`,
-      `sh evil.json`: any token with a `/` or an extension, but not a closing tag or a parenthetical; also behind an
-      option value: `bash -o pipefail ./evil.sh` or a `+x`; closing markup right after the name (`</code>`, `**`, `_`, `”`)
-      does not end it early; the shell runs the file and ignores stdin. A bare word such as
-      `bash evil` cannot be told from prose like "| sh to install", so it stays `medium`), no `=` and no URL on
-      that side (`| VAR=x sh` changes what the installer fetches); an interpreter (`python3 -`, `python3.11 -`) only for a known
-      installer, like Poetry's, and then only with the switches it documents (`--version N`, `--uninstall`, `--force`,
-      `--preview`, `--yes`, `--help`: `--git URL` and `--path DIR` choose where it gets its code). The shell may be
-      quoted, backslashed or `$SHELL` for the detection (`| "bash"`, `| \\bash`), and blank or comment lines after a
-      trailing pipe still continue the pipeline; Between the download and the shell sit only decode or copy filters
-      (`base64 gunzip gzip zcat bzcat bunzip2 xz unxz tee cat`), by flags alone: a `sed` or a `rev` rewrites what
-      runs, `cat FILE` ignores the stream, `tee` takes plain paths and never a process substitution; the filter is a
-      bare name or under `/bin` or `/usr/bin`, never `./cat`; and `curl` itself is not `./curl`;
-    - it stands on its own LOGICAL line. Nothing on that line feeds it (`|`, `=`, `&`, `;`, `$`, `xargs`, `parallel`,
-      `while read`, `-exec`, `<(`; only `NONINTERACTIVE=`, `CI=` and `DEBIAN_FRONTEND=` may precede it as assignments,
-      and a `user@host:~$` prompt is stripped), and no program runs it elsewhere or in its place (`_wrapped`, which
-      reads EVERY word in front of the command, so a prose word or a bracket before `docker run evil` changes nothing (`_x_` and
-      `~~x~~` around the command are emphasis, not a name glued to it), and
-      markup and punctuation glued to a word is removed first: `<code>ssh`, `<!-- x -->docker`, `__docker`, `~~docker`, and
-      any non-ASCII symbol (`“ssh`, `‘./evil`, `«docker`, `•`, a zero-width space); a label glued to the word with no
-      space is dropped (`安裝：docker run x`, `Run:ssh evil.example`: CJK prose has no spaces), and a redirect is not a word
-      (`ssh >f host`, `ssh > f host`, `docker<x run`, `2>&1`; a bracket that opens the first word, `<docker run`, and a version
-      `>=3.9` are not redirects; a lone `>` after the first word is a redirect OR a breadcrumb, `Terminal > docker run x`, so
-      every reading of the first three is tried and any one that finds a wrapper counts); the start and the end of an HTML block element are the end of a clause (`<td>uv</td><td><code>curl …`,
-      `<li>docker<br><code>curl …`, `<b>docker</b>: …`: a tool's name in its own element is a heading, not a wrapper), HTML entities
-      are decoded first (`<b>docker</b>&nbsp;<code>…`), the cells of a Markdown table row in front of the command are not part of
-      it (`| docker | <code>curl … \| sh</code> |`; the closing pipe of the row is not a second command). The scan and the softening
-      read ONE text, `_join_lines`, in which the closing pipe of a table row (`_is_table_row`: a line that starts with `|` and a
-      plain first cell, `_TABLE_ROW_RE`, and `_reads_as_shell` is false), a pipe on a line of its own behind
-      only quote markers (`> |`), and a pipe followed by a line that starts with `|` or `> |` join nothing: a table of several rows, or a
-      row before a paragraph, reads the same as a single row. A shell can start a line with a pipe only inside a construct
-      opened above (a string, a here-document, `$((…))`, `${…}`, a backtick substitution; anywhere else it is a syntax error),
-      and the pipe at the end of that line is a live one only if the line closes the construct or opens a command of its own.
-      So `_reads_as_shell` is true for a line with a quote character, however it is escaped, doubled or glued to letters (`'\''`,
-      `\'`, `\"`, `"'"`, `foo'bar`); a `)`, `}` or `]` that does not close the bracket opened last on the line (brackets must
-      nest, a backslash makes the next character an ordinary one except before a quote, a `{` opens a `}` only as an unescaped,
-      undoubled `${` because it is a literal anywhere else, and the brackets between a pair of backticks are that substitution's
-      own and are not counted); an odd number of backticks; or a `$(`, `<(` or `>(` still open at the end of the line
-      (`bash <(curl …)` closes on it and is text). Such a line is joined like any pipeline, and an `evil` in front of it is a
-      stage: the same test guards the cells `_soften_prose` drops in front of a command, so `| } evil | curl docker | sh` is not
-      a documented installer. `_CONTINUATION_RE` reads a `#` after a pipe as a comment and swallows the rest of the line; where a492ab2
-      called the line a row (`_TABLE_ROW_COMPAT_RE`, no quote in front of the `#`, not a continued line) and `_is_table_row` does
-      not (a closer or an opener in it), `_join_lines` leaves the swallowed text as it was, because it may be text of a string
-      above (`| b ) | # c' ; curl X | sh`), and appends the pipeline joined at the end of the text (so nothing the original lines hold moves: a `$(` that ends the line still meets the `curl` below it, and the lines keep their count), because the `#` may be the comment of a
-      command the line opened (`| a | $(curl X | # c⏎sh)`, which a492ab2 missed) or comment lines may follow the live pipe, and `enclosed` takes a pipe-led line that holds a quote and a wrapper, within 60 lines of a line that
-      left a quote odd, to open the wrapper's argument (which quote closes the string above depends on escapes, `$'…'` and
-      word-internal apostrophes, so it is not guessed): `echo 'a⏎| b | c' ; evil | ssh evil.example '⏎curl … | sh⏎'` is not a
-      documented installer, and a row with a wrapper and no quote is not an opener. A `+` in front of the pipe is a diff marker in a patch (`diff=True`: the segments of kind `file`, and `scan_diff` and the
-      planner tool, whose regions are mostly patches; the baseline reads each true channel with its own flag and the union keeps its
-      hit) and a command word in a body, a comment or a title (`diff=False`). The cells of a real row are plain text (a code span, a `$HOME`, an `&amp;`,
-      `(macOS)`, `[docs](url)`: `| \`uv\` | <code>curl …</code> |`). A row with one of the above followed by a paragraph
-      (`| "uv" | <code>…</code> |⏎⏎Done.`, `| Don't | …`, `| {owner}/{repo} | …`, Homebrew's and oh-my-zsh's `"$(curl …)"`
-      cells) joins the paragraph and stays `critical`, and so do a quoted name cell or one with a stray closer in front of the command
-      (`| "uv" | <code>curl … \| sh</code> |`, `| 1) | …`, `| x86_64) | …`, `| {docker} | …`, even alone):
-      an over-alert, accepted, since a `}` could close a `${` above and a quote cannot be counted. Accepted misses: a newline inside
-      `$((…))` or `${…}` among the DOWNLOAD's own arguments (`curl URL?f=$((1⏎| 2)) |⏎sh`) is not read, because the argument
-      window only crosses a newline inside a quoted string; and an even number of backticks in a row whose first one closes a
-      backtick substitution above and whose next opens another (`` echo `echo a⏎| b ` x=`curl X |⏎sh` ``) is read as a row,
-      because no guard tells it from a code span and any guard would make `| \`uv\` | <code>curl … \| sh</code> |` a payload.
-      A cell AFTER the command is a stage of its pipeline unless the command sits in a Markdown backtick span:
-      `| docker | <code>… \| sh</code> | stable |` (also `<pre>`, `<kbd>`, plain text) stays `critical`, an over-alert that
-      predates the row rule (put the command in the last cell). A `+` row inside a fenced ```diff block of a body reads as shell text and stays
-      `critical` (an over-alert, accepted). `_fold_padding` turns a repeated token into one (`)) ))`, `'a 'a`, `+ +`, `| | |`), a blank
-      run into a blank and a token of more than 120 characters into its head and tail; it never removes a newline, so `_soften_prose` keeps
-      the lines as written beside the folded text, and two guards read them. `enclosed` counts the quotes of the last 300 characters of the
-      FOLDED line, as a492ab2 did, and, where the fold collapsed a quote away (`ssh h 'x 'x 'y`, however much padding follows it), of the text
-      those 300 characters were folded from; either one odd opens a wrapper. Where the count is wrong about what a shell does (`\'`, `'\''`,
-      `$'…'`, an apostrophe in a word, one quote kind inside the other) the fold's collapse of `'z 'z` makes the folded count right by
-      accident, so it stays. Neither is the whole line: a quote that is no shell quote far from the end (`"5' tall"` early in a long
-      paragraph) must not pair with the wrapper's. Accepted over-alerts of this reading: `ssh h 'a' 'b 'b⏎curl … | sh⏎'`, whose quotes are
-      even, stays `critical`; and a pipe-led line that holds a quote and a word that runs a command (`docker run -e KEY="v" …`,
-      `bash -c "…"`) within sixty lines of a line that left a quote odd (a possessive plural such as `users'` and a `5"` screen count) makes
-      the documented installers within sixty lines below it `critical`, because it may be the tail of that string and the opener of a
-      wrapper's argument (a492ab2: `medium`). A prefix drop (`| docker | curl …`) removes the FOLDED cells and reads the text they came from
-      as written: `_fold_with_origin` is the fold with the place of every kept character, so the line is read up to the character that
-      follows the cells, and a stray closer or quote the fold merged away (`] ]`, `| | | |`) or a first cell of a hundred blanks is seen.
-      When that character is one the fold made up (a word of more than 120 characters, a padded path) or the fold of the line is not
-      the folded line, nothing is dropped. The command's own cell is not read: `| docker | <code>curl -fsSL "https://…" \| sh</code> |`
-      stays `medium`. `\|` is spelled as a pipe AFTER the fold, as in a492ab2: before it, `curl U \| | sh` (which fetches the URL `|` as
-      well) folds to `curl U | sh`. Known gaps that predate the row rule
-      and are not fixed: `enclosed` counts quotes per line, so a line that closes one string and opens another
-      (`echo 'a⏎b' ; ssh host 'x⏎curl … | sh⏎'`), a `$'…\'…'` string and a wrapper more than 60 lines above are missed; a patch whose
-      removed (`-`) lines or hunk headers sit between `curl U |` and `sh` is not joined; and the single-line sink forms of the download
-      rule (`curl U | >/dev/null sh`, `| { sh; }`, `| setsid sh`, `| xargs -0 sh -c`) are not read.
-      A `#` is also read as a comment where a string above makes it text: the live pipe behind a `#` on a pipe-led line
-      (`echo 'a⏎| b | # c' ; curl X |⏎sh`), a row followed by a `#` line that holds the live pipe, and a `#` after a pipe on a line that
-      does not start with one; a lone CR is a line break to the rules and part of the word to a shell (`echo hi\r| b | curl X |⏎sh`).
-      The joined line appended for a swallowed `#` takes only the next physical line, so a chain behind it (a comment line, then a
-      backslash continuation, then the sink) is not joined.
-      A single-pipe prefix counts only when the row also ends in `|`. A one-column row whose cell holds
-      the command, followed by a paragraph, joins that paragraph and stays critical (an over-alert, accepted). A blockquote marker
-      on a continuation line (`> curl … |⏎> sh`) is not part of the command), and a list marker, an arrow or an ASCII label glued
-      to the word is dropped too (`1)docker`, `a)docker`, `[1]docker`, `=>docker`, `Step 1:docker`, `Step-1:docker`, `安裝:docker`,
-      `Run:./evil`); a lone `>` read as a breadcrumb starts the command after it, and past the third one followed by a program, a path
-      or a wrapper with a glued operator is a breadcrumb and any other is a redirect (a bare relative path with a `/` is a program only as the
-      first word of the command: `Run scripts/evil curl …` cannot be told from prose); a tag it does not know, such as `<my-tag>ssh evil.example`, is not):
-      a path (`./evil`), a name glued to it (`evil-curl`), a container or remote wrapper (`docker`, `ssh`, `kubectl`,
-      `npx`, …) followed by a flag, a dotted or slashed name (host, image), a path or a subcommand, or an interpreter or
-      shell followed by a script or flag (`python3 evil.py`); the first word of the line counts as a program when it
-      contains a `/` (`scripts/evil.sh curl …`). An expansion is not a prompt: `$ curl` is prose, `$(./evil) curl` and
-      `$R curl` are not. A word that ends a label or a clause ("Install docker:") is prose, and so is a
-      wrapper's name with a plain word after it ("docker users can …"). The command starts within `_MAX_PROSE_LEAD`
-      characters of its line, or inside an inline code span whose opening backtick is that close ("… a `curl … | sh`
-      string …" deep in a paragraph is a mention, not a command written on its own line). The rest
-      of the line is prose (no second command, redirect, substitution or URL; an HTML tag and a parenthetical of plain
-      words are ignored; only the next `_MAX_TAIL` characters are read, and the shell's arguments only up to
-      `_MAX_ARGS`; the positions of newlines and backticks are found once per segment and looked up by bisection, so a
-      long line of commands costs a bounded amount per command), and a command opened inside an inline code span ends
-      at its closing backtick. A backtick opens a span only when what follows it up to the command is at most a
-      prompt, `sudo` or `powershell -c "` and it is not escaped; text before the opener is then not read (a wrapper
-      OUTSIDE the span, as in `npx evil-pkg '`curl …`'`, runs a command that is itself the documented installer, and
-      `evil \`curl K | sh\`` cannot be told from "Run \`…\`"), except after a word for the tool: the nearest `curl`,
-      `wget`, `iwr`, `irm` or the PowerShell cmdlets outside a span must be followed by prose only (below), so `curl a; evil \`…\`` and
-      `curl \`evil\` \`…\`` (a substitution the shell runs) stay critical. A backtick still open in front of the command
-      makes it critical too (`Install \`uv\`: curl … | sh`, a bare command after a closed span). A
-      backtick inside a quote followed by more command words (`xargs -E '`' curl …`) is not an opener, so the whole
-      line is read. A wrapper on one of the sixty lines above whose quote or heredoc may still be open (`ssh host '⏎curl … | sh⏎'`,
-      `ssh host <<'EOF'⏎…⏎curl … | sh⏎EOF`) wraps the pipeline too; an apostrophe inside a word ("you'll") opens nothing. The
-      openers are found once per segment. A table cell spells its pipe `\|`, which is read as `|`. The `|` that
-      opens a YAML block scalar (`run: |`) is not a pipe. A sentence's own word for the tool before a span ("With curl:
-      `curl … | sh`", "Requires `curl`. Run `curl …`", "No curl? Use `wget …`", "curl users: `curl …`") is not the
-      command: the match is re-anchored at the span's own download word when only the tool word (in emphasis or
-      code), punctuation and a few plain words lie between (never a host, a flag, a URL, a `;` or a backticked word other than
-      the tool's name: that is a command substitution or a second command; nor a number, a hyphenated or a non-ASCII word, which
-      is what `curl` would fetch: "With curl 8:" and "使用 curl 安裝：" stay critical, over-alerting rather than missing), AND nothing after the span pipes into a shell or an interpreter
-      (a docs link or a table pipe after it does not count): `curl a \`curl K | sh\` | bash` is an outer command with a
-      span among its arguments, and stays critical. Only the softening decision is re-anchored; the hits keep their evidence. A word before a
-      span that only reads as a shell opening a backtick substitution ("Node `curl … | bash`") is not judged as one;
-      a backtick substitution with environment, flags or a wrapper in front of it still is. The substitution and PowerShell forms are judged the same
-      way from the start of the WORD they begin in (`/bin/bash`, not `evil-bash`), which must be a system shell or
-      cmdlet;
-    - nothing EARLIER in the segment (`_HIJACK_RE`) changes what runs: a curl/wget config, `CURL_HOME`, an alias or
-      function named `curl` or a shell (with or without parentheses), an `export`/`alias`/`declare`/`readonly`/`local`
-      assignment or a bare line (optionally ending `; export NAME` or a `# comment`) assigning `PATH`, `HOME`, `LD_*`,
-      `DYLD_*`, `BASH_ENV`, `SSL_CERT_*` or `*CA_BUNDLE` (case-sensitive, and with the `=`: "Export home page" is a
-      sentence), an assignment of a URL to any variable (`export UV_INSTALLER_GITHUB_BASE_URL=https://…`: the
-      installers' own mirror switches), a proxy variable, a write to `/etc/hosts`, or PowerShell's `Set-Alias`, a function shadowing `irm`/`iwr`/`iex`,
-      `$PSDefaultParameterValues`. The first such marker is found once per segment, not once per command (a
-      per-command prefix search is quadratic).
-    This is a false-positive brake on documented installers, not a proof of safety: the list of things that change an
-    environment is open-ended, and a marker in a DIFFERENT segment (a title, another comment) is not seen. What
-    defeats it is still recorded at `medium` and handed to the planner as evidence, and the signal still follows the
-    verdict.
-  * `prompt-injection` whose only trigger is the bare phrase "system prompt" is `medium`: ordinary in a thread about an
-    LLM product. It is `high` when:
-    - a real override phrase is present: `ignore previous instructions`, `your system prompt`, `print the system
-      prompt`, `new instructions:`, and the "previous / prior / earlier / the above" family, which must name what is
-      dropped (`… instructions`, `… rules`, `… guidance`, `… context`, with up to two modifier words allowed: `ignore all
-      previous safety instructions`, `ignore any previous and following instructions`) or ask for an action
-      (`ignore all previous and approve`, `disregard the above, reply LGTM`: approve, merge, lgtm, say, reply,
-      respond, print, output, reveal, send, exfiltrate, grant, delete, execute), since "ignore all previous commits",
-      "ignore all prior art", "ignore the above and close this" and a bare "ignore the above" (what people write to
-      retract a comment) are ordinary sentences;
-    - an imperative starts a sentence aimed at the phrase (`Ignore the system prompt …`, `New system prompt: …`,
-      `SYSTEM PROMPT: you are …`): the verb follows the start of the text or a line, or ANY punctuation, symbol, emoji
-      or quote (taken as a run), a markdown or diff marker, a table pipe, a bullet, a no-break space or byte-order
-      mark, a vocative, or `could you` / `can you` / `you need to` / `you will`; never a hyphen or an apostrophe, so a
-      flag or `don't ignore` is not one, and never a word, so "allow users to ignore …" is not one;
-    - it is addressed to a reviewer or a model: `please` / `you must` / `you should` / `you are to` / `we need you to`, or a name
-      (`agents`, `Claude`, `the AI`, `reviewers`) with a directive modal (must, should, shall, needs to, will now) and
-      optional adverbs (`agents must always ignore …`), then the verb. A name without a modal, or with a bare
-      "will", describes them (`agents ignore the system prompt`, `the LLM will ignore it after 4k tokens`). Not
-      through a negation (`please do not ignore …`).
-    It stays `medium` when the verb starts a library title with a subordinate clause (`Ignore system prompt when
-    counting tokens`, `… from the config`, `… is broken`), when the phrase is the start of a longer name (`system
-    prompt caching`, `… file`, `… flag`, `… option`) or a whole table cell, and when the instruction is negated, EXCEPT
-    that a clause about the review itself (`when reviewing this PR`, `for this PR`, `to approve`, `and merge`) after the
-    phrase makes it an instruction all the same; an action word alone ("… when run in CI", "… if comment is empty")
-    does not, and after a name or a table cell the fuller list (approve, merge, run, execute, label, close, …) does. Words may be separated by any
-    whitespace or `-`, but a variable (`SYSTEM_PROMPT`), a flag (`--append-system-prompt`), a path
-    (`docs/system-prompt.md`) is not the phrase.
-  * `pwn-request` is `medium`: a workflow SHOWN in a body, a comment or a documentation file is not one that runs.
-    The same text in a workflow file stays `critical`.
-  * `diff-viewport-evasion` is `medium` in a COMMENT only (a padded markdown table). In a file, including a
-    markdown file, it stays `high`: that is Miasma's shape.
-  A code file (`.sh`, `.go`, `.yml`, a Dockerfile, `requirements.txt`) and a branch are never softened. The planner's
-  `scan_indicators` tool applies the same softening to the region it is given, and a hit in the evidence union is
-  de-duplicated by id, so text that is not byte-identical to the baseline's window mints another id: a planner
-  re-scan of a title (which the baseline scans with the author appended) can differ, and the stricter baseline hit
-  for a CODE file always stays in the union.
-- **The download rules are held to what a real shell does, not to opinion.** `tests/test_oracle.py` (opt-in, `DS_ORACLE=1`)
-  writes seeded candidates to a file and runs them under the container's real `bash` and `dash`, with stub `curl`/`wget`
-  (they log their arguments and print a script that logs `SINK-RAN`) and stub `nc`, `evil`, `docker`, `ssh`, … (they only
-  log), no network, no capabilities, a read-only root (the isolation flags of `rlm-harness`'s container interpreter), and
-  `--init` so a trailing `&` leaves no zombies. A canary download runs before and after every batch and must show up in
-  both shells, or the run fails: a container that can no longer fork would otherwise turn every verdict into "nothing
-  happened". Three properties: RECALL (whatever a shell really runs as a downloaded script is `critical` in a code file,
-  through shells AND interpreters, quoted or backslashed), RECALL IN PROSE (the same payloads, with the rendered text run, stay
-  `critical` in a body, a comment and a README whatever Markdown, HTML, typographic quotes, CJK prose or label surrounds them;
-  the softening is for known installers only) and SOUNDNESS OF THE SOFTENING (whatever the prose rules reduce
-  to `medium`, when run, fetches nothing but a known installer and calls nothing else; aliases are enabled, a planted
-  `PATH` directory exists, and proxy variables are logged). The candidate is the command in a documentation context; a
-  context whose WHOLE text a shell would also read as a command (`curl \`evil\` \`…\``, `curl a; evil \`…\``, a pipe after
-  the span) is run whole, and Markdown/HTML markup is rendered away before a run (a shell reads `<code>ssh` as a
-  redirect, a reader reads `ssh`). A new spelling belongs in `tests/oracle/grammar.py` first: if a shell really runs it,
-  the oracle says so and settles the argument. The soundness half judges what the stubs logged against a literal list:
-  a fetched URL that is not exactly a known installer (a dotless host counts), a flag outside the installers' own
-  (`--proxy=…`, `-xURL`, `--url=…`, `--config=…` glued to their value or not), a proxy variable, a downloaded script that
-  came out altered (`sed`, `rev` between the pipe and the shell), an interpreter given an argument that chooses its
-  code (`python3 - --git URL`), or any other program called (`evil`, `docker`, `ssh`, `poetry run`, a planted `./evil`
-  or `evil.sh`; a stage that prints a planted file, `cat evil.sh |`, runs the FILE). `sink_ran` is the EXACT marker line, so
-  a candidate cannot spell it by accident. The judge is stricter than the rules about how a known URL is spelled
-  (`http://`, a scheme-less host, `:443`, a trailing dot, an upper-case scheme, `--fail`), and the grammar does not
-  generate those spellings; it sees under-detection and unsafe softening, never the extra alerts a guard adds. Weakening a guard in a
-  scratch copy shows the oracle notices (`_wrapped`'s markup, typographic, label and redirect handling, `_SCRIPT_OPERAND`'s
-  path and extension alternatives, `enclosed()`, the ASCII word boundaries, the interpreter lookahead, every part of `_rendered` that can hide a
-  payload and its severity rule, `_LEAD_WORD`, the open-backtick refusal, the tool-word
-  lead check, `_RUNS_STDIN_RE`, `hosts._flag_extra`, `_HIJACK_RE`, `_copy_stage`, `_SCRIPT_OPERAND`, `_OPTION_VALUE_RE`,
-  `_UPSTREAM_RE`, `_INTERPRETERS`, the installer-argument check, the quote run and the interpreter alternative of
-  `_CURL_SUBST_SHELL_RE`). Not covered: PowerShell and zsh (no image), a QUOTED download word (`"curl"`) together with a multi-line quoted argument (the two
-  obfuscations cancel each other's window), `--rcfile` (bash reads it only when interactive),
-  effects that only the real installer would show (the mirror variables the installers read, what it prints, which a
-  capturing caller such as `eval` would run), and a guard whose removal only ADDS alerts (a closing tag or a parenthetical
-  after the shell not being a script operand, a typographic quote before `curl`, `_x_` before the command, `~=3.9` being a
-  version, the label-with-a-path alternative, the `<code>` span conversion, the opening and closing tag clause ends, the closing
-  pipe of a table row, the table-row rule of `_join_lines` (a table-row-looking line that is really a payload is oracle-covered, bar the accepted misses and known gaps above: `LEADING_PIPE` for the recall property, `PIPE_LEADS` for the soundness one: an `evil` stage, or a quote left open, in front of a documented installer),
-  entity decoding of the lead, a footnote marker glued to a
-  link: a shell runs `[1]docker`, which is no program): the oracle sees under-detection and unsafe softening, never extra alerts. Those and `real_subst`
-  are pinned by unit tests instead.
-- **Linear is the requirement; the constant is measured.** The download rules run four windowed patterns per
-  `curl`/`wget` start, so the worst shape (`curl(` repeated, a start every five characters) costs about 20 µs per
-  character per channel: 1.3 s for a 65 KB body, about 40 s for a 2 MB patch. Ordinary text is 3-5 µs per character.
-  The cost per character must not grow with the line: the test compares a line of 50,000 characters with one of
-  200,000 (`test_the_cost_per_character_of_a_long_line_of_commands_does_not_grow_with_the_line`), and the fuzz below
-  runs every pattern at 65,536.
-- **Every regex here must be linear on hostile input.** The watcher runs these rules on any user's text (up to
-  65,536 characters in a body) on one poller thread, and a regex that backtracks does not return. The habits:
-  `[ \t]*` after a line anchor, never `\s*` (it spans newlines); no two adjacent quantifiers that can take the
-  same character; alternatives disjoint on their first character; every unbounded `[^\n]*` in front of another
-  pattern given a `{0,N}` window; host patterns anchored and label-bounded. Two tests hold the line:
-  `tests/test_adversarial_input.py` times the named vectors, and runs, in a subprocess (a runaway `re` match
-  holds the GIL and cannot be interrupted), inputs of 65,536 characters assembled from the literals of EVERY
-  module-level regex in the package (repeated, and followed by ONE long run of blanks, punctuation or quotes, which
-  is what makes adjacent optional quantifiers cubic), naming the pattern that stalls. A new module-level pattern needs
-  no registration; it is picked up. A regex written inline inside a function is not: compile it at module level.
-- **The change text is scanned once per change in the poller.** `cli._baseline_indicators(event,
-  content_hits=…)` and `cli.screen(…, baseline=…)` take the result of the one `scan_change`; do not call it again.
-- **Hits are capped at 25 per (rule, place, title)** (`_MAX_HITS_PER_RULE`): more matches of one rule in one file add size,
-  not information, and every trace, response and SIEM payload is built from the list. The title is part of the key
-  because `curl-pipe-shell` has three forms that are all `critical` until the prose softening runs: 25 documented
-  pipe installers must not evict a substitution or PowerShell payload that follows them. The SIEM payload lists the
-  100 most severe and says how many there were (`indicator_count`).
-- **`branch-name-injection` is `high` unless the author is an OWNER, MEMBER or COLLABORATOR** (then `medium`):
-  a maintainer can name a branch `fix/handle_${HOME}_expansion`.
-- **A detector that raises is a finding, not a silence.** `scan_indicators` runs each detector in `_DETECTORS` under
-  a guard; one that raises on an input records a `high` `scanner-error` hit (stable evidence, so it dedupes) and the
-  rest still run. Otherwise one crafted string would disable the scan of everything else in the same text.
-  `tests/test_metadata_rules.py` also feeds thousands of random strings from a hostile alphabet through the scanners
-  and requires that none raises.
-- **The per-place cap keeps the most severe hits.** `_MAX_HITS_PER_RULE` (25 per rule and place) sorts by severity
-  before slicing, so decoys cannot evict the critical that follows them.
-- **`invisible-unicode` covers** bidi overrides, embeddings and isolates; the word joiner and the invisible math
-  operators (U+2060-2064, U+206A-206F); the Hangul fillers; a ZWSP anywhere but right after `@`; a byte-order mark
-  anywhere but the start of a line; Unicode tag characters, except one or two of the three subdivision flags that
-  exist (England, Scotland, Wales: a black flag, the region's tag letters, a cancel tag); the variation-selector
-  supplement (U+E0100-E01EF); and three or more plain variation selectors in a row (one is emoji presentation).
-  The Mongolian vowel separator is not on the list: it is ordinary Mongolian text.
-  `diff-viewport-evasion` counts any horizontal whitespace or invisible filler as the run.
-- **Command words are bounded by ASCII alphanumerics, never `\b` or `\w`.** Those know Unicode: `_` and every CJK or accented
-  letter are word characters, so `__curl … | sh__` (Markdown emphasis) or `執行curl …` (CJK prose has no spaces) were "inside a
-  word" and found by nothing (`_W0`/`_W1`; an underscore after an alphanumeric, `my_curl`, still glues). An interpreter sink
-  (`| python3 -`, `| perl`) is a sink unless ONE MORE ARGUMENT follows (a negative test: a positive list of terminators missed
-  `”`, `:`, `(macOS)`, `~~`); with an explicit `-` it is the stream whatever arguments follow (`python3 - a b c d e`), and a
-  known installer's arguments past the ones the pattern reads must still be documented switches. Prose and HTML files are also scanned as RENDERED (`_rendered`: entities decoded, `&#124;` is a pipe; HTML comments of
-  any length or over any number of lines removed in one linear pass; the tags GitHub renders removed, their attributes read
-  as quoted strings that may hold a `>` (up to 600 characters), but not a placeholder like `<url>`; a block-level tag
-  (`<br> <p> <li> <td> <h3> <pre> <div> <summary> …`) is a LINE BREAK, an inline one is nothing, `<code>x</code>` is a code span
-  (unless it holds a backtick or a `<`, or runs past 2000 characters); a link reduced to its text, with a title, by reference (an undefined `[1]` stays literal
-  when a `(` follows: `[1][docker](url)` is a marker and a link), or with one balanced
-  parenthesis in the destination (`[t](u "title")`, `[t][1]`, `[bash](…/Bash_(Unix_shell))`); an autolink `<https://…>` is its URL; emphasis
-  markers that are not inside an identifier removed, nested or not, but not `~=3.9`; a word in backticks reduced to the word),
-  and the download hits only that view has are added: more hits of a form, or a MORE SEVERE one (markup inside a wrapper's name,
-  `do<b></b>cker run x curl …`, softens the raw hit and not the rendered one). A documented installer in `<code>` is not
-  reported twice. A reader copies the rendered command. A tag in front of, or after, a documented installer is markup whatever the length
-  of its attributes (GitHub's own code blocks carry `class="highlight highlight-source-shell notranslate position-relative
-  overflow-auto" dir="auto"`); an `<…://…>` is never a stand-in for a URL. Code files are not rendered: there the markup is shell syntax (`| `sh``
-  is a command substitution, not covered). The planner's `scan_indicators` tool applies the same view.
-- **Pipe-to-shell is matched in the shapes people commonly write it**:
-  * the shell: any of `sh bash zsh dash ksh ash fish csh tcsh` by name or path, with quotes or backslashes threaded
-    through the letters (`"ba"sh`, `b\ash`, `s''h`), or `$SHELL` / `$0`; wrapped in `env` (`-i`, `VAR=x`), `busybox`,
-    `command`, `exec`, `nohup`, `nice`, `timeout` or `stdbuf` (with their flags, a duration, a signal name) or a bare
-    `VAR=x` assignment, behind `sudo` / `doas` / `pkexec` (up to eight tokens: `-u user -g group -H`, `env`, `VAR=x`)
-    or `su -c`; a shell name followed by a sentence-final period (`… | bash.`) is still the shell, `sh.exe` is not;
-  * an interpreter that reads its program from the pipe: `python3 -`, `python3 - arg`, `python3.11`, `perl`, `ruby`,
-    `nodejs`, `node`, `php`, also with flags that leave the program on stdin (`-u`, `-B`, `-W ignore`, `-w`, `--no-warnings`),
-    and not `python -m …`, a script, or `-c` / `-e` / `-r`;
-  * the FIRST pipe into a shell is the sink (the stages are lazy: two commands on one line are two matches, not one
-    match with the first command's shell as a "stage"); up to three stages in between, each a command name of at most 60 characters (letters, digits, `.` `-` `/`) with
-    up to ten arguments of at most 100 characters (`base64 -d`, `gpg -d`, `tee`); `|&`; a quoted `|` inside the URL or
-    a header (a quoted string may hold a newline, an escaped quote, or be ANSI-C `$'…'`); the download word may itself
-    be quoted (`cu''rl`, `c\url`) or split by a backslash-newline; up to 300 characters of arguments between it and the
-    pipe, AFTER `_join_lines` has folded the padding that would push a real command out of that window: a run of
-    blanks, a run of more than 120 characters with no shell syntax in it (head and tail kept), any remaining word of more
-    than 120 characters (its head and tail, plus every syntax character in the middle with the word that follows it up
-    to 64 characters, or 6 when the run goes on: `A…A|/bin/sh;#B…B` keeps `|/bin/sh;#`), a path padded with slashes or
-    `/..` segments (`/bin//////sh`; per run of a word with no syntax in it, so a glued `|` or `#http://a` does not
-    exempt it, and never inside a URL), the run that continues out of the kept head (up to 64 characters), and a token or a group of up to eight tokens repeated (`-s -s -s …`, `-H a:b -H a:b …`). The window is also tried without any notion of strings (`_CURL_PIPE_PLAIN_RE`, and an alternative
-    of the PowerShell pattern; its window is lazy, so a quoted string with a glued `|` still ends at the real pipe): a quote the shell does not read as a string (`'it'\''s'`, `x\'`, a `#` comment saying
-    "don't") flips the parity of the atomic quoted-string alternatives, and a pipe would then sit inside a fake string.
-    A comment of any length after a trailing pipe still continues the pipeline (each `|` is consumed once, so the scan
-    stays linear). The window is counted in characters, never
-    in tokens: a pattern that can start at every position of a long token must stay bounded by characters, or
-    `curl.curl.curl.…` is quadratic;
-  * the command substitutions (`bash -c "$(curl …)"`, `bash -euo pipefail -c …`, `bash --rcfile F -c …`, `bash <(curl
-    …)`, `source <(curl …)`, `source /dev/stdin <<< "$(curl …)"`, `bash <<< "$(curl …)"`, `eval "$(curl …)"`,
-    `ruby -e`/`php -r "$(curl …)"`, `python3 <(curl …)`, `python3 - <<< "$(curl …)"`, a quoted shell), with `sudo`, `command`, `exec`, `env`, `nohup`, `time`,
-    `timeout N` or a full path before `curl`; an interpreter's arguments after the substitution are held to the same switches as
-    in the pipe form (`python3 <(curl …) --git URL` is not softened);
-  * PowerShell in its own spellings: `iwr … | iex` (`curl` and `wget` are aliases of `iwr` there), `iex (irm …)`,
-    `iex "$(irm …)"`, `iex "& {$(irm …)} -RunAsAdmin"`, `iex $c.DownloadString(…)`, `iex ((New-Object
-    Net.WebClient).DownloadString(…))`, `[scriptblock]::Create((irm …))`.
-  A backslash-continued command and a pipe at the end of a line (over blank and `#` comment lines) are joined before
-  matching (`_join_lines`), in the scan and in the prose softening alike; the `|` that opens a YAML block scalar is not
-  a pipe unless the previous physical line ended in a backslash.
-- **A privileged trigger is recognised in the common YAML spellings**: the map key, `on: name`, a flow list or map
-  (on the `on:` line or on a line of its own) that holds other events first, a block-list item, quotes (also on
-  `on`), an anchor, and a trailing `# comment`. For `pwn-request` alone, `issue_comment` counts beside
-  `pull_request_target` and `workflow_run` (it runs with the base repository's secrets whoever commented, and a
-  `/deploy` comment that checks out the PR head is the same lethal shape), but that trigger by itself is not a
-  finding. `pull_request_review` and `pull_request_review_comment` are not privileged: from a fork they get a
-  read-only token and no secrets, like `pull_request`. A head checkout is `head.sha/ref`, `merge_commit_sha`,
-  `github.head_ref`, `refs/pull/…`, or `gh pr checkout` of an interpolated PR; the `allow-unsafe-pr-checkout: true`
-  opt-in is recognised as a map key, in a flow map, and quoted.
+- **`pwn-request` has three checkout forms, each requiring the privileged trigger:** the head expression on a
+  `ref:` (directly or one binding hop away), a hand-rolled `git fetch` / `gh pr checkout`, and
+  `allow-unsafe-pr-checkout: true` (the actions/checkout v5.1+ opt-in; the line states the intent, so no dataflow
+  is needed). Each form has its own title. A privileged trigger is recognised in the common YAML spellings (map
+  key, `on: name`, flow list or map, block-list item, quotes, anchor, trailing comment). `issue_comment` counts
+  beside `pull_request_target` and `workflow_run` (it runs with the base repository's secrets), but that trigger
+  alone is not a finding; `pull_request_review` and `pull_request_review_comment` are not privileged.
+- **A paired rule only pairs within one file.** `scan_diff` splits a unified diff on its file headers and
+  `scan_content` does the same for an event. `normalize.content_segments` is the single definition both
+  `raw_content` and the baseline build on. Per-file scoping stops two halves from different files composing into a
+  `critical` no file contains, and keeps a hit id byte-stable between a whole-diff and a single-file scan, which is
+  what lets the baseline and an in-loop scan dedupe. Non-diff input falls through to a whole-text scan.
+- **The in-loop tool registers as exactly `scan_indicators`.** dspy registers a tool under its `__name__` and the
+  prompt calls `scan_indicators(region)`; the inner callable is renamed on purpose (`make_indicator_tool`).
+- **Hits are capped at 25 per (rule, place, title)** (`_MAX_HITS_PER_RULE`), most severe first, so decoys cannot
+  evict the critical that follows them. The title is part of the key because `curl-pipe-shell` has three forms. The
+  SIEM payload lists the 100 most severe and says how many there were (`indicator_count`).
+- **A detector that raises is a finding, not a silence.** `scan_indicators` runs each detector in `_DETECTORS`
+  under a guard; one that raises records a `high` `scanner-error` hit and the rest still run.
+  `tests/test_metadata_rules.py` feeds thousands of random hostile strings through the scanners and requires that
+  none raises. The prose softening and the rendered view run under the same kind of guard (`_or_closed`): a crash
+  keeps the installer as strict as the detector found it and adds a `scanner-error` hit.
+- **Every regex is linear on hostile input.** The watcher runs these rules on any user's text (up to 65,536
+  characters in a body) on one poller thread, and a regex that backtracks does not return. Habits: `[ \t]*` after a
+  line anchor, never `\s*`; no two adjacent quantifiers that can take the same character; alternatives disjoint
+  on their first character; every unbounded `[^\n]*` in front of another pattern gets a `{0,N}` window; host
+  patterns anchored and label-bounded. `tests/test_adversarial_input.py` times named vectors and, in a subprocess,
+  runs 65,536-character inputs built from the literals of every module-level regex in the package. A regex written
+  inside a function is not picked up: compile it at module level.
+- **The change text is scanned once per change in the poller.** `cli._baseline_indicators(event, content_hits=...)`
+  and `cli.screen(..., baseline=...)` take the result of the one `scan_change`.
+- **Command words are bounded by ASCII alphanumerics, never `\b` or `\w`**, which know Unicode: `__curl ... | sh__`
+  (Markdown emphasis) and `執行curl ...` (CJK prose has no spaces) must still be found.
+- **`invisible-unicode`** covers bidi overrides, embeddings and isolates; the word joiner and invisible math
+  operators; the Hangul fillers; a ZWSP anywhere but right after `@` (Dependabot renders `@​user`); a BOM
+  anywhere but the start of a line; Unicode tag characters (except the three subdivision flags); the
+  variation-selector supplement; and three or more plain variation selectors in a row.
+- **`branch-name-injection` is `high` unless the author is an OWNER, MEMBER or COLLABORATOR** (then `medium`): a
+  maintainer can name a branch `fix/handle_${HOME}_expansion`.
+
+## `curl-pipe-shell`
+
+A download piped into a shell or an interpreter is `critical`. It has three forms that are judged separately: the
+pipe, the command substitution and PowerShell's. In prose (a `title`, `body` or `comment`, or a documentation file:
+`.md .mdx .markdown .rst .adoc .ipynb .html .htm`) a documented installer is `medium`. Code files (`.sh`, `.go`,
+`.yml`, a Dockerfile, `requirements.txt`) and branches are never softened. The segment kind decides, never a label.
+The planner's `scan_indicators` applies the same softening to the region it is given.
+
+### What it matches
+
+- **The pipe form.** The shell is `sh bash zsh dash ksh ash fish csh tcsh` by name or path (quotes or backslashes
+  threaded through the letters are fine), `$SHELL`, or one of them behind `env`, `busybox`, `command`, `exec`,
+  `nohup`, `nice`, `timeout`, `stdbuf`, `sudo`, `doas`, `pkexec` or `su -c`. An interpreter that reads its program from the pipe
+  (`python3 -`, `perl`, `ruby`, `node`, `php`) counts too, but not `python -m`, a script file or `-c` / `-e`. The first
+  pipe into a shell is the sink; up to three stages in between; the download word may itself be quoted or split by a
+  backslash-newline; up to 300 characters of arguments sit between it and the pipe, after the padding that would
+  push a real command out of that window has been folded. The window reads quoted strings (which may run over a line),
+  `$'...'` as an ANSI-C string, and a backslash outside a string as bash does (`\'`, `\|` and `\$` are characters of a word,
+  `curl -H 'a<newline>b' URL \' | sh`). A second window reads `$` as a plain character (after `\$` or `$$`, and in dash,
+  `$'` starts no ANSI-C string), and a third ignores quotes altogether (it finds a Markdown table cell's `\|`). A match of
+  any of the three counts.
+- **The command substitution form:** `bash -c "$(curl ...)"`, `bash <(curl ...)`, `source <(curl ...)`,
+  `eval "$(curl ...)"`, `python3 <(curl ...)`, here-strings, with the usual prefixes.
+- **The PowerShell form:** `iwr ... | iex` (`curl` and `wget` are aliases of `iwr` there), `iex (irm ...)`,
+  `iex ((New-Object Net.WebClient).DownloadString(...))`, `[scriptblock]::Create(...)`.
+- A backslash-continued command and a pipe at the end of a line are joined before matching (`_join_lines`), in the
+  scan and in the softening alike. A line that looks like a table row but is not one keeps its lines, and its
+  pipeline is appended at the end of the text; the appended lines are matched as a text of their own (`_matches`). Prose and HTML files are also scanned as rendered (`_rendered`, below), and the
+  hits only that view has are added.
+
+### When prose makes it `medium`
+
+Every download of the form in the segment must meet all of these; one failure keeps the whole form `critical`.
+The form is part of the hit id, and two hits that share an id keep the more severe one (`keep_worse`).
+
+1. **Known installers only** (`hosts.KNOWN_INSTALLERS`: exact hosts, and exact path patterns for shared hosts such
+   as `raw.githubusercontent.com/nvm-sh/nvm/...`). `hosts.installer_only` is strict: every flag is on an allowlist
+   (`-sSfL`, `-o-`, `--proto '=https'`, `--retry N`; `--proxy`, `--config`, `--next` and the like fail), every
+   argument is a clean URL, and a stand-in (`...`, `<url>`) names no download. `powershell_installer_only` applies the same
+   test to PowerShell. Never add a whole platform (github.com, raw.githubusercontent.com) to the list.
+2. **A plain shell side** (pipe form). A bare shell name or one under `/bin`, `/usr/bin`, `/usr/local/bin`, plain
+   flags, no `-c`, no script operand (`sh ./evil.sh`), no `=` or URL; only decode or copy filters between the
+   download and the shell (`base64 gunzip gzip zcat xz tee cat`); an interpreter only for a known installer and only
+   with the switches it documents.
+3. **It stands on its own logical line.** Nothing on the line feeds it (`|`, `=`, `&`, `;`, `$`, `xargs`, `-exec`;
+   only `NONINTERACTIVE=`, `CI=` and `DEBIAN_FRONTEND=` may precede it), and no program runs it elsewhere or in its
+   place (`_wrapped` reads every word in front of the command, after markup, labels, list markers and redirects are
+   dropped). The command starts within `_MAX_PROSE_LEAD` characters of its line or inside an inline code span, and
+   the rest of the line is prose.
+4. **Nothing earlier in the segment changes what runs** (`_HIJACK_RE`): a curl config, an alias or function named
+   `curl` or a shell, an assignment to `PATH`, `HOME`, `LD_*`, `BASH_ENV`, `SSL_CERT_*`, a URL assigned to any
+   variable, a proxy variable, a write to `/etc/hosts`, PowerShell's `Set-Alias`. This is a brake on false positives,
+   not a proof: what defeats it is still recorded at `medium` and handed to the planner as evidence.
+5. **The installer is not enclosed** by anything a wrapper opened above it, and the text has no shape the
+   softening does not read (both below).
+
+### Is the installer enclosed?
+
+`ssh evil.example 'NEWLINE curl ... | sh NEWLINE '` runs the installer inside ssh's argument, so a documented installer
+stays `critical` when something above it opens a wrapper's quote, here-document or substitution. `enclosed` in
+`_soften_prose` asks two readings of the folded join; **either one** keeps the installer `critical`.
+
+- **The line-wide floor (`linewide.py`)** is the rule the project used before the lexer, copied unchanged. A line
+  opens something when its last 300 characters (minus quote, list and prompt markers) hold an odd number of
+  apostrophes (one between two letters does not count), an odd number of double quotes or a `<<`, and a word in it
+  could run what follows (`linewide.wrapped`: a wrapper, an interpreter, a path, a name glued to the command). The
+  60 lines after an opening line are enclosed. The floor also asks `wrapped` of the text in front of the command on
+  its own line. It counts the quotes the text spells, so it sees the ones a YAML scalar, a string literal, `printf`, a
+  variable or Markdown rendering turns into the quote a shell is handed, which the lexer cannot. It knows no fence,
+  removed line, closed string or syntax error. A text with a NUL is read with and without it.
+  - **Guarantee:** what the earlier rule rated `critical` through its opening-line rule or lead check is not softened
+    now. Exceptions: the removed lines, hunk headers (not the section heading after the second `@@`, which is a line of the
+    new file) and `\ No newline` notes of a patch (the rendered view is of the new file, so a line break it makes
+    carries the marker of its line), and a NUL anywhere in the text (it is read without the NUL, as the shells read it).
+  - **Do not narrow the floor or relax the lexer's answer on top of it.** Test the lexer's relaxations through
+    quote-free openers (`ssh evil.example $(`).
+- **The lexer (`shelllex.py`)** is a one-pass quoting lexer with a stack of open constructs (quotes, `$'...'`,
+  backticks, `$(...)`, `<(...)`, `(...)`, `$((...))`, `${...}`) and a queue of pending here-documents, held to
+  `bash -n` and `dash -n` by the oracle. What the two shells read differently, or what needs a parser, is `unknown`
+  (the docstring lists them) and counts as enclosed on the lines after the first one on which a command may begin like
+  a wrapper's. A construct counts only when the command that holds it is a wrapper and does not read as prose
+  (`_begins_with_wrapper`, `_wrapped`): `ssh evil.example '`, `docker run x sh -c "`, `ssh evil.example <<'EOF'`. A
+  capitalised first word, an apostrophe, a URL, or a word such as `the a an is it to of use run` makes prose, and a
+  plain-word host (`ssh host '`) reads as prose.
+  - The diff's `+` and a blockquote's `>` are removed, and the text is read in each stretch between code fences. A
+    fence is a line of three or more backticks or tildes, at most three blanks in, with nothing in front of it. A
+    fence behind a quote or list marker cuts nothing. The lines of an HTML block are text. A string opened in one
+    block is not open in the next. CommonMark's container rules are not modelled further.
+  - Every reading is also tried from each wrapper word as a fresh start, because prose or a table cell can sit in
+    front of a command (`Run:ssh`, `| docker |`). The 60 lines after it are read as a script of its own.
+  - `eval` runs the script its first string holds, and a string piped into a shell or an interpreter is a script
+    too; both are read as such to a depth of three.
+  - A wrapper-led line whose comment holds a quote is read a second time as a zsh in a terminal reads it, where `#` is no comment.
+  - The enclosure reads are held to a budget of 12 units per character plus 2,000, and a command of more than 600
+    characters is judged from its head and tail. The budget fails closed.
+
+### Shapes the softening does not read, and the rendered view
+
+- **The gate (`_unread_shape`)** is fail-closed: a text with a shape that the softening does not read is not softened
+  at all, and the extras of its rendered view are not either. The shapes are a lone CR, a diff block in a
+  document (a line of the new file that starts with `+` and a non-blank), a notebook array, the strings of a list that
+  hold a download and a program, a multi-line array assignment, a YAML single-quoted scalar that goes on, and a
+  template placeholder that spells a quote. A crash of the check is a shape.
+- **The rendered view (`_rendered`)** reads a text as a reader copies it: entities decoded, comments and tags
+  gone, a block tag a line break, links reduced to their text, emphasis markers removed, a word in backticks reduced to the
+  word, a code span of a quote read as that quote. Its stricter hit stands (stricter wins). `_shield_html_fences` blanks
+  fence markers inside HTML blocks first. A second view without those last two readings is read as well, because a
+  backtick they erase still counts in front of a command (`ssh host <code> ' </code> curl ... | sh`). `.rst`, `.adoc`,
+  `.html`, `.htm` and `.ipynb` are not Markdown, so no fence or HTML block cuts there.
+
+### Accepted over-alerts and known gaps
+
+The first four bullets are over-alerts, not misses: for the examples they give, the installer stays `critical`.
+
+- A letter-apostrophe-letter (`change's`) after a path-like first word makes the rest of that stretch of prose
+  enclosed (`/format the change's notes`, `bin/evil doesn't work.`). Markup hides a relative path from the raw
+  reading, but an absolute path (`/usr/bin/x`, `./x`, `~/x`) or a typographic quote hides nothing, and the rendered
+  view reads a code span or emphasis away, so `` `src/main.py` doesn't read the config. `` before an installer is
+  `critical`. A shell would read the apostrophe as an unterminated string.
+- A line led by a wrapper that runs what follows whose comment holds a quote (`uv run pytest  # run the project's tests`;
+  not `npm test` or a plain-word host), and prose with an unmatched quote or backtick next to a bare path or a wrapper head.
+- A table row with a quote, a closer or a stray `$(` or backtick opener followed by a paragraph joins that paragraph; a cell
+  after a command written as plain text or `<code>` is a stage of its pipeline; a `+` row inside a fenced `diff` block reads
+  as shell text.
+- A tilde fence (the rendered view erases `~~~`), and any text with a gate shape.
+- Known gaps: a hunk or text that starts inside a construct opened above what is visible; indented code read as
+  prose; commands that are not known wrappers (`awk`, `parallel`, `aws ssm`, `csh`, `lua -e`);
+  a patch whose removed lines or hunk headers sit between `curl U |` and `sh`; single-line sink forms such as
+  `| >/dev/null sh`, `| { sh; }`, `| setsid sh`, `| xargs -0 sh -c`; a comment word followed by a backslash; a
+  here-document on a multi-line compound command; a redirect after a here-document delimiter; more than about 300
+  characters of distinct words between `curl` and the pipe; a quoted-space argument (`' '`) that the padding fold turns into
+  a lone quote (`" "` and a string that ends in a blank are folded the same way), together with a quoted argument that runs
+  over a line; an argument that is a multi-line `$(...)`, backtick span, `${...}` or `<(...)` in front of the pipe; a lone CR
+  (the scan reads it as a newline, a shell as a plain character); a quoted `|#` among the arguments (the rest of the line
+  reads as a comment); a `$'` that is an ANSI-C string in one place and `$$` followed by a quote in another. The earlier rule
+  found some of these only by accident, when a `\'` pair closed a string that a shell does not see; the plain forms without
+  the `\'` were never found, and the quote-aware window now reads `\'` as a shell does. A single-line command with an escaped pipe (`\|`) among the arguments is found, but the
+  softening reads it as the pipe of a table cell: in prose a command whose `\|` comes before the URL (`curl \| URL | sh`, any
+  URL, an attacker's included) is rated `medium`, and the same command with a multi-line quoted argument is rated `medium` when
+  a documented installer is above it (or more than 60 lines below it). `install.sh` keeps `critical`.
+
+### Measured
+
+- **Over-alert rate.** The uv installer inserted as its own paragraph into 2,400 real Markdown documents (7,200
+  insertions): about 2.5% read `critical` where the earlier rule said `medium`, and none read `medium` where it
+  said `critical`. About a quarter of those come from a gate shape (under 1% of documents hold one). Without the
+  floor, about 3% of the insertions would have been softened that the earlier rule kept `critical`. An installer
+  whose own line carries a quote (the rustup one) over-alerts more, roughly one insertion in eight on a similar corpus,
+  because a plain apostrophe in the prose above pairs with that quote.
+- **Cost is linear.** The worst shape (`curl(` repeated) costs about 10 µs per character per channel (0.7 s for a 65 KB body,
+  about 20 s for a 2 MB patch); the hostile enclosure and gate shapes cost 2 to 17 µs per character; plain prose is
+  about 2 µs and a README 8 to 14. Tests hold the cost per character flat from 16 KiB to 128 KiB.
+- **The lexer agrees with real shells.** The oracle (`DS_ORACLE=1`) has found no case of the lexer calling a construct closed
+  that `bash -n` or `dash -n` reports open since the last fix.
+
+### How it is verified
+
+- **The oracle** (`tests/test_oracle.py`, opt-in, Docker): seeded candidates run under the container's real `bash`
+  and `dash` with stub `curl`/`wget` and stub programs that only log, no network, no capabilities, a read-only root,
+  and a canary download before and after each batch. Four properties: recall in code files, recall in prose
+  (whatever a shell really runs stays `critical`), the lexer against `bash -n` / `dash -n`, and soundness of the
+  softening (whatever is reduced to `medium` fetches nothing but a known installer and calls nothing else). A new
+  spelling goes into `tests/oracle/grammar.py` first. The oracle sees under-detection and unsafe softening, never extra
+  alerts, and does not cover PowerShell, zsh, or effects only the real installer would show; guards that only add
+  alerts are pinned by unit tests instead.
+- **Unit pins.** `tests/test_linewide.py` pins the floor against its source rule; `tests/test_gate_edges.py` pins the
+  gate, rendered view and shield patterns by the shortest texts on which a mutant of each differs;
+  `tests/test_enclosure.py`, `tests/test_shelllex.py` and `tests/test_metadata_rules.py` pin the rest end to end.
+  A mutant that no text tells from the code is an equivalent one (an alternative another covers, a possessive
+  quantifier, a class member under `re.IGNORECASE`, a cost bound).
+
+## Other prose softening
+
+All in `indicators._soften_prose`; a code file and a branch are never softened.
+
+- **`prompt-injection`** whose only trigger is the bare phrase "system prompt" is `medium`: ordinary in a thread
+  about an LLM product. It is `high` when:
+  - a real override phrase is present (`ignore previous instructions`, `your system prompt`, `print the system
+    prompt`, `new instructions:`, and the previous / prior / earlier / the above family), which must name what is
+    dropped (instructions, rules, guidance, context) or ask for an action (approve, merge, lgtm, reply, print,
+    reveal, send, exfiltrate, grant, delete, execute). "Ignore all previous commits" and a bare "ignore the above"
+    are ordinary sentences;
+  - an imperative starts a sentence aimed at the phrase (`Ignore the system prompt ...`, `New system prompt: ...`):
+    the verb follows the start of the text or a line, punctuation, a quote, a markdown or diff marker, a table pipe,
+    a bullet, a vocative, or `could you` / `can you` / `you need to` / `you will`; never a hyphen, an apostrophe or a
+    word;
+  - it is addressed to a reviewer or a model: `please`, `you must/should`, or a name (`agents`, `Claude`, `the AI`,
+    `reviewers`) with a directive modal, then the verb. A name without a modal describes them. Not through a negation.
+
+  It stays `medium` when the verb starts a library title with a subordinate clause (`Ignore system prompt when
+  counting tokens`), when the phrase starts a longer name (`system prompt caching`) or is a whole table cell, and
+  when negated, except that a clause about the review itself (`when reviewing this PR`, `and merge`) makes it an
+  instruction. A variable (`SYSTEM_PROMPT`), a flag or a path is not the phrase.
+- **`pwn-request`** is `medium`: a workflow shown in a body, a comment or a documentation file is not one that runs.
+  The same text in a workflow file stays `critical`.
+- **`diff-viewport-evasion`** is `medium` in a comment only (a padded markdown table). In a file, including a
+  markdown file, it stays `high`.
+- A planner re-scan of text that is not byte-identical to the baseline's window mints another id (a title is scanned
+  with the author appended by the baseline), and the stricter baseline hit for a code file always stays in the union.

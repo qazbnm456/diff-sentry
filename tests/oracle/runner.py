@@ -85,7 +85,7 @@ def run(text: str, shell: str) -> str:
         log = os.path.join(d, "log")
         pathlib.Path(log).write_text("")
         for name in ("evil", "evil.sh", "x", "x.sh", "e.py", "f", "bin/evil", "a/b", "scripts/evil", "evil.run", "evil.json",
-                     "evil.sh-bak", "evil.ksh"):
+                     "evil.sh-bak", "evil.ksh", "bin/@evil", "dir/é"):
             planted = pathlib.Path(d) / name
             planted.parent.mkdir(exist_ok=True)
             planted.write_text('#!/bin/sh\necho "OTHER $0" >> "$ORACLE_LOG"\n')

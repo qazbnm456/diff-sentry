@@ -17,17 +17,23 @@ No dspy import; the tool wrapper imports only `rlm_harness.trace.record_tool_cal
 
 from __future__ import annotations
 
+import ast
 import base64
 import binascii
 import bisect
+import functools
 import hashlib
 import html
+import json
 import math
 import re
-from collections import Counter
-from collections.abc import Callable
+import warnings
+from collections import Counter, deque
+from collections.abc import Callable, Iterator
+from functools import partial
 from itertools import islice
 
+from . import linewide, shelllex
 from .hosts import bare_command, installer_only, powershell_installer_only
 from .normalize import OUTSIDER_ASSOCIATIONS, is_scanned_comment
 from .schema import IndicatorHit, severity_rank
@@ -119,20 +125,28 @@ _INTERP = (rf"{_SHELL_WRAP}(?:[\w./-]{{0,60}}/)?{_INTERP_NAMES}"
 # whitespace-separated NON-space tokens, so the split between an argument and the whitespace after it is never
 # ambiguous (an open-ended `[^|]{0,80}` beside a trailing `[ \t]*` backtracks polynomially across stages).
 _PIPE_STAGE = r"\|&?[ \t]*[A-Za-z/.~][\w./-]{0,60}(?:[ \t]+[^|\s]{1,100}){0,10}[ \t]*"
+# The window between the download and the pipe: up to 300 atoms, a quoted string being one atom. A backslash outside a string is read as bash reads it: a pair `\\`, `\'`, `\"`, `\|` or `\$` is one atom,
+# so `\'` is a quote character of a word and opens no string (`curl -H 'a<newline>b' URL \' | sh`), and `\\'` is a backslash and a quote that opens one. `$` is taken only by the atomic group
+# (`$'...'`, else a bare `$`) and a backslash only by its own alternatives, so that no text can be parsed two ways (a class that took `$` as well made `curl $'a'$'a'...` exponential; a quote
+# that a backslash had escaped, read as the start of a string, made `curl\"curl\"...` cost hundreds of microseconds a character).
+_PIPE_WINDOW = r"(?:[^\n|'\"\\$]|\\(?![\\'\"|$])|(?>\\[\\'\"|$]|\$'(?:[^'\\]|\\.){0,4000}'|'[^']{0,4000}'|\"(?:[^\"\\]|\\.){0,4000}\"|['\"]|\$)){0,300}"
+# The same window with `$` as a plain character and no `$'...'` string: after `\$`, after `$$` (the PID) and in dash `$'` starts nothing, and `'...'` is a single-quoted string. Inside one window every
+# text still has one parse, so it stays linear; the pipe form is found when either reading finds it.
+_PIPE_WINDOW_DOLLAR = r"(?:[^\n|'\"\\]|\\(?![\\'\"|])|(?>\\[\\'\"|]|'[^']{0,4000}'|\"(?:[^\"\\]|\\.){0,4000}\"|['\"])){0,300}"
 _CURL_PIPE_RE = re.compile(
     # up to 300 characters between the download and the pipe (`_join_lines` has already folded a padded URL, a run of
     # blanks and a repeated flag), where a quoted string counts as one and may hold a newline or an escaped quote
     rf"{_W0}(?:c{_Q}u{_Q}r{_Q}l|w{_Q}g{_Q}e{_Q}t){_W1}"
-    r"(?:[^\n|'\"]|(?>\$'(?:[^'\\]|\\.){0,4000}'|'[^']{0,4000}'|\"(?:[^\"\\]|\\.){0,4000}\"|['\"])){0,300}"
+    rf"{_PIPE_WINDOW}"
     rf"(?P<stages>(?:{_PIPE_STAGE}){{0,3}}?)"       # lazy: the FIRST pipe into a shell is the sink, not the last
     r"\|&?[ \t]*(?:(?:sudo|doas|pkexec)[ \t]+(?:[-\w=./]+[ \t]+){0,8}|su[ \t]+(?:[-\w]+[ \t]+){0,3}-c[ \t]+)?"
     r"(?:[^\s|;&=]{1,40}=[^\s|;&]{0,40}[ \t]+){0,3}"
     rf"(?:[\\\"']?(?P<shell>{_SHELL_NAME})|[\\\"']?{_INTERP}|(?P<envshell>[\"']?\$\{{?(?:SHELL|0)\}}?[\"']?))", re.IGNORECASE)
 # The same command with a window that ignores quotes altogether. A quote that the shell does not read as a string
 # (`'it'\''s'`, `x\'`, a `#` comment saying "don't") flips the parity of the atomic quoted-string alternatives above,
-# and a pipe would then sit inside a fake string; a real pipe never hides from a window that knows no strings.
-_CURL_PIPE_PLAIN_RE = re.compile(_CURL_PIPE_RE.pattern.replace(
-    r"(?:[^\n|'\"]|(?>\$'(?:[^'\\]|\\.){0,4000}'|'[^']{0,4000}'|\"(?:[^\"\\]|\\.){0,4000}\"|['\"])){0,300}", r"[^\n]{0,300}?"), re.IGNORECASE)
+# and a pipe would then sit inside a fake string; a real pipe on one line never hides from a window that knows no strings.
+_CURL_PIPE_PLAIN_RE = re.compile(_CURL_PIPE_RE.pattern.replace(_PIPE_WINDOW, r"[^\n]{0,300}?"), re.IGNORECASE)
+_CURL_PIPE_DOLLAR_RE = re.compile(_CURL_PIPE_RE.pattern.replace(_PIPE_WINDOW, _PIPE_WINDOW_DOLLAR), re.IGNORECASE)
 # The same download-and-execute written with a command substitution instead of a pipe: `bash -c "$(curl …)"`,
 # `bash -o pipefail -c "$(curl …)"`, `bash <(curl …)`, `source <(curl …)`, `bash < <(curl …)`, `bash <<< "$(curl …)"`,
 # `eval "$(curl …)"`, `ruby -e "$(curl …)"`; the download may be `sudo curl`, `command curl` or a full path.
@@ -144,9 +158,9 @@ _CURL_SUBST_SHELL_RE = re.compile(
     # (`\eval`, `"." <(curl …)` and `'eval "$(curl …)"'` are the same program: the quotes go with the word, not in front of it)
     # (a one-letter list marker, `A.source`, is not a file name; `evil.sh <(curl …)` runs evil.sh)
     rf"(?:(?<![A-Za-z0-9.\"'\\])|(?<=(?<![A-Za-z0-9])[A-Za-z]\.))(?<![A-Za-z0-9]_)(?:{_SHELL_NAME}|{_Q}(?:{_Q.join('source')}|{_Q.join('eval')}|{_INTERP_NAMES}|\.))[\"']?[ \t]+"
-    r"(?:(?:[-+][A-Za-z]*[oO][ \t]+\w+|--(?:rcfile|init-file)[ \t]+\S+|[-+]{1,2}[\w-]+)[ \t]+){0,5}(?:-[ \t]+)?"
-    r"(?:(?:/dev/stdin[ \t]+)?<{1,3}[ \t]*)?(?:[\"'\\]+[ \t\n]*)?"
-    r"(?P<opener>\$\(|<\(|`)(?:[ \t]|\n[+ ]?)*"
+    r"(?:[\"']?(?:[-+][A-Za-z]*[oO][ \t]+\w+|--(?:rcfile|init-file)[ \t]+\S+|[-+]{1,2}[\w-]+)[\"']?[ \t]+){0,5}(?:-[ \t]+)?"
+    r"(?:(?:/dev/stdin[ \t]+)?<{1,3}[ \t]*)?(?:[\"'\\]+(?:[ \t]|\n\+?)*)?"
+    r"(?P<opener>\$\(|<\(|`)(?:[ \t]|\n\+?)*"
     r"(?:(?:[\w./-]{0,30}/)?(?:sudo|command|exec|env|nohup|time|nice|timeout|stdbuf|doas)"
     r"(?:[ \t]+(?:-[ug][ \t]+\w+|-\S{1,20}|\w+=\S{0,40}|\d+[smhd]?|[A-Z]{3,8})){0,4}[ \t]+){0,3}"
     rf"(?:[\w./-]{{0,40}}/)?{_Q}(?P<dl>c{_Q}u{_Q}r{_Q}l|w{_Q}g{_Q}e{_Q}t){_W1}", re.IGNORECASE)
@@ -464,9 +478,22 @@ _SUBST_TITLE = "download-and-execute through a command substitution"
 _PS_TITLE = "PowerShell download-and-execute"
 
 
+def _matches(rx: re.Pattern[str], joined: str, extras: int) -> Iterator[re.Match[str]]:
+    """The matches of `rx` in a joined text whose last `extras` lines `_join_lines` appended for rows it did not join in place. The text above and the appended lines are read as
+    texts of their own: a quote in an appended line would otherwise pair with one in the text above and hide a download there."""
+    if not extras:
+        yield from rx.finditer(joined)
+        return
+    end = len(joined.rsplit("\n", extras)[0])
+    yield from rx.finditer(joined, 0, end)
+    yield from rx.finditer(joined, end + 1)
+
+
 def _scan_shell(text: str, diff: bool = True) -> list[IndicatorHit]:
     hits: list[IndicatorHit] = []
-    joined = _join_lines(text, diff)
+    appended: list[int] = []
+    joined = _join_lines(text, diff, appended=appended)
+    extras = appended[0]
     for m in _IFS_RE.finditer(text):
         hits.append(_hit("ci-shell-injection", "high",
                          "`${IFS}` shell field-separator trick (space-evasion in a command)",
@@ -474,14 +501,15 @@ def _scan_shell(text: str, diff: bool = True) -> list[IndicatorHit]:
     # Every hit of these forms is `critical` here, and only the first `_MAX_HITS_PER_RULE` per place survive the cap in
     # `scan_indicators`: a hit past a few times that is never seen, so it is never built (a 2 MB patch of `curl | sh` is
     # otherwise thousands of hits made for nothing). The softening judges every match on its own.
-    for m in [*islice(_CURL_PIPE_RE.finditer(joined), _SHELL_MATCH_LIMIT),
-              *islice(_CURL_PIPE_PLAIN_RE.finditer(joined), _SHELL_MATCH_LIMIT)]:
+    for m in [*islice(_matches(_CURL_PIPE_RE, joined, extras), _SHELL_MATCH_LIMIT),
+              *islice(_matches(_CURL_PIPE_DOLLAR_RE, joined, extras), _SHELL_MATCH_LIMIT),
+              *islice(_matches(_CURL_PIPE_PLAIN_RE, joined, extras), _SHELL_MATCH_LIMIT)]:
         hits.append(_hit("curl-pipe-shell", "critical", f"{_PIPE_TITLE} (`curl … | bash`)",
                          _snip(joined, m.start(), m.end())))
-    for m in islice(_CURL_SUBST_SHELL_RE.finditer(joined), _SHELL_MATCH_LIMIT):
+    for m in islice(_matches(_CURL_SUBST_SHELL_RE, joined, extras), _SHELL_MATCH_LIMIT):
         hits.append(_hit("curl-pipe-shell", "critical", f"{_SUBST_TITLE} (`bash -c \"$(curl …)\"`)",
                          _snip(joined, m.start(), m.end()), form="substitution"))
-    for m in islice(_IWR_IEX_RE.finditer(joined), _SHELL_MATCH_LIMIT):
+    for m in islice(_matches(_IWR_IEX_RE, joined, extras), _SHELL_MATCH_LIMIT):
         hits.append(_hit("curl-pipe-shell", "critical", f"{_PS_TITLE} (`iwr … | iex`)",
                          _snip(joined, m.start(), m.end()), form="powershell"))
     for m in _CHMOD_EXEC_RE.finditer(text):
@@ -847,7 +875,12 @@ _INTERPRETERS = frozenset({"python", "python3", "perl", "ruby", "node", "nodejs"
 # The word after a wrapper that says it is being used as one: a flag, a host, an image, a path, an address, or the verb.
 _WRAPPER_ARG_RE = re.compile(r"\A-|[./:@=\d]|\A(?:run|exec|shell|ssh|attach|start|create|compose|sudo)\Z")
 _MARKUP_RE = re.compile(r"<!--[^>]{0,60}-->|</?[A-Za-z][A-Za-z0-9]{0,10}(?:[ \t](?:\"[^\"\n]{0,400}\"|'[^'\n]{0,400}'|[^<>\"'\n]){0,600})?/?>")
-_PATH_WORD_RE = re.compile(r"\.{1,2}/|/|~(?:/|\Z)")                    # `./evil`, `/tmp/x`, `~/bin/x`; not `.bashrc` or `~=3.9`
+_AFTER_SLASH = r"(?:[\w.~${@%+^=#*\[\\'\"`-]|[:,?!](?=[\w?*]))"         # what may follow a slash in the name of a program: not the punctuation that ends a sentence (`src/,` `src/)` `src/;`)
+_NAME_SLASH_RE = re.compile(r"[^/\s]/+(?=" + _AFTER_SLASH + r")|\A/+(?=[\w.~${@%+^=#\[\\'\"`-]|\*(?=[\w?*/])|[:,?!](?=[\w?*]))")   # a slash with a name after it in a word, as written: `bin/evil`, `bin/*`, `bin/@x`, `/@x`; not `pool/`, `bin/>x`, a lone `/`, `//`, `/*` or `/>`
+_PATH_WORD_RE = re.compile(r"\.{1,2}/|/+(?=[\w.~${@%+^=#\[\\'\"`-]|\*(?=[\w?*/])|[:,?!](?=[\w?*]))|~(?:/|\Z)")        # `./evil`, `/tmp/x`, `//tmp/x`, `/@x`, `~/bin/x`; not `.bashrc`, `~=3.9`, `/`, `//`, `/*` or `/>`
+_GLUED_LABEL_RE = re.compile(r"^(?:(?:\(?\d{1,3}[.):]|\([A-Za-z]{1,3}\)|[A-Za-z]{1,3}\)|[A-Za-z][.]|\[[A-Za-z0-9]{1,3}\]|={1,3}>|-{1,3}>|[:,.;)\]}])+|[A-Za-z][\w-]{0,29}:)")      # a label or a list marker glued to a word
+_GLUED_PATH_RE = re.compile(r"[\w/~$@%+^=#*?!\\\"'-]")             # what, glued to the closing quote of a quoted word or to a bracket, makes the word a path or a name and not a sentence
+_BARE_WORD_RE = re.compile(r"[^`*_<(\[\"'|]")                       # the first character of a word as written that is not markup: a code span, emphasis, a tag, a bracket or a quote in front of a word makes it text
 _ADDRESS_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")                  # an IPv4 address is a host, not a version
 _VERSION_RE = re.compile(r"[<>=~!]+|[<>=~!]*v?\d[\d.x*+]*")
 _PROMPT_RE = re.compile(r"\A\[?[\w.\-]{1,40}@[\w.\-]{1,80}(?:[ :][^\s\]$#]{0,80})?\]?[$#][ \t]+")           # `user@host:~$ `
@@ -901,7 +934,7 @@ _BLOCK_OPEN_RE = re.compile(r"<(?:br|hr|p|li|td|th|tr|dd|dt|div|ul|ol|dl|table|h
 _TABLE_CELL = r"(?:[^|\n;'\"`$\\&]|&(?:[A-Za-z]{2,8}|#[0-9]{1,6}|#[xX][0-9A-Fa-f]{1,6});|&(?!&)|`[^`|\n]{0,40}`|\"[^\"|\n]{0,40}\"|\$(?![({])){0,80}"
 # a Markdown table row: a leading pipe (after blanks, a diff `+`, quote markers) and a first cell of plain text
 _TABLE_ROW_RE = re.compile(rf"^\+?[ \t]*(?:>[ \t]+)*\|{_TABLE_CELL}(?<!>)\|", re.MULTILINE)        # (only from a line start)
-_TABLE_ROW_COMPAT_RE = re.compile(rf"^[ \t+]*(?:>[ \t]+)*\|{_TABLE_CELL}(?<!>)\|", re.MULTILINE)             # what a492ab2 called a row
+_TABLE_ROW_COMPAT_RE = re.compile(rf"^[ \t+]*(?:>[ \t]+)*\|{_TABLE_CELL}(?<!>)\|", re.MULTILINE)             # a line that begins like a row
 _TABLE_ROW_TEXT_RE = re.compile(rf"^[ \t]*(?:>[ \t]+)*\|{_TABLE_CELL}(?<!>)\|", re.MULTILINE)       # (no diff marker: `+` is a word)
 
 
@@ -968,9 +1001,10 @@ _TABLE_PREFIX_TEXT_RE = re.compile(rf"^[ \t]*(?:>[ \t]+)*\|(?:{_TABLE_CELL}(?<!>
 # where a row starts, for the line as it was written (the fold may turn `+ +|` into `+|`)
 _TABLE_HEAD_RE = re.compile(r"^\+?[ \t]*(?:>[ \t]+)*\|", re.MULTILINE)
 _TABLE_HEAD_TEXT_RE = re.compile(r"^[ \t]*(?:>[ \t]+)*\|", re.MULTILINE)
-_LONE_OPERATOR_RE = re.compile(r"(?<=\s)\d{0,3}[<>]+&?\d{0,3}(?=\s)")
+_LONE_OPERATOR_RE = re.compile(r"(?<=\s)\d{0,3}[<>]+&?\d{0,3}(?=\s|\Z)")
+_FD_DUP_RE = re.compile(r"\d{0,3}[<>]+&\d{1,3}\Z")                # `2>&1`, `>&2`: a redirect that is complete (`>&-` closes a descriptor and carries its own target, as `>f` does: it is no word of the command)
 _LEAD_PUNCT_WORD_RE = re.compile(
-    r"(?:\(?\d{1,3}[.):]|\([A-Za-z]{1,3}\)|[A-Za-z]{1,3}\)|[A-Za-z][.]|\[[A-Za-z0-9]{1,3}\]|={1,3}>|-{1,3}>|[:,.;)\]}])+([A-Za-z./~][\w./-]{0,100})")
+    r"(?:\(?\d{1,3}[.):]|\([A-Za-z]{1,3}\)|[A-Za-z]{1,3}\)|[A-Za-z][.]|\[[A-Za-z0-9]{1,3}\]|={1,3}>|-{1,3}>|[:,.;)\]}])+([A-Za-z./~][\w./@%+^=#*\\'\"~-]{0,100})")
 
 
 def _command_words(before: str, mask: int = -1) -> tuple[list[str], list[str]]:
@@ -990,6 +1024,10 @@ def _command_words(before: str, mask: int = -1) -> tuple[list[str], list[str]]:
         while i < len(w) and w[i].isdigit():
             i += 1
         if i < len(w) and w[i] in "<>" and k and w[i + 1:i + 2] != "=":
+            if _FD_DUP_RE.match(w):                    # a complete redirect (`2>&1`) takes no word after it and cuts nothing off: it is a word of the command, and a wrapper's argument
+                raw.append(w)
+                words.append(w)
+                continue
             if w.strip("<>&0123456789") == "":          # `>` alone: the next word is its target (or a breadcrumb's text); `>f` carries its own
                 if seen < 3:
                     skip = bool(mask >> seen & 1)
@@ -1044,12 +1082,36 @@ def _wrapped(before: str) -> bool:
     return any(_wrapped_words(*_command_words(before, mask)) for mask in range(1 << min(lone, 3)))
 
 
+_MARKER_WORD_RE = re.compile(r"[-+*#>$%=\u2022\u2192\u00bb\u276f\u279c\u203a\u25b6\u25ba\u21d2]+|\d{1,3}[.)]")        # a list marker, a bullet, an arrow, a prompt or a quote marker standing alone in front of a command
+
+
+def _is_bare(word: str) -> bool:
+    """Whether a word as written, once a label or a list marker glued to it is off, is not wrapped in markup: a code span, emphasis, a tag, a bracket or a straight quote in
+    front of a path makes it text (`` `pool/` ``), and `(a)bin/evil` is `bin/evil`. A typographic quote or `~~` is no markup to it (`\u201cbin/evil\u201d` is bare), and a path that
+    starts with `/`, `./`, `../` or `~/` is a program with or without markup (`_PATH_WORD_RE`, in `_wrapped_words`)."""
+    glued = _GLUED_LABEL_RE.match(word)
+    at = glued.end() if glued else 0
+    if _BARE_WORD_RE.match(word, at) is not None:
+        return True
+    if word[at:at + 1] == '"' and "$" in word[at:]:
+        return True                                         # `"$HOME/bin/tool" 'x`: the quotes keep the expansion in one word
+    closing = {'"': '"', "'": "'", "[": "]"}.get(word[at:at + 1])
+    close = word.find(closing, at + 1) if closing else -1
+    return close >= 0 and _GLUED_PATH_RE.match(word, close + 1) is not None      # `"bin"/evil`, `[_]d/evil`: the path goes on after the quote or the bracket
+
+
+def _first_command_word(raw: list[str]) -> int:
+    """The index of the first word that is not a marker (`- bin/evil 'x`, `# bin/evil 'x`, `$ bin/evil 'x`): a reader drops the marker."""
+    return next((k for k, word in enumerate(raw) if _MARKER_WORD_RE.fullmatch(word) is None), len(raw))
+
+
 def _wrapped_words(raw: list[str], words: list[str]) -> bool:
+    first = _first_command_word(raw)
     for k, word in enumerate(words):
         # a word that ended a clause is prose, judged before its punctuation is stripped
         if not word or raw[k][-1] in ":,.!?)":
             continue
-        if _PATH_WORD_RE.match(word) or (k == 0 and "/" in word):
+        if _PATH_WORD_RE.match(word) or (k == first and _is_bare(raw[k]) and _NAME_SLASH_RE.search(raw[k]) is not None):
             return True
         name = re.sub(r"\A(python\d?)\.\d+\Z", r"\1", word.rsplit("/", 1)[-1])       # python3.11 is python3
         if name in _ALWAYS_WRAPPERS:
@@ -1062,10 +1124,12 @@ def _wrapped_words(raw: list[str], words: list[str]) -> bool:
             continue
         if name in _WRAPPERS or name in _INTERPRETERS:
             nxt = (words[k + 1] if k + 1 < len(words) else "").strip("\"'`").rstrip(":,.;!?)")
+            written = (raw[k + 1] if k + 1 < len(raw) else "").strip("\"'`").rstrip(":,.;!?)")
+            written = "" if written.isascii() else written                    # a host with a non-ASCII letter (`é.example`) is judged as written: the letters cut off from it are no label
             after = words[k + 2].strip("\"'`") if k + 2 < len(words) else ""
             versioned = ((name in _INTERPRETERS or name == "docker") and _VERSION_RE.fullmatch(nxt)
                          and not _ADDRESS_RE.fullmatch(nxt))
-            if not nxt or (_WRAPPER_ARG_RE.search(nxt) and not versioned) \
+            if not nxt or ((_WRAPPER_ARG_RE.search(nxt) or _WRAPPER_ARG_RE.search(written)) and not versioned) \
                     or (name in _WRAPPERS and nxt in ("curl", "wget")) \
                     or (nxt == "container" and after in ("run", "exec", "start", "create")):
                 return True
@@ -1130,24 +1194,1003 @@ _SCRIPT_OPERAND = re.compile(
     # (not a closing tag or a parenthetical: `</code>`, `(macOS/Linux)`)
     r"(?:(?:[./]|~(?!~))\S{1,200}|(?![(\[<])(?:\S{0,200}/\S{0,200}|\S{1,200}\.[A-Za-z0-9]\S{0,200}))")
 _END_OF_FLAGS = re.compile(r"(?:^|\s)--(?:\s|$)")
-_ENCLOSED_LINES = 60      # how far above a wrapper's line its quote may still be open, and how far above a pipe-led line a quote left odd counts
-_SINGLE_QUOTE_RE = re.compile(r"(?<![A-Za-z])'|'(?![A-Za-z])")        # an apostrophe inside a word ("you'll") opens nothing
 _LEAD_MARKUP_RE = re.compile(r"^(?:[\s>#*+\-`'\"]|\$(?=[ \t]))*")           # `$ curl`, not `$(./evil) curl` or `$R curl`
 
 
-def _odd_quotes(text: str) -> bool:
-    """Whether a single or a double quote is left open when `text` ends (an apostrophe inside a word opens nothing)."""
-    return bool(len(_SINGLE_QUOTE_RE.findall(text)) % 2 or text.count('"') % 2)
+_FENCE_OPEN_RE = re.compile(r"^( {0,3})(`{3,}|~{3,})(.*)$")        # a fence at the top level of a document: a quote or a list marker in front of it makes it none
+_PREFIXED_FENCE_RE = re.compile(r"^(?:[ \t]{0,3}(?:>|(?:[-*+]|\d{1,9}[.)])[ \t]{1,4})){1,6}[ ]{0,3}(`{3,}|~{3,})(.*)$")        # ... and one behind them
+# The HTML blocks of CommonMark, whose lines are literal text: a fence line in one is no fence. A block begins at a line that opens one (also behind a list
+# marker or a quote marker) and ends, as CommonMark has it, at a line that holds its end condition (types 1 to 5) or at a blank line (types 6 and 7). It never
+# ends sooner: where a quote or a list item holds it, the container rules may end it earlier, and a fence line then taken for text only cuts less.
+_UNTIL_BLANK = re.compile(r"\A\Z")
+_HTML_LEAD = r"^(?:[ \t]*>)*[ ]{0,3}(?:(?:[-*+]|\d{1,9}[.)])[ \t]{1,4})?"
+_HTML_BLOCKS = (
+    (re.compile(_HTML_LEAD + r"<(?:pre|script|style|textarea)(?:[ \t>]|$)", re.IGNORECASE), re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE)),
+    (re.compile(_HTML_LEAD + r"<!--"), re.compile(r"-->")),
+    (re.compile(_HTML_LEAD + r"<\?"), re.compile(r"\?>")),
+    (re.compile(_HTML_LEAD + r"<![A-Za-z]"), re.compile(r">")),
+    (re.compile(_HTML_LEAD + r"<!\[CDATA\["), re.compile(r"\]\]>")),
+    (re.compile(_HTML_LEAD + r"</?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|"
+                r"figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|"
+                r"optgroup|option|p|param|section|source|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|/?>|$)", re.IGNORECASE), _UNTIL_BLANK),
+    (re.compile(_HTML_LEAD + r"(?:<[A-Za-z][A-Za-z0-9-]*+(?:[ \t]++[A-Za-z_:][A-Za-z0-9_.:-]*+(?:[ \t]*+=[ \t]*+(?:[^\s\"'=<>`]++|'[^'\n]*+'|\"[^\"\n]*+\"))?+)*+"
+                r"[ \t]*+/?>|</[A-Za-z][A-Za-z0-9-]*+[ \t]*+>)[ \t]*+$"), _UNTIL_BLANK),
+)
+
+
+def _html_block_end(line: str) -> re.Pattern[str] | None:
+    """The condition that ends the HTML block a line begins (the line that holds it is the block's last), or None if it begins none. (A tag on a line of its
+    own begins a block after a blank line in CommonMark; here after any line, so that a fence line next to it is text.)"""
+    for start, end in _HTML_BLOCKS:
+        if start.match(line):
+            return end
+    return None
+
+
+def _not_in_new_file(line: str) -> bool:
+    """A removed line, a hunk header (`@@ -1,2 +1,3 @@`) or a `\\ No newline` note: not in the new file. Any other line that starts with `\\` or `@@` is text (a patch has no such
+    line, and the one who wrote it meant it as text)."""
+    return line[:1] == "-" or line.startswith(("\\ No newline", "@@ -"))
+
+
+_HUNK_HEADING_RE = re.compile(r"@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@[ \t]?(.*)\Z")
+
+
+def _new_file(text: str) -> str:
+    """The new file of a patch: its added and context lines without their markers. A removed line, a `\\ No newline` note and a hunk header are not in it, but for the section heading that
+    `git` writes after the second `@@` (the nearest earlier line of the file that looks like a function or a section): that is a line of the new file, and it stands where the hunk begins."""
+    out = []
+    for line in text.split("\n"):
+        heading = _HUNK_HEADING_RE.match(line)
+        if heading is not None:
+            if heading.group(1):
+                out.append(heading.group(1))
+            continue
+        view = _diff_view(line, True)
+        if view is not None:
+            out.append(view)
+    return "\n".join(out)
+
+
+def _diff_view(line: str, diff: bool) -> str | None:
+    """The line without a diff's marker, or None for a line that is not in the new file (a removed line, a hunk header, a `\\ No newline` note)."""
+    if diff:
+        if _not_in_new_file(line):
+            return None
+        return line[1:] if line[:1] == "+" else line
+    return line
+
+
+_BLOCKQUOTE_RE = re.compile(r"^[ \t]*(?:>[ \t]?)+")
+_MARKER_LINE_RE = re.compile(r"^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?(?:`{3,}|~{3,})")          # a line that opens or closes a fence, if it is one
+_MARKER_RUN_RE = re.compile(r"(?:`{3,}|~{3,})")
+
+
+def _lexable(line: str, diff: bool, quotes: bool = True) -> str:
+    """The line without the markers that are not part of the shell text: a diff's `+` and a blockquote's `>`. A removed line, a hunk
+    header and a `\\ No newline` note are not in the new file, so they are empty lines: what they hold must not close a quote that the
+    lines around it leave open."""
+    if diff:
+        if _not_in_new_file(line):
+            return ""
+        if line[:1] == "+":
+            line = line[1:]
+    m = _BLOCKQUOTE_RE.match(line) if quotes else None
+    return line[m.end():] if m else line
+
+
+_WRAPPER_HEAD, _WRAPPER_TAIL = 200, 400      # how much of a long command is judged: its first and its last characters
+_HYPOTHESIS_WINDOW = 60                       # lines a wrapper's argument is followed for
+_OPENERS_RE = re.compile(r"['\"`(]|<<|\$\{")
+_BLANK_FREE_RE = re.compile(r"\S+")
+_NAME_START_RE = re.compile(r"\A(?:[A-Za-z0-9/.~_-]|[^\x00-\x7f]++/)")      # a word that starts like a name or a path: an ASCII character, or non-ASCII letters right before a slash (not CJK prose with a code span glued to it)
+_TOKEN_CUTS_RE = re.compile(r"[;&|(){}`$<>]")
+_TOKEN_RE = re.compile(r"[^\s;&|(){}`$<>]+")           # a word, cut where a command can be glued to what comes before it (`true;ssh`, `x=$(ssh`)
+_ESCAPED_PUNCTUATION_RE = re.compile(r"\\([!-/:-@\[-`{-~])")           # what Markdown renders without its backslash
+_PYTHON_VERSIONED_RE = re.compile(r"\A(python\d?)\.\d+\Z")                # python3.11 is python3
+
+
+_HASH_RE = re.compile(r"(?:[ \t]|\\\n|[<>])#")                    # a `#` that bash and dash read as a comment and a zsh in a terminal does not: after a blank, a continuation or a redirect operator
+_ZSH_OPENER_RE = re.compile(r"['\"`]|<<|[$<>]\(")                   # what opens a construct after a `#` that a zsh in a terminal reads as a word
+_QUOTED_WORD_START_RE = re.compile(r"""(?<![^\s;&|(])(?:'[^'\n]*'|"[^"\n]*")""")      # a quoted string that begins a word: it may be the name of a program
+_APOSTROPHE_RE = re.compile(r"(?<=[A-Za-z0-9])'(?=[A-Za-z])")         # an apostrophe inside a word (`It's`) opens nothing in prose
+_INCH_RE = re.compile(r'(?<=[0-9])"')                                  # nor does an inch mark (`5"`)
+_PREFIX_WORD_RE = re.compile(r"^(?:\$\([^)\s]*\)|`[^`\s]*`|\$\{[^}\s]*\}|\$\w+|[A-Za-z_]\w*\[[^\]\s]*\]=\S*)\Z")        # a word in front of the program that is not one: `$(a)`, `` `a` ``, `${x:-}`, `$x`, `a[1]=x`
+_HASH_PROMPT_RE = re.compile(r"\A[ \t>*+\-]*+#{1,6}[ \t]+")              # a `#` that is a root prompt or a heading marker: what follows it is a command when it reads as one
+_PROMPT_ONLY_RE = re.compile(r"(?:[ \t>*+\-]|\$(?=[ \t]))*")           # what may stand in front of a command in a document: blanks, quote and list markers, a `$` prompt
+
+
+def _closing_quotes(line: str) -> tuple[str, ...]:
+    """The quotes whose first appearance on the line looks like the end of a string, so that the line may begin inside a string of that kind that a
+    line above leaves open: a blank follows it (`' && ssh h '`, `b " | ssh h '`, `` ` ssh h '``), or a `;`, `|` or `)` does (`b '; ssh h '`, `a") ssh h '`;
+    after a blank a backtick is not taken so), or a `&`, a quote, a `$`, a backtick or a redirect that is glued to a word (`b'"$(ssh h '`). A quote that a word follows opens a quoted phrase in prose (`Run "ssh" or
+    "docker run" now`), and a backtick, or a quote that `<`, `>` or `&` follows after a blank, is the start of a span of Markdown's inline code
+    (``Use `docker run` here``, `` `<root>/bin` ``, `` `&>/dev/null` ``)."""
+    found = []
+    for quote in ("'", '"', "`"):
+        i = line.find(quote)
+        while i > 0 and line[i - 1] == "\\":
+            i = line.find(quote, i + 1)
+        if i < 0:
+            continue
+        after, before = line[i + 1:i + 2], line[i - 1:i] if i else ""
+        glued = before not in ("", " ", "\t")
+        if after in (" ", "\t") or (after in (";", "|", ")") and (glued or quote != "`")) or (after in ("&", '"', "'", "$", "`", "<", ">") and glued):
+            found.append(quote)
+    return tuple(found)
+
+
+_MAY_CHANGE_RE = re.compile(r"['\"`$()<{}]")        # a line without these changes nothing about what is open at its end
+_MAX_STACKS = 8
+_COMMAND_FIRST_WORD_RE = re.compile(r"^(?:[a-z0-9_./~$@%+:-][A-Za-z0-9_./~$@%+=:{}-]*|[A-Za-z_][A-Za-z0-9_]*=\S*)\Z")
+
+
+def _command_like(text: str) -> bool:
+    """Whether the text in front of a quote that opens a string reads like the start of a shell command (`echo `, `x=`, `echo a; echo `, `- echo`) and not like a sentence
+    (a capital, a markup character or a code span first, or many words): a string that prose spends is no context for the lines below it."""
+    words = text.split()
+    first = _first_command_word(words)
+    return first < len(words) and len(words) - first <= 8 and _COMMAND_FIRST_WORD_RE.fullmatch(words[first]) is not None
+
+
+
+
+def _line_stacks(stretch: list[str], work: list[int]) -> list[list[str]]:
+    """For each line, the stacks of constructs that may be open where it begins, whatever stands above within the window a hypothesis is followed for: the lexer is
+    started afresh at every line, with the possessives and inch marks taken out (a quote that prose spends is not a quote), and every one of those readings is followed
+    line by line (the readings that come to the same stack are one). A line that stands in such a stack is also read as if it began there, since a quote that closes a
+    string opens none: prose with a stray backtick or a lone quote above a script does not hide the script's own strings. Paid for from the budget; a spent budget leaves
+    the rest to its own check."""
+    found: list[list[str]] = [[] for _ in stretch]
+    configs: dict[str, int] = {"": 0}                         # the prefixes (what a string, a substitution, … opened above looks like) a reading from some line above is in, and the line it began on
+    for k, line in enumerate(_neutral(row) for row in stretch):
+        configs = {prefix: began for prefix, began in configs.items() if k - began <= _HYPOTHESIS_WINDOW}
+        for prefix in configs:
+            if prefix and prefix not in found[k] and len(found[k]) < _MAX_STACKS:
+                found[k].append(prefix)
+        if not _MAY_CHANGE_RE.search(line):
+            continue
+        ahead: dict[str, int] = {"": k + 1}
+        for prefix, began in configs.items():
+            work[0] -= len(prefix) + len(line) + 1
+            if work[0] < 0:
+                return found
+            end = shelllex.line_states(prefix + line + "\n")[1]
+            text = prefix + line
+            if not any(o.kind in ("HEREDOC", "BODY") for o in end.openers) \
+                    and all(_command_like(text[max(o.command_at, 0):o.offset]) for o in end.openers if o.offset >= len(prefix)):
+                ahead.setdefault("".join(_OPENING_TEXT[o.kind] for o in end.openers), began)
+        configs = dict(sorted(ahead.items(), key=lambda item: (len(item[0]), item[0]))[:_MAX_STACKS])
+    return found
+
+
+_DQ_ESCAPE_RE = re.compile(r"""\\["\\$`]""")
+
+
+def _undo_double_quotes(text: str) -> tuple[str, list[int]]:
+    """What a double-quoted string holds once the shell has taken the backslash out of `\\"`, `\\\\`, `\\$` and ``\\` `` (`eval "ssh h \\"` runs
+    `ssh h "`), with the offsets of the backslashes it took out."""
+    cuts = [m.start() for m in _DQ_ESCAPE_RE.finditer(text)]
+    if not cuts:
+        return text, cuts
+    return _DQ_ESCAPE_RE.sub(lambda m: m.group()[1], text), cuts
+
+
+def _in_double_quotes(stretch: list[str], work: list[int]) -> list[bool]:
+    """For each line, whether the lexer reads it as inside a double-quoted string that an earlier line opened (and a `\\"` in it is the text of
+    a script that a command such as `eval` runs). One pass over the stretch, paid for from the budget; a spent budget says no line is."""
+    if not any("\\" in line for line in stretch):
+        return [False] * len(stretch)
+    work[0] -= sum(map(len, stretch)) + len(stretch)
+    if work[0] < 0:
+        return [False] * len(stretch)
+    states = shelllex.line_states("\n".join(stretch))
+    return [bool(state.openers) and state.openers[-1].kind == "DQ" and not state.unknown for state in states]
+
+
+_SEGMENT_SPLIT_RE = re.compile(r"[;&|()`]|\$\(|(?<!\$)\{(?=\s)")
+
+
+def _may_begin_a_wrapper_command(line: str, work: list[int]) -> bool:
+    """Whether a command that begins like a wrapper's (see `_begins_with_wrapper`) may stand on the line: one of the pieces between the operators that
+    can begin a command does. A path or a program's name in the middle of a sentence (`POST /_vti_bin/x`, `Use docker to …`) begins no command."""
+    if not _WRAPPER_HINT.search(line):
+        return False
+    return any(piece.strip() and _led_by_wrapper(piece, work) for piece in _SEGMENT_SPLIT_RE.split(line))
+
+
+def _reads_a_comment_as_words(command: str) -> bool:
+    """Whether a zsh in a terminal (its `interactive_comments` is off by default) reads this command differently from bash and dash: a `#` after
+    a blank, a continuation or a redirect operator is followed by a quote, a backtick, a here-document or a substitution, which opens a construct there and is part of a comment
+    elsewhere, and the program the command runs (behind prefix programs, options, redirects, assignments and expansions) is one that runs what it
+    is given (`ssh h # 'x`, `sudo ssh h # 'x`, `>f ssh h # 'x`; not `cd /path # it's` or `ln -s /opt/uv/bin/uv /usr/local/bin/uv # don't`, whose
+    string no wrapper opened)."""
+    m = _HASH_RE.search(command)
+    if m is None or _ZSH_OPENER_RE.search(command, m.end()) is None:
+        return False
+    raw, words = _command_words(_LEADING_REDIRECT_RE.sub("", command[:m.start()], count=1))
+    at = 0
+    while at < len(words):
+        shown, word = raw[at], words[at]
+        at += 1
+        if _names_a_wrapper(word):
+            return True
+        if word.startswith("-") and "=" not in word and at < len(words) and not words[at].startswith("-") and not _could_wrap(words[at]):
+            at += 1                                                    # an option and its value (`sudo -u root ssh h # 'x`)
+        elif not (word.lower() in _LEAD_SKIPS or word.startswith("-") or _LEAD_MARKER_RE.fullmatch(word) or _PREFIX_WORD_RE.fullmatch(shown)):
+            return False
+    return False
+
+
+def _may_hold_zsh_words(line: str) -> bool:
+    """Whether a zsh in a terminal could read commands in what bash and dash take for a comment: a `#` with a quote, a backtick, a here-document or a substitution after it."""
+    at = line.find("#")
+    return at >= 0 and _ZSH_OPENER_RE.search(line, at) is not None
+
+
+def _wrapper_words(tokens: list[re.Match[str]]) -> list[tuple[int, int]]:
+    """Where each word that could be the program that runs what follows it begins and ends: the first word of a line may be a relative path
+    (`bin/evil 'x`), a label or a list marker glued to the word is not part of it, and a word that begins with a quote the command begins after
+    (`eval "ssh h '`)."""
+    found = []
+    first = _first_command_word([m.group() for m in tokens])
+    for k, m in enumerate(tokens):
+        word = m.group()
+        span = m.end()
+        if word[:1] == "/" and m.start() and m.string[m.start() - 1] == "<":
+            continue                                            # `</p>`: the `/p` of a closing tag is no path, and the target of a `<` redirect is no command
+        if k == first:
+            line = m.string                                     # `bin/$N x '`, `bin/{a,b} x '`: a `$` or a brace cuts the token, not the word
+            while span < len(line) and not line[span].isspace():
+                span += 1
+            word = line[m.start():span]
+        if _WRAPPER_HINT.search(word) and (k == first and _is_bare(word) and _NAME_SLASH_RE.search(word) is not None and "://" not in word
+                                           or any(_could_wrap(w) for w in _command_words(m.group())[1])):
+            if word[:1] in "\"'" and word[-1:] != word[:1]:
+                found.append((m.start(), span))                       # `"/tmp/my tools/ssh" h '`: the quote opens the name of the program
+                found.append((m.start() + 1, span))
+            else:
+                found.append((m.start(), span))
+    if tokens:
+        have = {at for at, _ in found}
+        for w in _BLANK_FREE_RE.finditer(tokens[0].string):                # a word that a `$`, a brace or a paren cuts into tokens is one word to the judge of the through-read
+            word = w.group()
+            if w.start() not in have and _NAME_START_RE.match(word) and _TOKEN_CUTS_RE.search(word) and _WRAPPER_HINT.search(word) \
+                    and any(_could_wrap(x) for x in _command_words(word)[1]):
+                found.append((w.start(), w.end()))
+    return found
+
+
+def _quoted_programs(line: str, found: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """`found`, and the quoted strings that name a program the tokens could not see because a `$` or a blank is in them (`"$HOME/my tools/ssh" h '`)."""
+    have = {at for at, _ in found}
+    extra = [(m.start(), m.end()) for m in _QUOTED_WORD_START_RE.finditer(line)
+             if m.start() not in have and _WRAPPER_HINT.search(m.group()) and any(_could_wrap(w) for w in _command_words(m.group()[1:-1])[1])]
+    return sorted({*found, *extra})
+
+
+# A substitution, a process substitution, a backtick span and a subshell that the line leaves open are code, whatever the words in them read like: the command in
+# `$(run ssh h '` is a function named like a verb. (Measured on insertions of an installer into real documents: no more critical than the prose test.)
+_CODE_ONLY = frozenset({"CMD", "PROC", "BQ", "SUB"})
+_OPENING_TEXT = {"SQ": "'", "DQ": '"', "BQ": "`", "ANSI": "$'", "CMD": "$(", "PROC": "<(", "SUB": "(", "ARRAY": "a=(", "ARITH": "$((", "PARAM": "${x:-"}
+
+
+def _neutral(line: str) -> str:
+    """The line as prose reads it: an apostrophe inside a word and an inch mark are no quote. An inch mark counts only on a line with an odd number of `"`: the
+    quotes of `sh -c "echo 1"` are balanced, it is code, and taking the closing one out would leave a string open that no shell sees."""
+    out = _APOSTROPHE_RE.sub("_", line)
+    return _INCH_RE.sub("_", out) if line.count('"') % 2 else out
+
+
+def _command_starts(line: str, cands: list[tuple[int, int]], work: list[int], contexts: bool = True, comments: bool = True,
+                    stacks: tuple[str, ...] = ()
+                    ) -> tuple[dict[int, tuple[int, int]], dict[int, tuple[str, list[tuple[int, int]]]]]:
+    """Where a hypothesis may start on a line, from the wrapper words (`cands`: where each begins and ends) that stand where a command could
+    begin. The lexer says what each word stands in: the line is read from its start, and also as if a string a line above left open ended on it
+    (`_closing_quotes`), since a quote that closes one is no quote that opens one. A word outside every construct, or in a comment that
+    a prompt stands in front of, starts one at itself (`plain`: column to the end of the word and the start of the simple command that holds it). A word inside a construct that the line
+    leaves open starts one only if the construct holds a command: a backtick span, a substitution or a subshell, when the simple command that
+    holds the word begins like a command (`x="$(timeout 5 ssh h '`), and a string, from its first character (`eval "x=1 && ssh h '`: the
+    lexer finds the command inside it), when the command that holds the word does (`guarded`: column to the kind of the string and the words it
+    stands for). A construct
+    that closes on its line is a mention (``Don't use `docker run` here``), and so is a comment. The line is also read with its possessives and
+    inch marks taken out (`It's here: ssh h '`: prose has no quote there). Undecided text or a spent budget starts one."""
+    plain: dict[int, tuple[int, int]] = {}
+    guarded: dict[int, tuple[str, list[tuple[int, int]]]] = {}
+    ats = [at for at, _ in cands]
+    prose = _neutral(line)
+    prompt_end = -1
+    for quote, text in [("", line), *([("", prose)] if prose != line else []), *((q, line) for q in dict.fromkeys((*(_closing_quotes(line) if contexts else ()), *stacks)))]:
+        shift = len(quote)                                  # a quote (or what a line above leaves open) put in front: this line may begin inside it
+        work[0] -= len(line) + 3
+        if work[0] < 0:
+            for at, end in cands:
+                plain.setdefault(at, (end, 0))
+            break
+        lexed = shelllex.line_states(quote + text + "\n", comments=comments, probes=tuple(at + shift for at in ats))
+        after = lexed[1]
+        for at, end in cands:
+            probe = lexed.probed[at + shift]
+            if shift and any(o.offset < shift for o in probe.openers):
+                continue                                    # inside the string a line above left open: a mention, as that reading sees it
+            begins = max(0, probe.command_at - shift)
+            if probe.unknown or after.unknown:
+                plain.setdefault(at, (end, begins))
+            elif probe.comment_at >= 0:
+                if prompt_end < 0:
+                    prompt_end = _PROMPT_ONLY_RE.match(line).end()         # what may stand in front of a `#` that is a prompt: found once for the line
+                if probe.comment_at - shift <= prompt_end and "`" not in line[probe.comment_at - shift:at] \
+                        and _led_by_wrapper(_command_head(line, probe.comment_at - shift, end), work):
+                    plain.setdefault(at, (end, at))         # `# ssh h '`: a prompt
+            elif not probe.openers:
+                if comments or begins == at or _led_by_wrapper(_command_head(line, begins, end), work):       # (what a zsh reads as commands after a `#` must lead with the word)
+                    plain.setdefault(at, (end, begins))
+            elif all(o in after.openers for o in probe.openers):
+                inner = probe.openers[-1]
+                if inner.kind in ("SQ", "DQ", "ANSI"):
+                    guarded.setdefault(inner.offset + (2 if inner.kind == "ANSI" else 1) - shift, (inner.kind, []))[1].append((at, end))
+                elif inner.kind in _CODE_ONLY or _led_by_wrapper(_command_head(line, begins, end), work):
+                    plain.setdefault(at, (end, begins))
+    return plain, {col: found for col, found in guarded.items() if col not in plain}
+
+
+def _names_a_wrapper(word: str) -> bool:
+    """Whether this word is the name of a program `_wrapped` knows runs what follows it (not a path: `./evil`)."""
+    bare = _bare(word)
+    name = _PYTHON_VERSIONED_RE.sub(r"\1", bare.rsplit("/", 1)[-1])
+    return bool(bare) and "://" not in bare and (name in _WRAPPERS or name in _ALWAYS_WRAPPERS or name in _INTERPRETERS
+                                                 or name in ("powershell", "pwsh"))
+
+
+def _could_wrap(word: str) -> bool:
+    """Whether `_wrapped` could take this word for the program that runs what follows it."""
+    return _names_a_wrapper(word) or (bool(_bare(word)) and "://" not in _bare(word) and bool(_PATH_WORD_RE.match(_bare(word))))
+
+
+# Every program `_wrapped` knows by name, or a path: a command that holds none of these cannot be a wrapper's.
+_WRAPPER_HINT = re.compile("|".join([*map(re.escape, sorted(_WRAPPERS | _ALWAYS_WRAPPERS | _INTERPRETERS | {"powershell", "pwsh"}, key=len, reverse=True)), "/"]))
+
+
+# What may stand in front of the program of a command in a document: a prompt, a list marker, a program that runs the next one, an option or
+# a number or a label ("Run:", "Step 1:", "First,"), and the connective words of an instruction.
+_LEAD_SKIPS = frozenset({"sudo", "doas", "env", "command", "builtin", "nohup", "time", "exec", "timeout", "nice", "ionice", "setsid", "stdbuf", "xargs",
+                         "watch", "eval", "coproc", "ssh-agent", "unbuffer", "caffeinate", "winpty", "flock", "taskset", "numactl", "systemd-inhibit",
+                         "chronic", "cpulimit", "dbus-launch", "xvfb-run", "chpst", "setarch", "pkexec",
+                         "{", "(", "!", "if", "then", "else", "elif", "do", "while", "until", "$", "#", "##", "###", "####", "#####", "######", ">", "%", "-",
+                         "*", "+", "step", "first", "next", "now", "finally"})
+_LEAD_MARKER_RE = re.compile(r"(?<!\w)(?:\d{1,3}[.):]|\d+(?:\.\d+)?[smhd]?|[A-Za-z_]\w*=\S*)")           # `1.`, `2)`, `3:`, `5`, `10s`, `PATH=/x`
+
+
+_BLANK_RUNS_RE = re.compile(r"[ \t]{2,}")
+_CONTINUATION_RUNS_RE = re.compile(r"(?:\\\n[ \t]*)+")                      # a run of line continuations is one blank to the shell
+_LONG_WINDOW = 2000                           # how far from each end of a long command its runs of blanks are folded before the head and the tail are cut
+_NAME_CONTINUATION_RE = re.compile(r"(?<=[A-Za-z0-9])\\\n(?=[A-Za-z0-9])")           # a continuation inside a word joins its halves (`ss\\⏎h` is `ssh`)
+_QUOTED_WORD_RE = re.compile(r"""\\.|'[^'\n]*'|"(?:[^"\\\n]|\\.)*\"""")          # a backslash pair or a quoted string, read from left to right
+_LEADING_REDIRECT_RE = re.compile(r"\A(?:\s*(?:\{\w+\}|&|\d*)[<>]+[&|]?\s*[^\s<>&|;]+)+\s*")        # `>out ssh h '`, `2> err ssh h '`, `&>f …`, `{fd}>f …`
+# Words that open a sentence of instructions, in lower case after a capitalised one: "Then use docker run …" is prose, and `use` is no program.
+_PROSE_WORDS = frozenset({"the", "a", "an", "is", "are", "it", "its", "to", "of", "in", "on", "for", "with", "this", "that", "use", "using", "see", "run"})
+
+
+_LEADING_BLANKS_RE = re.compile(r"\s*")
+
+
+def _begins_with_wrapper(command: str) -> bool:
+    """Whether a command does not begin like a sentence: it begins with a program that runs what follows it (`ssh evil.example '`,
+    `sudo -u root docker run x sh -c "`, `$ ssh evil.example '`, `Run: ssh evil.example '`, `Run:ssh evil.example '`, `timeout 0.5 ssh h '`), or
+    with a program this module does not know (`unbuffer ssh h '`) and a wrapper within the next five words, as against prose that mentions a
+    wrapper (`Use docker run to start the project's …`, `| OS | Command |`, `It's the one.`). The words are the ones `_wrapped` reads: markup,
+    redirects and glued labels are gone. Only the first words decide, so a long line is not read to its end for each of its words."""
+    start = _LEADING_BLANKS_RE.match(command).end()
+    return _begins_with_head(command[start:start + _WRAPPER_HEAD * 4])
+
+
+def _fold_quoted_blanks(head: str) -> str:
+    """A quoted string with a blank in it is one word. As a value it is not a program name (`Q`); a path that holds a blank, as a word of its
+    own (`"/tmp/my tools/ssh" h '`), is still a program, and stays a path. Strings are paired from left to right, so the closing quote of one
+    is never taken for the opening of the next (`sudo "ssh" h "`)."""
+    def fold(m: re.Match[str]) -> str:
+        word = m.group()
+        if word[0] == "\\" or " " not in word and "\t" not in word:
+            return word
+        return _BLANKS_IN_PATH_RE.sub("", word) if "/" in word and (m.start() == 0 or head[m.start() - 1] in " \t") else "Q"
+    return _QUOTED_WORD_RE.sub(fold, head)
+
+
+_BLANKS_IN_PATH_RE = re.compile(r"[ \t]+")
+
+
+def _head_cost(command: str) -> int:
+    """What `_begins_with_wrapper` costs in budget units: it reads the head of a command (up to 400 characters) once, or twice when a redirect leads
+    it, and each of those once for each way its lone `<` and `>` may be read (a redirect or a breadcrumb: up to eight), so it is charged two to
+    sixteen units a character."""
+    head = command[:_WRAPPER_HEAD * 2]
+    return len(head) * 2 * (1 << min(len(_LONE_OPERATOR_RE.findall(head)), 3))
+
+
+def _led_by_wrapper(command: str, work: list[int]) -> bool:
+    """`_begins_with_wrapper`, paid for from the budget at the cost of reading the head of the command (a spent budget counts it as a wrapper's)."""
+    work[0] -= _head_cost(command.lstrip())
+    return work[0] < 0 or _begins_with_wrapper(command)
+
+
+def _command_head(line: str, a: int, end: int) -> str:
+    """`line[a:end]` as far as `_begins_with_wrapper` and `_head_cost` read it (the blanks in front of it, then `_WRAPPER_HEAD * 4` characters): the
+    judgement of a command is the same, and a line with many words to judge does not copy the line once for each."""
+    start = _LEADING_BLANKS_RE.match(line, a).end()
+    return line[start:min(end, start + _WRAPPER_HEAD * 4)]
+
+
+_EVAL_STRING_RE = re.compile(r"""\A[ \t]*(?:(?:sudo|env|command|builtin|exec|nohup|time)[ \t]+)*eval[ \t]+(?=\$?['"])""")
+_EVAL_WORD_RE = re.compile(r"""(?:\A|(?<=[\s;&|(`]))eval[ \t]+(?=\$?['"])""")
+_ANSI_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", "'": "'", '"': '"'}
+
+
+def _unquote_word(text: str) -> str:
+    """The value of the shell word that begins `text` (its quoted pieces put together: `'a '"'"'b'` is `a 'b`), as far as `text` goes. An unfinished quote ends at the end."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "'":
+            end = text.find("'", i + 1)
+            end = n if end < 0 else end
+            out.append(text[i + 1:end])
+            i = end + 1
+        elif c == '"' or text.startswith("$'", i) or text.startswith('$"', i):
+            ansi = c == "$" and text[i + 1] == "'"
+            quote = "'" if ansi else '"'
+            i += 2 if c == "$" else 1
+            while i < n and text[i] != quote:
+                if text[i] == "\\" and i + 1 < n:
+                    nxt = text[i + 1]
+                    if ansi:
+                        out.append(_ANSI_ESCAPES.get(nxt, "\\" + nxt))
+                    elif nxt in '"\\$`':
+                        out.append(nxt)
+                    elif nxt != "\n":
+                        out.append("\\" + nxt)
+                    i += 2
+                else:
+                    out.append(text[i])
+                    i += 1
+            i += 1
+        elif c == "\\" and i + 1 < n:
+            out.append(text[i + 1])
+            i += 2
+        elif c in " \t\n;&|<>()":
+            break
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _eval_content(head: str) -> str | None:
+    """The script that `eval 'ssh h '…`, `eval "ssh h \\"…`, `eval $'ssh h \\'…` or `eval 'a '"'"'b'…` is given (the value of its first word), or None."""
+    m = _EVAL_STRING_RE.match(head)
+    return None if m is None else _unquote_word(head[m.end():])
+
+
+@functools.lru_cache(maxsize=4096)
+def _begins_with_head(head: str) -> bool:
+    script = _eval_content(head)
+    if script is not None and _begins_with_head(script):
+        return True                                    # `eval 'eval "ssh h '…`: the script it runs begins with a wrapper
+    head = _fold_quoted_blanks(_NAME_CONTINUATION_RE.sub("", head)[:_WRAPPER_HEAD * 2])
+    forms = [head]
+    stripped = _LEADING_REDIRECT_RE.sub("", head, count=1)
+    if stripped != head:
+        forms.append(stripped)
+    return any(_leads_with_wrapper(*_command_words(form, mask)) for form in forms
+               for mask in range(1 << min(len(_LONE_OPERATOR_RE.findall(form)), 3)))
+
+
+def _reads_as_prose(token: str, shown: str) -> bool:
+    """Whether the first word of a command that no listed wrapper begins reads as the start of a sentence or of a table row: a capitalised
+    word (an environment assignment, an option, a number and a path are not), a word with an apostrophe in it, a word that does not begin with
+    a letter, a digit or a path character, or a word that only a sentence holds."""
+    if token.startswith(("-", "/", ".", "~", "$")):
+        return False
+    return ("://" in token or token[:1].isupper() or "'" in shown or "\u2019" in shown or not token[:1].isalnum() or not token.isascii() or token.lower() in _PROSE_WORDS)
+
+
+def _leads_with_wrapper(raw: list[str], words: list[str]) -> bool:
+    at = 0
+    runs = False
+    while at < len(words):
+        token, shown = words[at], raw[at]
+        at += 1
+        if token.lower() in _WRAPPERS and token.lower() in _LEAD_SKIPS:
+            runs = True                                                # `watch -n 5 '` runs its argument: a prefix program that is a wrapper
+        if token.startswith("-") and token != "-" and "=" not in token and at < len(words) and not words[at].startswith("-") \
+                and not _could_wrap(words[at]):
+            at += 1                                                    # an option and its value (`sudo -u root`, `nice -n 5`); a lone `-` is a list marker
+        elif not (not token or token == "Q" or token.lower() in _LEAD_SKIPS or shown.lower() in _LEAD_SKIPS or _LEAD_MARKER_RE.fullmatch(token)
+                  or token.startswith("-") or shown.endswith((":", ",", "$", ")", ";"))):
+            if runs or _could_wrap(token) or (_is_bare(shown) and _NAME_SLASH_RE.search(shown) is not None and "://" not in token):       # the first word may be a relative path (`bin/evil 'x`)
+                return True
+            # a program this module does not know (`unbuffer ssh h '`, `flock /tmp/l ssh h '`) may run what follows it: a wrapper within the next
+            # five words is a wrapper it runs; a line of prose has none that near its start
+            return not _reads_as_prose(token, shown) and any(_could_wrap(w) for w in words[at:at + 5])
+    return runs
+
+
+_COMMAND_LONG_WORD_RE = re.compile(r"\S{81,}")
+
+
+def _fold_long_words(text: str) -> str:
+    """A word of more than 80 characters as its first 40 and its last 40: a host or a path of hundreds of characters is one word to the shell, and a cut through
+    it must not take away what makes the word before it a wrapper (`ssh` and a host that holds a dot)."""
+    return _COMMAND_LONG_WORD_RE.sub(lambda m: m.group()[:40] + m.group()[-40:], text)
+
+
+class _Wrapped:
+    """Whether what is open where a line of `text` begins would swallow a command on it: a construct opened as an argument of a
+    wrapper (`ssh evil.example '`, `docker run x sh -c "`, `ssh evil.example "$(`), a here-document read by one (`cat <<E | ssh h sh`), or
+    something the lexer cannot tell (`State.unknown`, on the lines after the first one on which a wrapper's command may begin). The command that holds the construct must BEGIN with the wrapper (`leads`): a string
+    that prose opens (`It's the one.`) belongs to a command no wrapper begins, and a wrapper word inside the prose starts a hypothesis of its
+    own. Each opener and each state is judged once, from at most the head and the tail of its command, and the characters read by all the
+    judgements of one scan share a budget (`work`): past it a command counts as a wrapper. A subshell `(` is no wrapper's argument
+    (`pnpm (#123)` is a syntax error to a shell)."""
+
+    def __init__(self, text: str, work: list[int]):
+        self.text = text
+        self.work = work
+        self._opener: dict[shelllex.Opener, bool] = {}
+        self._state: dict[shelllex.State, bool] = {}
+        self._header: dict[int, bool] = {}
+        self._lead: dict[shelllex.Opener, bool] = {}
+        self._logical: dict[int, int] = {}
+        self._newlines: list[int] | None = None
+
+    def opener(self, o: shelllex.Opener) -> bool:
+        got = self._opener.get(o)
+        if got is None:
+            got = self._opener[o] = False if o.kind == "SUB" else self._header_wraps(o) if o.kind == "HEREDOC" else self._command_wraps(o)
+        return got
+
+    def leads(self, o: shelllex.Opener) -> bool:
+        """Whether the command that holds the opener begins with a program that runs what follows (see `_begins_with_wrapper`)."""
+        got = self._lead.get(o)
+        if got is None:
+            command = _BLANK_RUNS_RE.sub(" ", self.text[o.command_at:min(o.offset + 1, o.command_at + _LONG_WINDOW)])
+            self.work[0] -= _head_cost(command.lstrip())
+            got = self._lead[o] = self.work[0] < 0 or o.kind == "HEREDOC" or _begins_with_wrapper(command)
+        return got
+
+    def state(self, state: shelllex.State, unknown: bool = True) -> bool:
+        """Whether a wrapper's construct is open (or, when `unknown` counts, something undecided came before)."""
+        got = self._state.get(state)
+        if got is None:
+            got = self._state[state] = any(self.leads(o) and self.opener(o) for o in state.openers)
+        return got or (unknown and state.unknown)
+
+    def _command_wraps(self, o: shelllex.Opener) -> bool:
+        a, b = o.command_at, o.offset + 1
+        if b - a > _WRAPPER_HEAD + _WRAPPER_TAIL:
+            return self._judge_long(a, b)
+        return self._judge(self.text[a:b], o.kind in ("SQ", "DQ"))
+
+    def _judge_long(self, a: int, b: int) -> bool:
+        """A command of more than `_WRAPPER_HEAD + _WRAPPER_TAIL` characters is judged from its head and its tail, once the runs of blanks in the
+        `_LONG_WINDOW` characters at each end are one blank (a host after three hundred blanks is still the host). Both ends are paid for from
+        the budget before they are read, and a spent budget counts the command as a wrapper's."""
+        self.work[0] -= 2 * _LONG_WINDOW
+        if self.work[0] < 0:
+            return True
+        # a window that cuts through a word leaves the word's end unseen: it is taken to go on like a host does (a `.0` is added), since what follows the wrapper decides
+        # whether it is used as one
+        head = _fold_long_words(_BLANK_RUNS_RE.sub(" ", _CONTINUATION_RUNS_RE.sub(" ", self.text[a:a + _LONG_WINDOW])))
+        if a + _LONG_WINDOW < b and self.text[a + _LONG_WINDOW - 1:a + _LONG_WINDOW + 1].strip() == self.text[a + _LONG_WINDOW - 1:a + _LONG_WINDOW + 1]:
+            head += ".0"
+        if b - a <= _LONG_WINDOW and len(head) <= _WRAPPER_HEAD + _WRAPPER_TAIL:
+            return self._judge(head)                       # a long word folded (`ssh` and a 590-character host) leaves a command that is not long
+        begin = max(a, b - _LONG_WINDOW)
+        tail = _fold_long_words(_BLANK_RUNS_RE.sub(" ", _CONTINUATION_RUNS_RE.sub(" ", self.text[begin:b])))
+        if begin > a and self.text[begin - 1:begin + 1].strip() == self.text[begin - 1:begin + 1]:
+            tail = "0." + tail
+        return self._judge(head[:_WRAPPER_HEAD] + " " + tail[-_WRAPPER_TAIL:])
+
+    def _line_start(self, pos: int) -> int:
+        if self._newlines is None:
+            self._newlines = [m.start() for m in re.finditer("\n", self.text)]
+        before = bisect.bisect_left(self._newlines, pos)
+        return self._newlines[before - 1] + 1 if before else 0
+
+    def _logical_start(self, start: int) -> int:
+        """Where the line that begins at `start` began, counting the lines that a backslash at their end joins to it."""
+        path = []
+        while start and self.text[start - 2:start] == "\\\n":
+            known = self._logical.get(start)
+            if known is not None:
+                start = known
+                break
+            path.append(start)
+            start = self._line_start(start - 2)
+        for seen in path:
+            self._logical[seen] = start
+        return start
+
+    def _header_wraps(self, o: shelllex.Opener) -> bool:
+        """What reads a here-document is anywhere on the line that redirects it (`cat <<E | ssh h sh`, `<<E ssh h sh`, `do ssh h; done <<E`)."""
+        text = self.text
+        lo = self._logical_start(self._line_start(o.offset))
+        got = self._header.get(lo)
+        if got is None:
+            hi = text.find("\n", o.offset)
+            while hi >= 0 and text[hi - 1:hi] == "\\":
+                hi = text.find("\n", hi + 1)
+            hi = len(text) if hi < 0 else hi
+            if hi - lo > _WRAPPER_HEAD + _WRAPPER_TAIL:
+                got = self._judge_long(lo, hi)
+            else:
+                got = self._judge(text[lo:hi])
+            self._header[lo] = got
+        return got
+
+    def _judge(self, command: str, glued: bool = False) -> bool:
+        """Whether the command, which ends where a quote opens, is a wrapper's. With `glued`, a quote that follows a name with no blank
+        in between (`docker's`, `ssh's`) makes the shell read one word with it (`dockers …`), and the word is no wrapper."""
+        command = _NAME_CONTINUATION_RE.sub("", command)
+        if glued and command[-1:] in ("'", '"') and command[-2:-1].isalnum():
+            command = command[:-1] + "%"
+        if not _WRAPPER_HINT.search(command):
+            return False
+        self.work[0] -= len(command)
+        return self.work[0] < 0 or _wrapped(command.replace("\\\n", " ").replace("\n", " ") + " ")
+
+
+def _closes_fence(line: str, char: str, length: int, indent: int) -> bool:
+    """Whether the line closes a fence of `length` or more `char`: up to `indent` blanks, the fence characters, and nothing else."""
+    body = line.lstrip(" ")
+    fence = body.rstrip(" \t")
+    return len(line) - len(body) <= indent and len(fence) >= length and fence.count(char) == len(fence)
+
+
+def _enclosing_lines(lines: list[str], diff: bool, budget: int | list[int] | None = None, _depth: int = 0, *, markdown: bool = True) -> list[bool]:
+    """For each line, whether it begins inside a construct that a wrapper opened. The text is read as shell from the top of each
+    stretch, and a code fence is where a stretch ends or begins: a fence opens with three or more backticks or tildes (at most
+    three blanks in, and nothing in front of it), closes with the same character, at least as many, and nothing else, and everything between
+    is literal, so a fence line of the other kind inside one is no boundary; one that is never closed runs to the end. A fence behind a quote
+    or a list marker cuts nothing (its marker is read as blanks), and the lines of an HTML block are text up to its end. A fenced body is
+    read through. The text between fences is read twice, once through (a string may span a blank line) and once from the start of each
+    paragraph (prose before it may hold an apostrophe that a shell would read as a quote): a line there is enclosed if either says so.
+    Outside a fence the readings are repeated on the text as Markdown renders it, without the backslash in front of a punctuation mark
+    (`ssh h \\'` is `ssh h '`). Every reading is also tried from each wrapper word, whatever stands in front of it (prose, a table cell, a
+    patch's hunk header, a prompt, a here-document that never ends): a command may begin there, and a quote that an earlier line leaves odd
+    must not hide it. The characters the hypotheses lex, and those the wrapper judgements read, come out of one budget in proportion to
+    the text (a script that a string holds is read out of the same budget, `budget` being the list that its parent spends from); a hypothesis it cannot pay for marks the lines of its window as enclosed. (The scan of a line for the words that could start a
+    hypothesis is linear and not charged.)"""
+    cleaned = [_lexable(line, diff) for line in lines]
+    verbatim = [_lexable(line, diff, False) for line in lines]           # a `>` that begins a line may be a redirect (`ssh h \\⏎>&2 '`), not a quote marker
+    rendered = [_ESCAPED_PUNCTUATION_RE.sub(r"\1", line) if "\\" in line else line for line in cleaned]
+    out = [False] * len(cleaned)
+    work = budget if isinstance(budget, list) else [12 * sum(len(line) + 1 for line in cleaned) + 2_000 if budget is None else budget]
+
+    def script_lines(rows: list[str], starts: list[int], o: shelllex.Opener, ended_on: int, mark: int) -> None:
+        """The string `o`, which ends on row `ended_on` and is piped into a shell, is a script that runs: its lines are read as one (the backslashes of a double-quoted string
+        gone), and a line that begins at the top of that script, or inside a construct that a wrapper in it opened, is enclosed (`echo "⏎ssh h "⏎curl …⏎"…" | sh`; not
+        `echo "⏎echo "⏎curl …⏎"…" | sh`, whose installer is the text an `echo` prints). `mark` is the index in `out` of row 0."""
+        begin = bisect.bisect_right(starts, o.offset) - 1
+        col = o.offset - starts[begin] + (2 if o.kind == "ANSI" else 1)
+        inner = [rows[begin][col:], *rows[begin + 1:ended_on], rows[ended_on][:_closing_column(rows[ended_on], o.kind)]]
+        script = "\n".join(inner)
+        work[0] -= 12 * len(script) + 1
+        if work[0] >= 0:
+            if o.kind == "DQ":
+                script = _undo_double_quotes(script)[0]
+            states = shelllex.line_states(script)
+            reads = _enclosing_lines(script.split("\n"), False, work, _depth + 1) if _depth < 3 else [False] * len(states)       # the script is a text of its own
+        for i in range(1, ended_on - begin + 1):
+            if work[0] < 0 or not states[i].openers or (i < len(reads) and reads[i]):
+                out[mark + begin + i] = True
+
+    def eval_lines(rows: list[str], mark: int) -> None:
+        """`eval` runs the script that its first word is the value of (`eval 'a '"'"'b'`): when that word spans lines, the script is read as a text of its own, to a depth of three."""
+        for k, row in enumerate(rows):
+            m = _EVAL_WORD_RE.search(row)
+            if m is None or k + 1 >= len(rows):
+                continue
+            window = rows[k + 1:k + 1 + _HYPOTHESIS_WINDOW]
+            value = _unquote_word("\n".join([row[m.end():], *window]))
+            inner = value.split("\n")
+            if len(inner) < 2 or not value.strip():
+                continue
+            work[0] -= 12 * len(value) + 1
+            if work[0] < 0:
+                return
+            for j, enclosed in enumerate(_enclosing_lines(inner, False, work, _depth + 1)):
+                if enclosed and j > 0 and k + j < len(rows):
+                    out[mark + k + j] = True
+
+    def run(stretch: list[str], first: int, paragraphs: bool) -> None:
+        at = first
+        for chunk in (_paragraphs(stretch) if paragraphs else [stretch]):
+            text = "\n".join(chunk)
+            lexed = shelllex.line_states(text)
+            wraps = _Wrapped(text, work)
+            # a wrapper's multi-line argument that the shell has closed again is no longer open, but the lines after it (as many as a
+            # string would be followed for) are a script that ran the wrapper (`ssh h 'x⏎docker run y sh -c '⏎curl … | sh⏎'`: the second
+            # quote closes the first string); none of them is read as a documented installer
+            tainted = -1
+            if _depth < 3 and "eval" in text:
+                eval_lines(chunk, at)
+            starts = _line_starts(text)
+            for ended_on, o in lexed.closed:                                       # a string whose end is piped into a shell is a script that runs
+                if o.kind in ("SQ", "DQ", "ANSI", "BQ") and _piped_into_a_shell(chunk[ended_on], o.kind):
+                    script_lines(chunk, starts, o, ended_on, at)
+            ends = iter(sorted(line for line, o in lexed.closed if wraps.leads(o) and wraps.opener(o)))
+            ahead = next(ends, None)
+            # what the lexer could not decide matters on the lines after the first line, at or after the one that raised it, on which a command may begin like a wrapper's:
+            # a construct it left open belongs to a command, and one that no wrapper begins is no wrapper's (the code of another language, read as shell, is
+            # full of such text); a wrapper's command before it is followed by the construct it holds open
+            onset = next((i for i, state in enumerate(lexed) if state.unknown), None)
+            first_word = len(chunk) if onset is None else next((i for i in range(max(onset - 1, 0), len(chunk)) if not _MARKER_LINE_RE.match(chunk[i])
+                                                                and _may_begin_a_wrapper_command(chunk[i], work)), len(chunk))
+            for k, state in enumerate(lexed):
+                while ahead is not None and ahead <= k:
+                    tainted = max(tainted, ahead + _HYPOTHESIS_WINDOW)
+                    ahead = next(ends, None)
+                if k < len(chunk) and not out[at + k] and (k < tainted or state.openers or state.unknown):
+                    out[at + k] = k < tainted or wraps.state(state, k > first_word)
+            at += len(chunk)
+
+    def hypotheses(stretch: list[str], first: int) -> None:
+        run_of = [0] * (len(stretch) + 1)                                     # how many lines from here on end in a backslash: the command they join is one command
+        for i in range(len(stretch) - 1, -1, -1):
+            run_of[i] = run_of[i + 1] + 1 if stretch[i].rstrip().endswith("\\") else 0
+        covered = [0] * (len(stretch) + _HYPOTHESIS_WINDOW + max(run_of) + 2)       # lines a hypothesis the budget could not afford stands for
+        stacks: list[list[str]] | None = None
+
+        def scan(k: int, line: str, dq: bool) -> None:
+            nonlocal stacks
+            window = _HYPOTHESIS_WINDOW + run_of[k]                          # the window counts the lines after the command, not the lines it is written on
+            openers = [m.start() for m in _OPENERS_RE.finditer(line)]
+            continued = line.rstrip().endswith("\\")
+            if not openers and not continued:
+                return
+            tokens = list(_TOKEN_RE.finditer(line))
+            cands = _quoted_programs(line, _wrapper_words(tokens))
+            if cands and stacks is None:
+                stacks = _line_stacks(stretch, work)
+            plain, guarded = _command_starts(line, cands, work, stacks=tuple(stacks[k])) if cands else ({}, {})
+            if cands and _may_hold_zsh_words(line):             # a zsh in a terminal reads a `#` as a character: commands may stand in what bash takes for a comment
+                plain_z, guarded_z = _command_starts(line, cands, work, comments=False)
+                for at, found in plain_z.items():
+                    plain.setdefault(at, found)
+                for col, found in guarded_z.items():
+                    guarded.setdefault(col, found)
+            starts = list(plain)
+            if continued and k + 1 < len(stretch) and tokens:       # a name a continuation cuts in two (`ss\\⏎h`) is a word where it begins
+                last_token, nxt = tokens[-1], _TOKEN_RE.match(stretch[k + 1].lstrip())
+                if last_token.group().endswith("\\") and last_token.group()[-2:-1].isalnum() and nxt and nxt.group()[:1].isalnum() \
+                        and any(_could_wrap(w) for w in _command_words(last_token.group()[:-1] + nxt.group())[1]):
+                    starts.append(last_token.start())
+            def unpaid(cost: int) -> bool:
+                """Charge a hypothesis; one the budget cannot pay for marks the lines of its window as enclosed."""
+                work[0] -= cost
+                if work[0] < 0:
+                    covered[k + 1] += 1
+                    covered[k + 1 + window] -= 1
+                    return True
+                return False
+
+            lead = _HASH_PROMPT_RE.match(line) if "<<" in line else None
+            heredoc_col = lead.end() if lead and _begins_with_wrapper(line[lead.end():]) else 0       # `# cat <<E | ssh h sh`: the here-document is read from the command after the prompt
+            for col in dict.fromkeys([*([heredoc_col] if "<<" in line else []), *starts, *guarded]):       # a here-document is read by what is on its line
+                if not (continued or (openers and openers[-1] >= col)):
+                    continue                                                           # nothing it could open is on the rest of the line
+                if unpaid(len(line) - min(col, plain[col][1] if col in plain else col) + 1):       # the logical line below begins at the simple command
+                    continue
+                kind, words = guarded.get(col, ("", []))
+                following = stretch[k + 1:k + 1 + window]
+                head, cuts = line[col:], []
+                if kind == "DQ":                                                       # the text `eval "…"` runs: the backslashes of `\"` are gone
+                    head, cuts = _undo_double_quotes(head)
+                joined = line[plain[col][1]:] if col in plain else head                # the logical line: a backslash at the end joins the next one
+                for more in following:
+                    if not joined.endswith("\\"):
+                        break
+                    if unpaid(len(more) + 1):
+                        break
+                    joined += "\n" + more
+                if work[0] < 0:
+                    continue
+                readings = (True, False) if _reads_a_comment_as_words(joined) else (True,)     # zsh in a terminal reads no comment, and its `'` opens a string
+                wanted = tuple(at - col - bisect.bisect_left(cuts, at - col) for at, _ in words)
+                carried = [shelllex.line_states(head + "\n", comments=c, probes=wanted if c is True else ()) for c in readings]
+                taint = _command_head(line, 0, plain[col][0]) if col in plain else None
+                if wanted:                                  # a string's first character: a command in it must read as one
+                    seen = carried[0]
+                    for (at, end), probe in zip(words, (seen.probed[w] for w in wanted)):
+                        command = _command_head(head, probe.command_at, end - col - bisect.bisect_left(cuts, end - col))
+                        if probe.unknown or _led_by_wrapper(command, work):
+                            taint = command
+                            break
+                    else:
+                        continue
+                if not head.rstrip().endswith("\\") and not any(c[1].openers or c[1].unknown for c in carried):
+                    continue                                                           # nothing it opened is still open on the next line
+                if kind == "DQ" or dq:
+                    following = [_undo_double_quotes(more)[0] for more in following]
+                text = "\n".join([head, *following])
+                work[0] -= len(text)
+                for comments in readings:
+                    lexed = shelllex.line_states(text, comments=comments)
+                    wraps = _Wrapped(text, work)
+                    rows = text.split("\n")
+                    starts = _line_starts(text)
+                    for ended_on, o in lexed.closed:                                   # a string whose end is piped into a shell is a script that runs
+                        if o.kind in ("SQ", "DQ", "ANSI", "BQ") and _piped_into_a_shell(rows[ended_on], o.kind):
+                            script_lines(rows, starts, o, ended_on, first + k)
+                    for j in range(1, len(lexed)):
+                        if not out[first + k + j] and (lexed[j].openers or lexed[j].unknown) and wraps.state(lexed[j]):
+                            out[first + k + j] = True
+                    ended = None
+                    if lexed.closed and taint is not None and _led_by_wrapper(taint, work):         # a prompt or a label may stand in front of the wrapper
+                        ended = next((line for line, o in lexed.closed if wraps.leads(o) and wraps.opener(o)), None)
+                    if ended is not None:                                              # the script that ran the wrapper goes on, as in `run`
+                        covered[k + ended] += 1
+                        covered[k + ended + _HYPOTHESIS_WINDOW] -= 1
+        in_double_quotes = _in_double_quotes(stretch, work)
+        for k, written in enumerate(stretch):
+            scan(k, written, False)
+            if in_double_quotes[k]:                                                    # a line of the text a double-quoted string holds: `eval "⏎ssh h \"⏎…`
+                view = _undo_double_quotes(written)[0]
+                if view != written:
+                    scan(k, view, True)
+        running = 0
+        for k in range(len(stretch)):
+            running += covered[k]
+            if running > 0:
+                out[first + k] = True
+
+    def read(first: int, last: int, fenced: bool) -> None:
+        """All the readings of the lines first..last: through, per paragraph, and from each wrapper word, on the text as written, and
+        outside a fence also on the text as Markdown renders it."""
+        spent = cleaned[first:last]
+        sources = [spent] if fenced or rendered[first:last] == spent else [spent, rendered[first:last]]
+        if verbatim[first:last] != spent:
+            sources.append(verbatim[first:last])
+        neutral = [_neutral(line) for line in spent]       # (an apostrophe in a word or an inch mark is no quote in prose: read once without)
+        if neutral != spent:
+            sources.append(neutral)
+        for stretch in sources:
+            run(stretch, first, False)
+            if not fenced:
+                run(stretch, first, True)
+            hypotheses(stretch, first)
+
+    if not markdown:                                # a file that is no Markdown (reStructuredText, AsciiDoc, HTML, a notebook) has no fences and no HTML blocks: a fence-like line in it is a line of text
+        read(0, len(cleaned), False)
+        return out
+    begin = 0
+    fence = ""
+    html: re.Pattern[str] | None = None            # inside an HTML block, whose lines are text
+    behind: tuple[str, int] | None = None          # a fence that a quote or a list item holds is open, as (character, length): where it ends is that container's rule
+    for k in range(len(cleaned)):
+        written = _diff_view(lines[k], diff)            # the line as it is in the document: a fence is a line of its own, whatever a quote marker did to it
+        if written is None:
+            continue                                    # a removed line or a hunk header is nothing to a fence
+        if fence:
+            if _closes_fence(written, fence[0], len(fence), 3):
+                read(begin, k, True)
+                fence, begin = "", k + 1
+            continue
+        if html is not None:
+            if html is _UNTIL_BLANK and not written.strip(" \t"):          # a blank line is spaces and tabs only, as in CommonMark (a no-break space is text)
+                html = None                             # the blank line ends the block and is read as any other line
+            else:
+                if html is not _UNTIL_BLANK and html.search(written):
+                    html = None
+                continue
+        end = _html_block_end(written)
+        if end is not None:
+            html = None if end is not _UNTIL_BLANK and end.search(written) else end
+            continue
+        m = _FENCE_OPEN_RE.match(written)
+        if m and behind is None and not (m.group(2)[0] == "`" and "`" in m.group(3)):
+            read(begin, k, False)
+            fence, begin = m.group(2), k + 1
+            continue
+        m = _PREFIXED_FENCE_RE.match(written)
+        if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+            # a marker that a quote or a list item holds, or that closes such a fence, cuts nothing and is no part of the text a reader copies
+            cleaned[k] = _MARKER_RUN_RE.sub(lambda r: " " * len(r.group()), cleaned[k], count=1)
+            verbatim[k] = _MARKER_RUN_RE.sub(lambda r: " " * len(r.group()), verbatim[k], count=1)
+            rendered[k] = _MARKER_RUN_RE.sub(lambda r: " " * len(r.group()), rendered[k], count=1)
+            if behind is None:
+                behind = (m.group(1)[0], len(m.group(1)))
+            elif m.group(1)[0] == behind[0] and len(m.group(1)) >= behind[1] and not m.group(2).strip(" \t"):
+                behind = None
+    read(begin, len(cleaned), bool(fence))
+    return out
+
+
+
+
+def _line_starts(text: str) -> list[int]:
+    """Where each line of `text` begins (an offset is on the line `bisect_right(starts, offset) - 1`)."""
+    starts = [0]
+    at = text.find("\n")
+    while at >= 0:
+        starts.append(at + 1)
+        at = text.find("\n", at + 1)
+    return starts
+
+
+def _closing_column(line: str, kind: str) -> int:
+    """Where the string of this kind that began on an earlier line ends on `line`, or -1."""
+    quote = {"SQ": "'", "ANSI": "'", "DQ": '"', "BQ": "`"}.get(kind)
+    at = 0
+    while quote is not None:
+        at = line.find(quote, at)
+        if at < 0:
+            return -1
+        back = at
+        while back > 0 and line[back - 1] == "\\":
+            back -= 1
+        if kind == "SQ" or (at - back) % 2 == 0:
+            return at
+        at += 1
+    return -1
+
+
+def _pipe_after(rest: str) -> str | None:
+    """What a pipe in `rest` (the rest of a command, quoted pieces and all) feeds, or None if the command ends first: `' y z | sh` gives `sh`."""
+    i, n = 0, len(rest)
+    while i < n:
+        c = rest[i]
+        if c == "'":
+            end = rest.find("'", i + 1)
+            i = n if end < 0 else end + 1
+        elif c == '"' or rest.startswith("$'", i):
+            quote = "'" if c == "$" else '"'
+            i += 2 if c == "$" else 1
+            while i < n and rest[i] != quote:
+                i += 2 if rest[i] == "\\" else 1
+            i += 1
+        elif c == "\\":
+            i += 2
+        elif c == "|":
+            return None if rest.startswith("||", i) else rest[i + 1:]
+        elif c in ";&()\n`":
+            return None
+        else:
+            i += 1
+    return None
+
+
+def _piped_into_a_shell(line: str, kind: str) -> bool:
+    """Whether the string that ends on this line is an argument of a command whose output goes into a shell or an interpreter (`echo "…⏎…" | sh`,
+    `printf %s '…' '"'"'…' | ssh h sh`): what it holds is a script that runs, whoever holds the string."""
+    at = _closing_column(line, kind)
+    if at < 0:
+        return False
+    after = _pipe_after(line[at + 1:])
+    return after is not None and _begins_with_wrapper(_command_head(after, 0, len(after)))
+
+
+def _paragraphs(lines: list[str]) -> list[list[str]]:
+    """The lines cut after each blank one, so that the pieces hold all of them and no piece reads on from the one before."""
+    pieces: list[list[str]] = [[]]
+    for line in lines:
+        pieces[-1].append(line)
+        if not line.strip(" \t"):
+            pieces.append([])
+    return [p for p in pieces if p]
 
 
 # Files that are documentation. A docs PR quotes the installer and the phrase "system prompt" all the time.
 _PROSE_FILE_EXTS = (".md", ".mdx", ".markdown", ".rst", ".adoc", ".ipynb", ".html", ".htm")
+_NOT_MARKDOWN_EXTS = (".rst", ".adoc", ".html", ".htm", ".ipynb")       # documentation formats that are no Markdown: no fences, no HTML blocks
 
 
 def _lf(text: str) -> str:
-    """Line endings as LF. GitHub bodies written in the browser use CRLF, and a bare CR ends a line on a terminal
-    and in many editors but is not a `re` `$` or `^`: a rule anchored on a line must see the same lines."""
-    return text.replace("\r\n", "\n").replace("\r", "\n")
+    """Line endings as LF, and no NUL. GitHub bodies written in the browser use CRLF, and a bare CR ends a line on a terminal
+    and in many editors but is not a `re` `$` or `^`: a rule anchored on a line must see the same lines. Bash and dash delete a NUL
+    before they read a word (`cu\\0rl` is `curl`), so a text that holds one is read without it."""
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\0", "")
 
 
 # What may stand in front of a `|` that opens a YAML block scalar (`run: |`, `- |`, `script:` / `- |`): only list dashes
@@ -1155,16 +2198,23 @@ def _lf(text: str) -> str:
 _YAML_BLOCK_PREFIX = re.compile(r"[+ ]?[ \t]{0,40}(?:-[ \t]{1,4}){0,4}(?:[\w.\"'-]{1,60}:[ \t]{0,4})?")
 
 
-def _join_lines(text: str, diff: bool = True, fold: bool = True) -> str:
+def _join_lines(text: str, diff: bool = True, fold: bool = True, merged: list[tuple[int, int]] | None = None, appended: list[int] | None = None) -> str:
     """The commands as the shell reads them: a backslash continuation, or a pipe at the end of a line, joins two
     physical lines (a diff adds its own `+` marker to the second). The `|` that opens a YAML block scalar does not, and neither
     does the closing pipe of a Markdown table row (`_is_table_row`: the row starts with a pipe and a PLAIN cell and cannot be read
     by a shell as more than text; a shell can also start a line with `|` inside a construct opened above, but then the line closes
     it or opens a command of its own, so it is not a row and its pipeline is joined). The scan and the prose softening both read
-    this one text."""
+    this one text. `merged`, when given, collects the (start, end) of every stretch of `text` that was replaced, newlines and all; `appended`, when given, receives the number of lines
+    that were appended at the end of the text (the pipeline of a row that was not joined in place)."""
     extras: list[str] = []
 
     def join(m: re.Match[str]) -> str:
+        replacement = decide(m)
+        if merged is not None and replacement != m.group(0):
+            merged.append((m.start(), m.end()))
+        return replacement
+
+    def decide(m: re.Match[str]) -> str:
         if "\n" not in m.group(0):
             return m.group(0)             # a pipe with a comment (or nothing) after it on its own line: not a continuation
         if text[m.end():m.end() + 40].lstrip(" \t>+").startswith("|") and not m.group(0).lstrip().startswith("\\"):
@@ -1185,21 +2235,39 @@ def _join_lines(text: str, diff: bool = True, fold: bool = True) -> str:
         if not continued and _is_table_row(text, line_start, m.start(), diff):
             return m.group(0)             # a Markdown table row ends in `|`: what follows is not a stage of a pipeline
         before = text[line_start:m.start()]
-        if ("#" in m.group(0) and not continued and _TABLE_ROW_COMPAT_RE.match(text, line_start)
-                and not any(q in before for q in "'\"")):
-            # `_CONTINUATION_RE` took a `#` for a comment and swallowed what follows it. The line was a row to a492ab2, which left its
-            # text as it was: it may be the text of a string above (`| b ) | # c' ; curl X | sh`) and erasing it would hide more
-            # than the row rule used to. The line is not a row to `_is_table_row` (a closer or an opener in it), so the pipeline is
-            # joined as well: the `#` may be the comment of a command the line opened (`| a | $(curl X | # c⏎sh)`). The joined line goes
-            # to the end of the text, so that nothing the original lines hold moves: a `$(` at the end of this line still meets
-            # the `curl` on the next, a quoted argument keeps its length, and the lines keep their count.
+        if not continued and _TABLE_ROW_COMPAT_RE.match(text, line_start) and not any(q in before for q in "'\""):
+            # The line begins like a row but is not one to `_is_table_row` (a closer or an
+            # opener in it), so its pipeline is joined as well, but the lines stay: the next one is still the first word of a line to the
+            # guards that anchor to a line start (`bin/evil 'x`, a bare `PATH=…`), and the line may be text of a string above
+            # (`| b ) | # c' ; curl X | sh`: erasing the swallowed text would hide more than the row rule hides). A `#` after the pipe is
+            # a comment to `_CONTINUATION_RE`, which swallowed the rest of the line, and it may be the comment of a command the line
+            # opened (`| a | $(curl X | # c⏎sh)`). The joined line goes to the end of the text, so that nothing the original lines hold
+            # moves: a `$(` at the end of this line still meets the `curl` on the next, a quoted argument keeps its length, and the
+            # lines keep their count.
             eol = text.find("\n", m.end())
             extras.append(before + " | " + text[m.end():len(text) if eol < 0 else eol])
             return m.group(0)
         return " | "
     joined = _CONTINUATION_RE.sub(join, text)
     joined = (joined + "\n" + "\n".join(extras)) if extras else joined
+    if appended is not None:
+        appended.append(len(extras))
     return _fold_padding(joined) if fold else joined
+
+
+def _physical_lines(text: str, unfolded: str, merged: list[tuple[int, int]]) -> tuple[list[str], list[int]]:
+    """The lines of `text` as written, then the joined pipelines that `_join_lines` appended; and for each line of `unfolded` the index
+    of the line of this list it begins on (a pipe or a backslash at the end of a line joins the next one, and a shell does not)."""
+    physical = text.split("\n")
+    begins = [0]
+    k = 0
+    for line, m in enumerate(re.finditer("\n", text), start=1):
+        while k < len(merged) and merged[k][1] <= m.start():
+            k += 1
+        if not (k < len(merged) and merged[k][0] <= m.start()):
+            begins.append(line)
+    appended = unfolded.split("\n")[len(begins):]
+    return physical + appended, begins + [len(physical) + k for k in range(len(appended))]
 
 
 def _fold_padding(text: str) -> str:
@@ -1226,13 +2294,25 @@ def _fold_long_token(m: re.Match[str]) -> str:
 _ESCAPED_PIPE_RE = re.compile(r"\\\|")
 
 
+def _pipe_of_a_cell(m: re.Match[str]) -> str:
+    """`\\|` as a table cell spells a pipe. After an odd run of backslashes it is not that: the backslash is itself escaped (`\\\\|`) and the pipe is a real one."""
+    text, i = m.string, m.start()
+    while i > 0 and text[i - 1] == "\\":
+        i -= 1
+    return m.group(0) if (m.start() - i) % 2 else "|"
+
+
+def _unescape_pipes(text: str) -> str:
+    return _ESCAPED_PIPE_RE.sub(_pipe_of_a_cell, text)
+
+
 def _fold_with_origin(text: str) -> tuple[str, list[int]]:
-    """`_fold_padding(text).replace("\\|", "|")` (what `_soften_prose` reads) and, for every character of it, the index in `text` it came
+    """`_unescape_pipes(_fold_padding(text))` (what `_soften_prose` reads) and, for every character of it, the index in `text` it came
     from: the character itself where the fold kept it, `-1 - i` where the fold made it up out of what began at `i`. So the text that the
     first characters of a folded line came from can be read as it was written, when the character that follows them was kept."""
     origin = list(range(len(text)))
     for regex, repl in ((_BLANKS_RE, lambda m: " "), (_PATH_TOKEN_RE, _fold_path), (_LONG_TOKEN_RE, _fold_long_token),
-                        (_LONG_WORD_RE, _fold_word), (_REPEAT_RE, lambda m: m.group(1)), (_ESCAPED_PIPE_RE, lambda m: "|")):
+                        (_LONG_WORD_RE, _fold_word), (_REPEAT_RE, lambda m: m.group(1)), (_ESCAPED_PIPE_RE, _pipe_of_a_cell)):
         parts: list[str] = []
         kept: list[int] = []
         last = 0
@@ -1264,8 +2344,7 @@ def _fold_word(m: re.Match[str]) -> str:
     return word[:80] + carried + "".join(_SYNTAX_PIECE_RE.findall(middle[len(carried):])) + word[-40:]
 
 
-def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file: bool = False, diff: bool = True
-                  ) -> list[IndicatorHit]:
+def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file: bool = False, diff: bool = True, markdown: bool = True) -> list[IndicatorHit]:
     """Prose (a title, a body, a comment, a documentation file) quotes things a payload would also say. Four of
     those are downgraded to the sub-floor `medium`, still recorded as evidence:
 
@@ -1285,9 +2364,12 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
     runs, and the rules stay as strict there."""
     if not hits or not (kind in ("title", "body", "comment") or prose_file):
         return hits
+    with_nul = text.replace("\r\n", "\n").replace("\r", "\n") if "\0" in text else None       # the earlier rule read a NUL as an ordinary character, a shell deletes it: the floor reads both
     text = _lf(text)
-    unfolded = _join_lines(text, diff, fold=False)
-    joined = _fold_padding(unfolded).replace("\\|", "|")            # a table cell can only spell its pipe `\\|`
+    merged: list[tuple[int, int]] = []
+    appended: list[int] = []
+    unfolded = _join_lines(text, diff, fold=False, merged=merged, appended=appended)
+    joined = _unescape_pipes(_fold_padding(unfolded))            # a table cell can only spell its pipe `\\|`
     # `_fold_padding` turns a repeated token into one (`)) ))`, `'a 'a`, `+ +`) and never removes a newline: the guards that ask what a
     # line is to a shell read the line as it was, the windows read the folded one
     raw_lines = unfolded.split("\n")
@@ -1307,46 +2389,28 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
     def ticks_between(a: int, b: int) -> int:
         return bisect.bisect_left(ticks, b) - bisect.bisect_left(ticks, a)
 
-    openers: list[int] | None = None
+    enclosing: list[bool] | None = None
+    begins: list[int] = []
+    openers: list[int] = []
 
     def enclosed(first: int) -> bool:
-        """A wrapper on one of the sixty lines above whose quote or heredoc may still be open when this line begins
-        (`ssh host '⏎curl … | sh⏎'`, `docker run x sh -c '⏎…`, `ssh host <<'EOF'⏎…⏎curl … | sh⏎EOF`): the whole pipeline
-        runs inside it. A line with an odd quote count opens one, and so does a pipe-led line that holds a quote within sixty
-        lines of such a line (it may close that string and open the wrapper's argument). An apostrophe inside a word ("you'll")
-        opens nothing. Found once per segment."""
-        nonlocal openers
-        if openers is None:
-            openers, begin = [], 0
-            last_odd = -_ENCLOSED_LINES - 1             # the last line that left a quote odd
-            for i, end in enumerate([*newlines, len(joined)]):
-                line = raw_lines[i].replace("\\|", "|") if len(raw_lines) == len(newlines) + 1 else joined[begin:end]
-                tail = _LEAD_MARKUP_RE.sub("", joined[max(begin, end - 300):end])
-                # the quotes of the last 300 characters of the folded line (what a492ab2 counted: where the heuristic is wrong about
-                # `\'`, `'\''`, `$'…'` or a word-internal apostrophe, a fold that collapses `'z 'z` can make it right by accident) or, where
-                # the fold collapsed a quote away, of the text those 300 characters were folded from: either one odd opens a wrapper
-                odd = _odd_quotes(tail)
-                folded_line = joined[begin:end]
-                if not odd and len(raw_lines) == len(newlines) + 1 and line.count("'") + line.count('"') != folded_line.count("'") + folded_line.count('"'):
-                    origin = trace(i, begin)
-                    k = max(begin, end - 300) - begin
-                    if origin is None or k >= len(origin):
-                        written = line[-300:]
-                    else:
-                        written = raw_lines[i][origin[k] if origin[k] >= 0 else -1 - origin[k]:]
-                    odd = _odd_quotes(_LEAD_MARKUP_RE.sub("", written))
-                # A line that starts with a pipe is inside a construct opened above; when a line above left a quote odd, any quote on it
-                # may close that string and the next may open a wrapper's argument (`echo 'a⏎| b'c ; ssh host 'x⏎…`). Which one does
-                # depends on escapes, `$'…'`, word-internal apostrophes: the line counts as an opener whatever the quotes are.
-                piped = i - last_odd <= _ENCLOSED_LINES and line.lstrip(" \t+>").startswith("|") and ("'" in line or '"' in line)
-                if tail.strip() and (odd or piped or "<<" in tail) and _wrapped(tail + " "):
-                    openers.append(i)
-                if len(_SINGLE_QUOTE_RE.findall(line)) % 2 or line.count('"') % 2:
-                    last_odd = i
-                begin = end + 1
+        """Whether the line the command is on begins inside a construct that a wrapper opened on an earlier line
+        (`ssh evil.example '⏎curl … | sh⏎'`, `docker run x sh -c '⏎…`, `ssh evil.example <<'EOF'⏎…⏎curl … | sh⏎EOF`): the whole pipeline runs
+        inside it. A line of the folded text is read where it began as written: a pipe or a backslash at the end of a line joins the next one
+        in the text the rules match, and a shell reading the lines does not. Found once per segment."""
+        nonlocal enclosing, begins, openers
+        if enclosing is None:
+            written, begins = _physical_lines(text, unfolded, merged)
+            enclosing = _enclosing_lines(written, diff, markdown=markdown)
+            lines = joined.split("\n")
+            openers = linewide.opening_lines(lines)
+            if with_nul is not None:          # either reading opens; the readings must be the same lines (a NUL changes a join), or all lines are opening
+                other = _unescape_pipes(_fold_padding(_join_lines(with_nul, diff, fold=False))).split("\n")
+                openers = sorted({*openers, *linewide.opening_lines(other)}) if [x.replace("\0", "") for x in other] == lines else list(range(len(lines)))
         here = bisect.bisect_left(newlines, first)
-        j = bisect.bisect_left(openers, here)
-        return j > 0 and here - openers[j - 1] <= _ENCLOSED_LINES
+        if here >= len(newlines) + 1 - appended[0]:          # a line the join appended for a row it did not join stands at the end of the text, and its row where it was: any opening or enclosed line asks
+            return bool(openers) or any(enclosing)
+        return (here < len(begins) and enclosing[begins[here]]) or linewide.encloses(openers, here)
 
     origins: dict[int, list[int] | None] = {}
 
@@ -1408,7 +2472,7 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
                                                        count=1), count=1)
         # a backtick still open in front of the command is another substitution or span: `evil` curl … | sh
         return (len(before) <= 120 and "`" not in before and not _UPSTREAM_RE.search(before) and not _wrapped(before)
-                and not enclosed(first))
+                and not linewide.wrapped(before) and not enclosed(first))
 
     def line_end(pos: int) -> int:
         i = bisect.bisect_left(newlines, pos)
@@ -1532,10 +2596,12 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
                             return cand
         return m
 
-    raw_pipes = [*_CURL_PIPE_RE.finditer(joined), *_CURL_PIPE_PLAIN_RE.finditer(joined)]
-    pipes = list({(p.start(), p.end()): p for p in (anchored(m, _DOWNLOAD_WORD_RE, (_CURL_PIPE_RE, _CURL_PIPE_PLAIN_RE))
+    # the matches of one span are collapsed below and the LAST capture is the one judged: the plain window stays last
+    raw_pipes = [*_matches(_CURL_PIPE_RE, joined, appended[0]), *_matches(_CURL_PIPE_DOLLAR_RE, joined, appended[0]),
+                 *_matches(_CURL_PIPE_PLAIN_RE, joined, appended[0])]
+    pipes = list({(p.start(), p.end()): p for p in (anchored(m, _DOWNLOAD_WORD_RE, (_CURL_PIPE_RE, _CURL_PIPE_DOLLAR_RE, _CURL_PIPE_PLAIN_RE))
                                                     for m in raw_pipes)}.values())
-    all_substs = list(_CURL_SUBST_SHELL_RE.finditer(joined))
+    all_substs = list(_matches(_CURL_SUBST_SHELL_RE, joined, appended[0]))
 
     def real_subst(m: re.Match[str]) -> bool:
         """A backtick substitution that a real program runs with something the pipe match does not judge: environment
@@ -1554,7 +2620,7 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
     pipe_starts = {p.start() for p in pipes} | {p.start() for p in raw_pipes}
     substs = [m for m in all_substs if not (m.group("opener") == "`" and m.start("dl") in pipe_starts) or real_subst(m)]
     shells = list({(p.start(), p.end()): p for p in (anchored(m, _PS_DOWNLOAD_WORD_RE, (_IWR_IEX_RE,))
-                                                     for m in _IWR_IEX_RE.finditer(joined))}.values())
+                                                     for m in _matches(_IWR_IEX_RE, joined, appended[0]))}.values())
     soft_titles = {
         _PIPE_TITLE: bool(pipes) and all(pipe_as_written(m) for m in pipes),
         _SUBST_TITLE: bool(all_substs) and all(subst_as_written(m) for m in substs),
@@ -1598,6 +2664,7 @@ _CODE_SPAN_RE = re.compile(r"<code(?:[ \t\n](?:\"[^\"]{0,600}\"|'[^']{0,600}'|[^
 _AUTOLINK_RE = re.compile(r"<(https?://[^\s<>]{1,600})>")                      # CommonMark renders `<URL>` as the URL
 # emphasis markers that are not inside an identifier (`my_curl`, `a*b`): `*sh*`, `_bash_`, `__sh__`, `~~x~~`, and any nesting of them
 _EMPHASIS_EDGE_RE = re.compile(r"(?<![A-Za-z0-9])(?:[*_]+|~{2,})|(?:[*_]+|~{2,})(?![A-Za-z0-9])")      # (`~=3.9` is a version)
+_CODE_QUOTE_RE = re.compile(r"(?<![A-Za-z0-9_`\\])`([ \t]*['\"]+[ \t]*)`(?!`)")                       # `` `' ` ``: a code span of nothing but a quote and blanks (a longer span is a command, and reads as one)
 _CODE_WORD_RE = re.compile(r"(?<![A-Za-z0-9_`])`([^\s`]{1,40})`(?![A-Za-z0-9_`])")                         # `` `sh` ``
 
 
@@ -1614,9 +2681,10 @@ def _strip_comments(text: str) -> str:
         i = b + 3
 
 
-def _rendered(text: str) -> str:
+def _rendered(text: str, quotes: bool = True) -> str:
     """Prose as a reader sees it once Markdown and HTML are rendered: entities decoded (`&#124;` is a pipe), every tag gone
-    whatever its attributes, a link reduced to its text, the emphasis markers gone and a word in code reduced to the word. A raw
+    whatever its attributes, a link reduced to its text, the emphasis markers gone and a word in code reduced to the word (a code
+    span of nothing but a quote is that quote, unless `quotes` is off). A raw
     pattern does not see `curl … | <b>sh</b>` or `__curl__ … | sh`; the reader copies the rendered command."""
     text = _strip_comments(html.unescape(text).replace("\xa0", " "))
     # `<code>x</code>` is an inline code span, as in Markdown (unless it holds a backtick of its own); a block-level tag is a
@@ -1624,7 +2692,8 @@ def _rendered(text: str) -> str:
     text = _CODE_SPAN_RE.sub(r"`\1`", text)
     text = _TAG_RE.sub(lambda m: "\n" if m.group(1).lower() in _BLOCK_TAGS else "", text)
     text = _AUTOLINK_RE.sub(r"\1", _LINK_RE.sub(r"\1", text))
-    return _CODE_WORD_RE.sub(r"\1", _EMPHASIS_EDGE_RE.sub("", text))
+    text = _EMPHASIS_EDGE_RE.sub("", text)
+    return _CODE_WORD_RE.sub(r"\1", _CODE_QUOTE_RE.sub(lambda m: m.group(1).strip(" "), text) if quotes else text)
 
 
 def _worst_by_title(hits: list[IndicatorHit]) -> dict[str, int]:
@@ -1636,20 +2705,199 @@ def _worst_by_title(hits: list[IndicatorHit]) -> dict[str, int]:
     return worst
 
 
+def _shield_html_fences(text: str) -> str:
+    """The text with the fence markers inside HTML blocks as blanks. Rendering takes the tags of an HTML block away (`<pre>` becomes a line break), and a fence line that the block held
+    would be a fence in the rendered text: a line of an HTML block is text and no fence cuts in it."""
+    lines = text.split("\n")
+    fence = ""
+    html: re.Pattern[str] | None = None
+    for k, line in enumerate(lines):
+        if fence:
+            if _closes_fence(line, fence[0], len(fence), 3):
+                fence = ""
+            continue
+        if html is not None:
+            if html is _UNTIL_BLANK and not line.strip(" \t"):
+                html = None
+            else:
+                if html is not _UNTIL_BLANK and html.search(line):
+                    html = None
+                if _MARKER_LINE_RE.match(line):
+                    lines[k] = _MARKER_RUN_RE.sub(lambda r: " " * len(r.group()), line, count=1)
+            continue
+        end = _html_block_end(line)
+        if end is not None:
+            html = None if end is not _UNTIL_BLANK and end.search(line) else end
+            continue
+        m = _FENCE_OPEN_RE.match(line)
+        if m and not (m.group(2)[0] == "`" and "`" in m.group(3)):
+            fence = m.group(2)
+    return "\n".join(lines)
+
+
+def _rendered_views(text: str) -> list[str]:
+    """The rendered views of `text` that differ from it. The first reads a code span of a quote as that quote and takes the fence markers of HTML blocks away (`_shield_html_fences`); the
+    second does neither, so a backtick that either would erase still counts in front of a command: a view that keeps it is the stricter one."""
+    views = [_rendered(_shield_html_fences(text))]
+    plain = _rendered(text, quotes=False)
+    if plain != views[0]:
+        views.append(plain)
+    return [v for v in views if v != text]
+
+
 def _rendered_extras(hits: list[IndicatorHit], text: str, kind: str, scan: Callable[[str], list[IndicatorHit]], *,
-                     prose_file: bool = False, diff: bool = True) -> list[IndicatorHit]:
+                     prose_file: bool = False, diff: bool = True, soften: bool = True, markdown: bool = True) -> list[IndicatorHit]:
     """The download-and-execute hits only the rendered view of a prose segment has. A command the raw text already matched is
     found there too, so the extra hits are added only when the rendered view has MORE hits of a form than the raw one, or a
     MORE SEVERE one (markup inside a wrapper's name, `do<b></b>cker run x curl …`, softens the raw hit and not the rendered
     one; a documented installer in `<code>` is not reported twice)."""
-    seen = _rendered(text)
-    if seen == text:
-        return []
-    extra = [h for h in _soften_prose(scan(seen), seen, kind, prose_file=prose_file, diff=diff) if h.rule == "curl-pipe-shell"]
+    if diff:                                           # a patch: render the new file (a tag becomes a line break, and a line must not begin with a marker's `\` or `-`)
+        base = _new_file(text)
+    else:
+        base = text
+    found: dict[str, IndicatorHit] = {}
+    for view in _rendered_views(base):
+        if diff:
+            view = "\n".join("+" + line for line in view.split("\n"))
+        for h in _extras_of_view(hits, view, kind, scan, prose_file=prose_file, diff=diff, soften=soften, markdown=markdown):
+            keep_worse(found, h)
+    return list(found.values())
+
+
+def _extras_of_view(hits: list[IndicatorHit], seen: str, kind: str, scan: Callable[[str], list[IndicatorHit]], *, prose_file: bool, diff: bool, soften: bool = True, markdown: bool = True) -> list[IndicatorHit]:
+    """The download-and-execute hits of another view of the same text (`seen`) that the raw hits lack: more hits of a form, or a more severe one."""
+    extra = [h for h in (_soften_prose(scan(seen), seen, kind, prose_file=prose_file, diff=diff, markdown=markdown) if soften else scan(seen)) if h.rule == "curl-pipe-shell"]
     raw_n = Counter(h.title.split(" — ")[0] for h in hits if h.rule == "curl-pipe-shell")
     more_n = Counter(h.title.split(" — ")[0] for h in extra)
     raw_w, more_w = _worst_by_title(hits), _worst_by_title(extra)
     return extra if any(n > raw_n[t] or more_w[t] > raw_w.get(t, -1) for t, n in more_n.items()) else []
+
+
+def _peeled(text: str) -> str:
+    """The lines without the markers of the containers that hold them: a blockquote's `>` and a list item's bullet or number."""
+    return "\n".join(_LIST_MARKER_RE.sub("", _BLOCKQUOTE_RE.sub("", line)) for line in text.split("\n"))
+
+
+_LIST_MARKER_RE = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+")
+
+
+_PATCH_RE = re.compile(r"^(?:@@ -\d|diff --git )", re.MULTILINE)
+
+
+def _or_closed(call: Callable[[], list[IndicatorHit]], fallback: list[IndicatorHit], name: str) -> list[IndicatorHit]:
+    """`call()`, and when it raises: `fallback` (what is kept unsoftened, or nothing added) and a `scanner-error` hit, as `scan_indicators` does for a detector. The softening and
+    the rendered view read the text with the enclosure code, which is outside the detectors' guard: an input that crashes them must not crash the scan of the change."""
+    try:
+        return call()
+    except Exception as exc:  # noqa: BLE001 — fail CLOSED: the installer stays as strict as the detector found it
+        return [*fallback, _hit("scanner-error", "high", f"{name} raised on this input, so it was not softened or read as rendered", f"{name}: {type(exc).__name__}")]
+
+
+
+
+_LONE_CR_RE = re.compile(r"\r(?!\n)")
+_ARRAY_OPEN_RE = re.compile(r"\b[A-Za-z_]\w*\+?=\(")      # `a=(`: the words of an array whose `)` is on a later line may be run as a command (`\"${a[@]}\"`); `_opens_an_array` asks it of a line
+_YAML_OPEN_QUOTE_RE = re.compile(r"(?::|-)[ \t]+'[^'\n]+''[ \t]*$", re.MULTILINE)      # `run: 'ssh h ''`: in YAML a doubled quote at the end of the line is a quote of the string, which goes on
+_PLACEHOLDER_RE = re.compile(r"<%[^%\n]*(?:\"['`]\"|'[\"`]')|<\?[^?\n]*(?:\"['`]\"|'[\"`]')")       # `<%= '"' %>`, `<?= "'" ?>`: a template placeholder that spells a quote as a string (a `%` or a `?` ends the scan)
+_BRACES_OPEN_RE = re.compile(r"(?<!\$)\{\{")                                         # `{{ "'" }}` of a template, not the `${{ … }}` of a workflow
+_QUOTE_SPELLED_RE = re.compile(r"\"['`]\"|'[\"`]'|\\[\"']")                              # a quote spelled as a string (`"'"`, `'"'`) or escaped (`\"`, `\'`; so are `"\""` and `'\''`)
+_ADDED_LINE_RE = re.compile(r"^[ \t]*\+[^\s+=|\-]", re.MULTILINE)
+_JSON_STRING = r'"(?:[^"\\\n]|\\.)*"'
+_LIST_STRING = _JSON_STRING + r"|'(?:[^'\\\n]|\\.)*'"          # a double-quoted string (JSON, TOML, Go, Java) or a single-quoted one (YAML, Python)
+# A string of a list (not the key of a pair): the first thing after the start of a line or after `[`, `{`, `(` or `,`, and the last before `,`, a closing bracket, a comment or the end of the line.
+_LIST_STRING_RE = re.compile(rf"(?:^|(?<=[\[{{(,]))[ \t]*+({_LIST_STRING})[ \t]*+(?=[,\]}});]|//|#|\+|\.(?![\w.])|$)", re.MULTILINE)
+_LIST_WINDOW = 5                                    # strings of a list this many lines apart or less are pieces of one
+_NOTEBOOK_KEY_RE = re.compile(r'(?<!\\)"((?:[^"\\\n]++|\\.)*+)"[ \t\r\n]*+:[ \t\r\n]*+\[')       # not at an escaped quote: a run of them would start a scan to the end of the line from each
+
+
+_LIST_DOWNLOAD_RE = re.compile(r"\b(?:curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b", re.IGNORECASE)       # what a documented installer starts with: the strings of a list matter when one holds a download
+_PROGRAM_RUNNERS = frozenset({"eval", "exec", "source", "xargs", "watch", "sudo", "doas", "env", "nohup", "command", "builtin", "time", "timeout", "nice", "ash", "csh", "tcsh", "mksh"})
+# ... besides the wrappers and the interpreters: programs that run a string or a word they are given
+_QUOTING = frozenset("'\"`$\\<")                                                  # what a shell reads as the start of a quote, a substitution, a here-document or an escape
+
+
+def _names_a_program(string: str) -> bool:
+    """Whether a string of a list (with its quotes) could be, read by a shell, a command that holds what the strings after it are: it names a program that runs what it is given
+    (`ssh`, `docker`, `bash`, `eval`, a path; a glued `|sh` counts) or holds a character that quotes (a name spelled `s''sh`, `\\u0073sh`, `ss$x`). The pieces of a list that holds none are
+    no wrapper's. A string that cannot be decoded is one."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")             # `ast.literal_eval` of a string with an invalid escape (`'\\d'`) warns once per call, and a hostile text holds thousands
+            decoded = (json.loads(string) if string[:1] == '"' else ast.literal_eval(string)).replace("\0", "")
+    except (ValueError, SyntaxError):
+        return True
+    return not _QUOTING.isdisjoint(decoded) or any(w in _PROGRAM_RUNNERS or _could_wrap(w) for w in _SPLIT_WORDS_RE.split(decoded) if w)
+
+
+_SPLIT_WORDS_RE = re.compile(r"[\s|;&()<>]+")
+
+
+def _holds_json_strings(text: str) -> bool:
+    """Whether the text holds a notebook's array (a `"source"` or `"input"` key in any spelling, `"s\\u006furce"`) or the strings of a list: two strings or more that stand as the items of
+    one (`"ssh h '\\n",` `"curl … | sh\\n",`, at most five lines apart, in any layout of brackets, commas, comments and scalars between them), one of which names a program that runs what
+    it is given or holds a character that quotes (a list of keywords or file names is not one; a `"key": "value"` pair and a quoted word in a sentence are not items)."""
+    recent: deque[tuple[int, bool, bool]] = deque()     # (line, names a program, holds a download) of the list strings of the last few lines
+    for n, line in enumerate(text.split("\n")):
+        if '"' in line or "'" in line:
+            recent.extend((n, _names_a_program(m.group(1)), _LIST_DOWNLOAD_RE.search(m.group(1)) is not None) for m in _LIST_STRING_RE.finditer(line))
+        while recent and recent[0][0] < n - _LIST_WINDOW:
+            recent.popleft()
+        if len(recent) >= 2 and any(named for _, named, _ in recent) and any(download for _, _, download in recent):
+            return True
+    for m in _NOTEBOOK_KEY_RE.finditer(text):
+        try:
+            if json.loads('"' + m.group(1) + '"') in ("source", "input"):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _opens_an_array(text: str) -> bool:
+    """Whether a line holds `name=(` with no `)` after it on that line (the last such opener decides: a `)` after an earlier one is after the last too), in one pass over the line."""
+    for line in text.split("\n"):
+        last = None
+        for last in _ARRAY_OPEN_RE.finditer(line):
+            pass
+        if last is not None and last.end() > line.rfind(")"):
+            return True
+    return False
+
+
+def _spells_a_quote_in_braces(text: str) -> bool:
+    """Whether a line holds `{{` and, after it and before the next `}`, a quote spelled as a string (the first `{{` of a stretch without `}` has the longest tail, so it is the only one asked)."""
+    for line in text.split("\n"):
+        for stretch in line.split("}"):
+            opener = _BRACES_OPEN_RE.search(stretch)
+            if opener is not None and _QUOTE_SPELLED_RE.search(stretch, opener.end()) is not None:
+                return True
+    return False
+
+
+def _unread_shape(text: str, diff: bool) -> bool:
+    """Whether the text holds a shape that the softening does not read, so that nothing in it is softened and an installer stays as strict as the detector found it (these shapes
+    are what a text spells differently from what a shell reads: a lone CR, a diff block in a document, a multi-line array assignment, a YAML single-quoted scalar that goes on, a template
+    placeholder that spells a quote, and the strings of a list or a notebook's array). A text that crashes the check is one."""
+    try:
+        if _LONE_CR_RE.search(text):
+            return True
+        text = _lf(text)                                # the softening reads the text with CRLF as LF and no NUL: so does the check
+        new = _new_file(text) if diff else text
+        peeled = _peeled(new)
+        return bool(_ADDED_LINE_RE.search(peeled) or _opens_an_array(peeled) or _YAML_OPEN_QUOTE_RE.search(peeled) or _PLACEHOLDER_RE.search(peeled) or _spells_a_quote_in_braces(peeled) or _holds_json_strings(peeled))
+    except Exception:  # noqa: BLE001 — fail CLOSED
+        return True
+
+
+def _segment_hits(text: str, kind: str, scan: Callable[[str], list[IndicatorHit]], *, prose_file: bool, diff: bool, markdown: bool = True, softened: bool = True) -> list[IndicatorHit]:
+    """The hits of one segment of untrusted text: what the detectors found, softened as prose when it is prose and has no shape that the softening does not read, and the
+    extras only a rendered view of prose has (not softened either when the text is not read)."""
+    found = scan(text)
+    if not (kind != "file" or prose_file):
+        return found
+    soften = softened and not _unread_shape(text, diff)
+    hits = _or_closed(partial(_soften_prose, found, text, kind, prose_file=prose_file, diff=diff, markdown=markdown), found, "_soften_prose") if soften else found
+    return hits + _or_closed(partial(_rendered_extras, hits, text, kind, scan, prose_file=prose_file, diff=diff, soften=soften, markdown=markdown), [], "_rendered_extras")
 
 
 def scan_content(event: dict) -> list[IndicatorHit]:
@@ -1664,10 +2912,7 @@ def scan_content(event: dict) -> list[IndicatorHit]:
     for label, text, kind, who in content_segments_ex(event):
         prose_file = kind == "file" and label.lower().endswith(_PROSE_FILE_EXTS)
         diff = kind == "file"                                                  # a patch carries its own `+` markers; a body does not
-        hits = _soften_prose(scan_indicators(text, location=label, diff=diff), text, kind, prose_file=prose_file, diff=diff)
-        if kind != "file" or prose_file:                                       # prose: what the reader sees, too
-            hits += _rendered_extras(hits, text, kind, lambda t, _l=label, _d=diff: scan_indicators(t, location=_l, diff=_d),
-                                     prose_file=prose_file, diff=diff)
+        hits = _segment_hits(text, kind, partial(scan_indicators, location=label, diff=diff), prose_file=prose_file, diff=diff, markdown=not label.lower().endswith(_NOT_MARKDOWN_EXTS))
         for h in hits:
             if who:
                 h = h.model_copy(update={"via": who})
@@ -2054,8 +3299,13 @@ def make_indicator_tool() -> Callable[[str], str]:
         # The same softening the baseline applies to prose, so a region the planner re-scans (a title, a quoted
         # installer) does not mint a critical that the baseline deliberately kept below the floor. A code region
         # is unaffected in effect: the baseline's stricter hit for the same file stays in the evidence union.
-        hits = _soften_prose(scan_diff(region or ""), region or "", "body")
-        hits += _rendered_extras(hits, region or "", "body", scan_diff)
+        text = region or ""
+        header = _PATCH_RE.search(text) is not None
+        added = _ADDED_LINE_RE.search(text) is not None
+        # a region is a patch when it holds a hunk header or a file header, or added lines (a slice of a patch has no header); a `- ` bullet of a plain region is not a removed line,
+        # and a region with both added lines and `- ` lines and no header cannot be told apart from the other: it is not softened
+        hits = _segment_hits(text, "body", scan_diff, prose_file=False, diff=header or added,
+                             softened=header or not (added and re.search(r"^-[ \t]", text, re.MULTILINE)))
         record_tool_call("scan_indicators", args={"region": (region or "")[:200]}, ok=True,
                          hits=[h.model_dump() for h in hits], n=len(hits))
         if not hits:
