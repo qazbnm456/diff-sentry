@@ -50,6 +50,12 @@ def severity_rank(sev: str) -> int:
     return _SEV_RANK.get((sev or "").strip().lower(), -1)
 
 
+def at_signal_floor(sev: str) -> bool:
+    """Whether a severity is at or above the deterministic signal floor. THE predicate: the live assemble path,
+    the crash/screen path and the actor store all ask it, so the floor cannot be re-derived differently."""
+    return severity_rank(sev) >= severity_rank(SIGNAL_SEVERITY_FLOOR)
+
+
 def max_severity(sevs) -> str:
     """The highest severity in `sevs`, or "info" when empty/unknown — a deterministic reduction."""
     best, best_rank = "info", -1
@@ -77,6 +83,10 @@ class IndicatorHit(BaseModel):
     evidence: str = Field("", description="A BOUNDED snippet of the matched region (never the whole diff).")
     location: str = Field("", description="Where it fired — a filename, `filename:` prefix, or region label.")
     decoded: str | None = Field(default=None, description="Decoded payload when the rule de-obfuscated one.")
+    via: str = Field(
+        "", description="The login whose COMMENT carried the text this hit fired on, else empty. A structured "
+        "field, not a substring of `location` (a file path is free-form and could be named to match), so the "
+        "actor store attributes a comment to its writer and never to the change's author.")
 
 
 # ── the planner's SUBMIT: JUDGEMENT only (the RLMTask output_model) ───────────────────────────────
@@ -154,7 +164,7 @@ class AssembledVerdict(BaseModel):
 class RefusalInfo(BaseModel):
     """Populated INSTEAD of a verdict when the run could not classify — an INFORMATIVE failure."""
 
-    reason: str = Field(..., description="Machine-readable category: run_failed / inconclusive / insufficient_evidence.")
+    reason: str = Field(..., description="Machine-readable category: run_failed / inconclusive / insufficient_evidence / not_escalated.")
     detail: str
     indicators: list[IndicatorHit] = Field(
         default_factory=list, description="Deterministic hits still gathered even though no verdict landed.")

@@ -24,11 +24,10 @@ from rlm_harness.trace import EVENT_RESULT, EVENT_RUN_START
 
 from .indicators import hits_from_events
 from .schema import (
-    SIGNAL_SEVERITY_FLOOR,
     AssembledVerdict,
     ChangeVerdict,
+    at_signal_floor,
     max_severity,
-    severity_rank,
 )
 
 _DEFAULT_EMIT_ON = ("suspicious", "malicious")
@@ -55,7 +54,7 @@ def assemble_verdict(
     top_sev = max_severity([h.severity for h in hits])
 
     verdict_signals = (verdict.verdict or "").strip().lower() in {v.lower() for v in emit_on}
-    evidence_signals = severity_rank(top_sev) >= severity_rank(SIGNAL_SEVERITY_FLOOR)
+    evidence_signals = at_signal_floor(top_sev)
     signal = bool(verdict_signals or evidence_signals)
 
     return AssembledVerdict(

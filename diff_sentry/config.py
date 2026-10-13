@@ -105,6 +105,18 @@ class DetectConfig:
             raise ValueError(f"classify_backend must be 'self' (only backend wired), got {self.classify_backend!r}")
 
     @classmethod
+    def screen_from_env(cls) -> DetectConfig:
+        """A config with NO model roles — only the SIEM emitter and `emit_on`. For the deterministic screen
+        (`watch --screen-only`), which never runs the model and so must not require `DS_ROOT_LM`."""
+        return cls(
+            siem_webhook_url=os.getenv("DS_SIEM_WEBHOOK_URL", ""),
+            siem_token=os.getenv("DS_SIEM_TOKEN", ""),
+            emit_on=tuple(
+                v.strip() for v in os.getenv("DS_EMIT_ON", "suspicious,malicious").split(",") if v.strip()
+            ),
+        )
+
+    @classmethod
     def from_env(cls) -> DetectConfig:
         planner = os.getenv("DS_ROOT_LM")
         analyst = os.getenv("DS_SUB_LM")

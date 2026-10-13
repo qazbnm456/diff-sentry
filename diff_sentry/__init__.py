@@ -12,9 +12,9 @@ Public surface::
     from diff_sentry import scan_indicators, assemble_verdict, build_response, emit_signal
     from diff_sentry import normalize_event, event_from_payload, export_dataset
 
-`config`, `schema`, `normalize`, `indicators`, `assemble`, `response`, `emit`, `ingest`, `rl_export`,
-`rubric` import NO dspy at module top (unit-testable in isolation). `ClassifyChange` / `setup` / `run` /
-`detect_from_event` pull in dspy lazily (via RLMTask).
+`config`, `schema`, `normalize`, `indicators`, `assemble`, `response`, `emit`, `ingest`, `hosts`, `dbutil`, `actors`,
+`snapshot`, `watch`, `rl_export`, `rubric` import NO dspy at module top (unit-testable in isolation).
+`ClassifyChange` / `setup` / `run` / `screen` / `detect_from_event` pull in dspy lazily (via RLMTask).
 """
 
 from __future__ import annotations
@@ -22,7 +22,14 @@ from __future__ import annotations
 from .assemble import assemble_verdict, verdict_from_events
 from .config import DetectConfig
 from .emit import EmitResult, emit_signal, signal_payload
-from .indicators import hits_from_events, scan_content, scan_diff, scan_indicators
+from .indicators import (
+    hits_from_events,
+    scan_change,
+    scan_content,
+    scan_diff,
+    scan_indicators,
+    scan_metadata,
+)
 from .ingest import event_from_payload, issue_event, pr_event
 from .normalize import event_metadata, normalize_event
 from .response import build_failed_response, build_response
@@ -44,8 +51,10 @@ __all__ = [
     "DetectionResponse",
     "RefusalInfo",
     "ProcessInfo",
+    "scan_change",
     "scan_content",
     "scan_diff",
+    "scan_metadata",
     "scan_indicators",
     "hits_from_events",
     "normalize_event",
@@ -68,6 +77,7 @@ __all__ = [
     "setup",
     "run",
     "detect_from_event",
+    "screen",
 ]
 
 __version__ = "0.5.0"
@@ -78,7 +88,7 @@ def __getattr__(name: str):  # PEP 562 — defer the dspy import to first use
         from . import detect
 
         return getattr(detect, name)
-    if name in ("run", "detect_from_event"):
+    if name in ("run", "screen", "detect_from_event"):
         from . import cli
 
         return getattr(cli, name)

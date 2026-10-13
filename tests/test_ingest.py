@@ -24,7 +24,7 @@ def test_pr_event_via_injected_api():
 
     def api(path):
         calls.append(path)
-        if path.endswith("/files"):
+        if "/files" in path:
             return [{"filename": ".github/workflows/ci.yml", "status": "modified",
                      "additions": 3, "deletions": 0, "patch": "+ run: evil"}]
         if "/commits" in path:
@@ -40,7 +40,8 @@ def test_pr_event_via_injected_api():
     assert ev["author"] == "mallory"
     assert ev["kind"] == "pull_request"
     assert ev["files"][0]["filename"] == ".github/workflows/ci.yml"
-    assert "repos/acme/widgets/pulls/7" in calls and "repos/acme/widgets/pulls/7/files" in calls
+    assert "repos/acme/widgets/pulls/7" in calls
+    assert any(c.startswith("repos/acme/widgets/pulls/7/files") for c in calls)
     # provenance enrichment (best-effort host-side gh api): identity + association + age + signatures
     prov = ev["provenance"]
     assert prov["author_login"] == "mallory" and prov["author_type"] == "User"
@@ -56,7 +57,7 @@ def test_pr_event_via_injected_api():
 
 def test_pr_event_404_author_becomes_a_fact_transient_does_not():
     def api404(path):
-        if path.endswith("/files"):
+        if "/files" in path:
             return []
         if path.startswith(("user/", "users/")):
             raise GhApiError("not found", status=404)
@@ -64,7 +65,7 @@ def test_pr_event_404_author_becomes_a_fact_transient_does_not():
     assert pr_event("a/b", 7, api=api404)["provenance"]["author_not_found"] is True
 
     def api_transient(path):
-        if path.endswith("/files"):
+        if "/files" in path:
             return []
         if path.startswith(("user/", "users/")):
             raise GhApiError("network", status=None)
@@ -72,7 +73,7 @@ def test_pr_event_404_author_becomes_a_fact_transient_does_not():
     assert "author_not_found" not in pr_event("a/b", 7, api=api_transient)["provenance"]
 
     def api_500(path):                                           # a non-404 HTTP error is NOT a deletion fact
-        if path.endswith("/files"):
+        if "/files" in path:
             return []
         if path.startswith(("user/", "users/")):
             raise GhApiError("server error", status=500)
@@ -96,7 +97,7 @@ def test_pr_event_commits_tally_survives_malformed_bodies_and_bounds():
     # a TRUTHY non-dict `commit`/`verification`/`author` must not sink the ingest (best-effort contract),
     # and the git-author list is deduped + bounded so an attacker can't flood or oversize it.
     def api(path):
-        if path.endswith("/files"):
+        if "/files" in path:
             return []
         if "/commits" in path:
             return [
@@ -119,7 +120,7 @@ def test_pr_event_ghost_author_needs_no_lookup():
 
     def api(path):
         calls.append(path)
-        if path.endswith("/files"):
+        if "/files" in path:
             return []
         return {"user": {"login": "ghost", "type": "User", "id": 10137}, "author_association": "NONE"}
 
@@ -169,7 +170,7 @@ def test_issue_event_via_injected_api():
 def test_pr_event_provenance_is_best_effort_when_enrichment_fails():
     # a `gh` hiccup on the enrichment calls must OMIT those facts, never sink the ingest
     def api(path):
-        if path.endswith("/files"):
+        if "/files" in path:
             return []
         if path.startswith("users/") or path.endswith("/commits"):
             raise RuntimeError("gh api boom")

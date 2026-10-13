@@ -298,6 +298,16 @@ def test_detects_bidi_override_but_not_legitimate_invisibles():
     assert "invisible-unicode" not in _rules(scan_indicators("\U0001f468\u200d\U0001f469 team \u200fشكرا"))
 
 
+def test_the_zero_width_space_github_puts_after_an_at_sign_is_not_evidence():
+    # Dependabot renders `@\u200buser` in release notes so a mention pings no one; it is in nearly every
+    # Dependabot PR body, and flagging it made each of those a `high` signal (seen on a live watchlist).
+    body = "<li>Fix crash by <a href=\"https://github.com/x\"><code>@\u200bdrawmeanelephant</code></a></li>"
+    assert "invisible-unicode" not in _rules(scan_indicators(body))
+    # ... but a ZWSP anywhere else, even in the same body, still fires
+    assert "invisible-unicode" in _rules(scan_indicators(body + " const a\u200b = 1;"))
+    assert "invisible-unicode" in _rules(scan_indicators("user\u200b@example.com"))
+
+
 def test_detached_spawn_needs_both_halves():
     """`child_process` is everywhere in legitimate tooling and `detached` alone is meaningless — it is
     the PAIR (a process deliberately outliving its parent) that is the stage-1 loader shape."""

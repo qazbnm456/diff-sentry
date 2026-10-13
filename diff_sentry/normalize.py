@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from datetime import datetime
 from typing import Any
 
 _KIND_KEYS = ("pull_request", "issue", "push")
@@ -58,6 +60,15 @@ def _meta_filenames(files: list[dict]) -> list[str]:
     return names
 
 
+# `author_association` values that mean "not an established contributor to THIS repo". Shared by the
+# indicator rules (who counts as an outsider) and by `content_segments` (whose comments are scanned).
+OUTSIDER_ASSOCIATIONS = frozenset({"FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE", "MANNEQUIN"})
+
+# Bound on the host-derived actor history rendered for the planner. Generous on purpose: the planner holds
+# the event as a REPL variable, so its context is not the constraint; this only keeps one actor's history
+# from swamping the change itself.
+_MAX_ACTOR_HISTORY_CHARS = 20_000
+
 # GitHub-authoritative enums. Constraining the MF1 sandwich to these drops any arbitrary string a
 # host-supplied/pasted `provenance` might try to smuggle into the "trusted" header as free text.
 _GH_AUTHOR_TYPES = frozenset({"User", "Bot", "Organization", "Mannequin"})
@@ -89,6 +100,48 @@ def _provenance_summary(provenance: Any) -> dict[str, Any]:
     return out
 
 
+def _valid_ts(value: Any) -> str:
+    """The value when it parses as an ISO-8601 timestamp, else "". Whitespace is collapsed so a timestamp
+    can never carry a line break into a rendered header."""
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    try:
+        datetime.fromisoformat(text)
+    except (ValueError, TypeError):
+        return ""
+    return text
+
+
+def _comments(event: dict) -> list[dict]:
+    """The event's comment thread as clean dicts (bounded fields, strings only)."""
+    out = []
+    for c in event.get("comments") or []:
+        if not isinstance(c, dict):
+            continue
+        out.append({
+            "author": re.sub(r"\s+", " ", str(c.get("author") or ""))[:80],
+            "author_type": str(c.get("author_type") or "")[:20],
+            "association": re.sub(r"\s+", " ", str(c.get("association") or "")).upper()[:40],
+            "created_at": _valid_ts(c.get("created_at")),
+            "body": str(c.get("body") or ""),
+        })
+    return out
+
+
+def is_scanned_comment(comment: dict, author: str) -> bool:
+    """Whether the baseline scans this comment: one the change's author or an outsider wrote. A maintainer's or
+    a bot's comment is shown to the planner but not text-scanned, because it routinely quotes install commands
+    and release notes that would otherwise fire the pipe-to-shell rules on every thread. `comment` is a
+    normalized comment (`_comments`); `author` is the change author's login."""
+    who = comment["author"].strip().lower()
+    return (comment["author_type"].lower() != "bot"
+            and (comment["association"] in OUTSIDER_ASSOCIATIONS or (bool(author) and who == author.strip().lower())))
+
+
+def _scanned_comments(event: dict) -> list[dict]:
+    author = str(event.get("author") or "")
+    return [c for c in _comments(event) if is_scanned_comment(c, author)]
+
+
 def event_metadata(event: dict) -> dict[str, Any]:
     """The DERIVED, trustworthy summary of a change — repo, kind, number, author, file stats, and a
     sha256 of the raw untrusted content. Computed by us, never taken from the model. Attacker-authored
@@ -109,6 +162,11 @@ def event_metadata(event: dict) -> dict[str, Any]:
         "deletions": sum(f["deletions"] for f in files),
         "content_sha256": digest,
     }
+    created = _valid_ts(event.get("created_at"))
+    if created:
+        meta["created_at"] = created   # the event's own server-side time (UTC)
+    if _comments(event):
+        meta["comment_count"] = len(_comments(event))
     prov = _provenance_summary(event.get("provenance"))
     if prov:
         # Host-DERIVED source facts (author association/type, account age, unsigned-commit count) ride in
@@ -129,9 +187,19 @@ def normalize_event(event: dict) -> str:
         body_parts.append(f"### TITLE (untrusted)\n{event['title']}")
     if event.get("body"):
         body_parts.append(f"### BODY (untrusted)\n{event['body']}")
+    if event.get("head_ref"):
+        body_parts.append(f"### BRANCH (untrusted)\n{event['head_ref']}")
     for f in _files(event):
         head = f"### FILE (untrusted): {f['filename']}  [{f['status']} +{f['additions']} -{f['deletions']}]"
         body_parts.append(f"{head}\n{f['patch']}")
+    for c in _comments(event):
+        who = f"{c['author']} [{c['association'] or 'n/a'}] {c['created_at']}".strip()
+        body_parts.append(f"### COMMENT (untrusted) by {who}\n{c['body']}")
+    history = event.get("actor_history")
+    if isinstance(history, dict) and history:
+        rendered = json.dumps(history, ensure_ascii=False, indent=2, default=str)[:_MAX_ACTOR_HISTORY_CHARS]
+        body_parts.append("### ACTOR HISTORY (host-derived from earlier sightings; free-text fields inside "
+                          f"are attacker-authored and untrusted)\n{rendered}")
     body = "\n\n".join(body_parts) if body_parts else NO_CONTENT_SENTINEL
     footer = json.dumps({"_diff_sentry_metadata_footer": meta}, ensure_ascii=False, indent=2)
     return (
@@ -159,19 +227,35 @@ def has_groundable_content(event_str: str) -> bool:
     return bool(body) and body != NO_CONTENT_SENTINEL
 
 
+def content_segments_ex(event: dict) -> list[tuple[str, str, str, str]]:
+    """`(label, text, kind, commenter)` per piece of untrusted content, in digest order. `kind` is one of
+    `title`, `file`, `body`, `branch`, `comment`, decided HERE from where the text came from, never inferred
+    from the label (a file path is free-form and can be named `comment:alice`); `commenter` is the login for
+    a comment and empty otherwise."""
+    files = _files(event)
+    segments = [("", f"{event.get('title', '') or ''}\n{event.get('author', '') or ''}", "title", "")]
+    segments += [(f["filename"], f"{f['filename']}\n{f['patch']}", "file", "") for f in files]
+    segments.append(("", str(event.get("body", "") or ""), "body", ""))
+    # The other channels the author controls. Appended after the body and only when present, so an event
+    # without them keeps its digest byte-for-byte. A branch name is the injection vector a CI workflow
+    # interpolates into a shell; a comment is the slash-command trigger.
+    if event.get("head_ref"):
+        segments.append((f"branch:{str(event['head_ref'])[:120]}", str(event["head_ref"]), "branch", ""))
+    segments += [(f"comment:{c['author']}", c["body"], "comment", c["author"] or "(unknown)")
+                 for c in _scanned_comments(event)]
+    return segments
+
+
 def content_segments(event: dict) -> list[tuple[str, str]]:
     """The untrusted content split the way the event already carries it: `(label, text)` per piece —
-    the title+author, then one segment per file, then the body.
+    the title+author, then one segment per file, then the body, then the head branch name, then each
+    scanned comment.
 
     `raw_content` is the concatenation of exactly these, in this order, so the two cannot drift and the
     content digest built on it stays byte-stable. The baseline scan (`indicators.scan_content`) reads
     them one by one so a paired rule only pairs within one file. A file's segment keeps its filename
     INSIDE the text as well as in the label, because `workflow-tamper` reads the path itself."""
-    files = _files(event)
-    segments = [("", f"{event.get('title', '') or ''}\n{event.get('author', '') or ''}")]
-    segments += [(f["filename"], f"{f['filename']}\n{f['patch']}") for f in files]
-    segments.append(("", str(event.get("body", "") or "")))
-    return segments
+    return [(label, text) for label, text, _kind, _who in content_segments_ex(event)]
 
 
 def raw_content(event: dict) -> str:

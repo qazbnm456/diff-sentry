@@ -148,15 +148,35 @@ def build_response(assembled: AssembledVerdict, events: list[dict], run_id: str)
     )
 
 
+def _floor_signal(events: list[dict]):
+    """The evidence-only signal both no-verdict paths share: every hit in the trace, the highest severity,
+    and whether it reaches the floor. One derivation, so the crash path and the screen path cannot diverge."""
+    from .schema import at_signal_floor, max_severity
+
+    hits = hits_from_events(events)
+    top = max_severity([h.severity for h in hits])
+    return hits, top, at_signal_floor(top)
+
+
+def build_screened_response(run_id: str, events: list[dict]) -> DetectionResponse:
+    """The deterministic SCREEN of a change the model has not judged (yet): the baseline evidence and the
+    floor-derived signal, with `status="inconclusive"` and `reason="not_escalated"`. It is the early alert a
+    watcher can raise while the change waits in the model queue, and the standing record if it is never run."""
+    hits, top, signal = _floor_signal(events)
+    return DetectionResponse(
+        id=run_id, status="inconclusive", model=_models(events), source=_source(events),
+        signal=signal, indicators=hits, max_indicator_severity=top,
+        refusal=RefusalInfo(reason="not_escalated", indicators=hits,
+                            detail="Deterministic screen only — the model has not judged this change."),
+        process=_process(events),
+    )
+
+
 def build_failed_response(run_id: str, events: list[dict], detail: str, *, reason: str = "run_failed"
                           ) -> DetectionResponse:
     """The crash path (or a trace with no result event) — no verdict, but still carries the deterministic indicators gathered and
     the derived signal (a run that crashed AFTER a critical indicator fired must STILL be able to alert)."""
-    from .schema import SIGNAL_SEVERITY_FLOOR, max_severity, severity_rank
-
-    hits = hits_from_events(events)
-    top = max_severity([h.severity for h in hits])
-    signal = severity_rank(top) >= severity_rank(SIGNAL_SEVERITY_FLOOR)
+    hits, top, signal = _floor_signal(events)
     return DetectionResponse(
         id=run_id, status="failed", model=_models(events), source=_source(events),
         signal=signal, indicators=hits, max_indicator_severity=top,
