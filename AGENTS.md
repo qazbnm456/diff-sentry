@@ -17,6 +17,11 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
 - `uv run --package diff-sentry-eval --extra dev python -m pytest eval/tests` — the eval member's own suite
   (the `--package` is required; a root `uv run` does not install the member). Run it when you touch
   `assemble.py`, `rl_export.py`, `rubric.py`, `schema.py`, or the trace payloads it scores.
+- `DS_ORACLE=1 uv run pytest tests/test_oracle.py` — the shell oracle (opt-in; needs Docker and the `python:3.11-slim`
+  image): candidate download-and-execute texts are run under a real `bash` and `dash` in a no-network, cap-dropped
+  container with a stub `curl`, and the rules are held to what actually ran (`DS_ORACLE_N` / `DS_ORACLE_SEED` scale
+  it). Run it when you touch the `curl-pipe-shell` patterns, `_soften_prose` (and its helpers `_wrapped`, `_command_words`,
+  `enclosed`), the rendered view (`_rendered`, `_rendered_extras`), or `hosts.py` (the installer allowlist and the fetch parser).
 - `uvx ruff check .` — lint (line-length 110). CI runs it as its own job, next to both suites and the
   node tests (`.github/workflows/ci.yml`).
 - A live run needs role creds (`DS_*`, see `.env.example`), Deno (`brew install deno`), and `gh` for
@@ -30,7 +35,10 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
   after the run. It never raises: a crash still writes a `status=failed` response that can signal off the
   evidence floor. Extend `cli.py` rather than driving `detect_from_event` / `build_response` directly.
 - Offline: `python -m diff_sentry render <trace> <run_id>` re-renders a response;
-  `python -m diff_sentry export "output/traces/*.jsonl" ds.json` exports the reward-free dataset.
+  `python -m diff_sentry export "output/traces/*.jsonl" ds.json` exports the reward-free dataset;
+  `actor <login>` prints an account's dossier and `archive verify` re-hashes the snapshot archive.
+- Continuous collection goes through `watch`, which calls `cli.run` (model) or `cli.screen`
+  (deterministic, no creds) and never `detect_from_event` directly. `--screen-only` needs no model roles.
 
 ## Hard invariants — do not break
 
@@ -65,18 +73,22 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
   tuning, per-file pairing, `pwn-request`, the tool name) live in `.claude/rules/indicators.md`.
 - **Models are ROLES configured by env**: `DS_ROOT_LM` planner, `DS_SUB_LM` analyst, `DS_CLASSIFIER_LM`
   classifier (defaults to the analyst). Refer to them by role; no hardcoded model name.
-- **The budget is hard: `max_retries=1`, no whole-RLM retry.** One change = one trajectory, so the trace
-  stays valid training data. A failed run is infra before it is a schema bug; see
+- **The budget is hard: `max_retries=1`, no whole-RLM retry inside a run.** One change = one trajectory, so the
+  trace stays valid training data. (`watch` may run a change again, but only when the previous attempt produced
+  no result at all, an infrastructure failure; `cli.run` resets that run id's trace first, so exactly one
+  trajectory per run id survives.) A failed run is infra before it is a schema bug; see
   `.claude/rules/detect-setup.md` for how the failure names itself.
 - **A second model-judgement is a TOOL, never the sub-LM.** `deep_classify` (on rlm-harness's
   `make_model_tool`) is the swappable second-stage seam the planner chooses to call, so the decision is a
   `tool_call` in the trajectory. The analyst intercept (`intercept_sub_lm`) is tracing-only, zero
   transforms. Swapping the backend touches only `classify_backend` / `_selfclassify_chat`. The planner
   passes distilled findings, never the whole diff.
-- **GitHub ingest and SIEM emission are host-side plumbing, never planner tools.** `ingest.py` shells out
-  to `gh` host-side (transport injectable); `emit.emit_signal` POSTs after the run, stays out of the
-  trajectory, and never raises. Only choices the policy makes are tools; delivering a finished result is
-  plumbing.
+- **GitHub ingest, monitoring, and SIEM emission are host-side plumbing, never planner tools.** `ingest.py`
+  shells out to `gh` host-side (transport injectable); `emit.emit_signal` POSTs and never raises; `watch`,
+  `actors` and `snapshot` poll, remember, and archive outside the trajectory. Only choices the policy makes
+  are tools; delivering a finished result is plumbing. What the store learns reaches the signal only as
+  provenance facts through `scan_provenance`, never as a second derivation (see
+  `.claude/rules/monitoring.md`).
 - **This is a ROLLOUT source: trajectories, not reward.** `rl_export` passes `reward=None`; labels read
   the assembled verdict and metrics are objective effort counters. `deep_classify` tool_calls train the
   classifier; every other action is the planner's. A metric keeps ONE meaning across rlm-harness
@@ -89,9 +101,9 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
   the tool cost model, the triage loop, and output-gating rules. Skills ship via
   `packages = ["diff_sentry"]`; a force-include duplicates them and breaks the build.
 - **Keep the dspy-free modules dspy-free.** `config`, `schema`, `normalize`, `indicators`, `assemble`,
-  `response`, `emit`, `ingest`, `rl_export`, and `rubric` must not import dspy at module top, and
-  `import diff_sentry` must not import dspy (`ClassifyChange` / `setup` / `run` / `detect_from_event` are
-  lazy PEP 562 re-exports).
+  `response`, `emit`, `ingest`, `hosts`, `dbutil`, `actors`, `snapshot`, `watch`, `rl_export`, and `rubric`
+  must not import dspy at module top, and `import diff_sentry` must not import dspy (`ClassifyChange` / `setup` /
+  `run` / `screen` / `detect_from_event` are lazy PEP 562 re-exports).
 - **The trace self-describes the run.** `run_start` meta carries the normalized event, instructions,
   source echo, `baseline_indicators`, `emit_on`, role→model names, budgets, and the rubric skeleton, so
   an offline re-render/export re-derives the same `signal` (reading `emit_on` from meta, never current
@@ -107,6 +119,7 @@ file before working in that area.
 | Indicator rules, severities, corpus | `.claude/rules/indicators.md` |
 | Model roles, subscription auth, run failures | `.claude/rules/detect-setup.md` |
 | ATLAS rubric labels, eval member, studio rubric card | `.claude/rules/rubric-and-eval.md` |
+| Watcher, actor store, snapshot archive, ingest enrichment | `.claude/rules/monitoring.md` |
 | Cutting a release (five version sites) | `.claude/skills/release/SKILL.md` |
 | What to keep across context compaction | `.claude/rules/handoff.md` |
 
@@ -118,8 +131,10 @@ file before working in that area.
 - When this consumer needs a workaround, fix the reusable gap in rlm-harness generically; never
   special-case diff-sentry there. Consumer values (`DS_*` roles, the verdict schema, indicator rules, the
   SIEM payload shape) stay here.
-- Next increments: a cheap pre-filter tier (deterministic indicators + one small single-shot call) as
-  host-side plumbing in front of `cli.run`, not extra RLM turns; and live GitHub/SIEM wiring.
+- The deterministic tier ships as `cli.screen` and `watch` (host-side, in front of `cli.run`). Next
+  increments: an optional small single-shot model call inside that tier; a GH Archive backfill for account
+  history older than the Events API's 30 days; per-repository workflow awareness (which repos run
+  `issue_comment` or `pull_request_target` workflows) to weight the slash-command rule.
 - Two workspace members, never in the `diff_sentry` wheel: `studio/` (`diff-sentry-studio`, the detection
   console, behind its `live` extra) and `eval/` (`diff-sentry-eval`, the reward-free scorecard). Both read
   the trace / `DetectionResponse` contract through the public surface only. Keep the root wheel at
