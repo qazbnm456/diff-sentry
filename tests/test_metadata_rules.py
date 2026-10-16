@@ -197,10 +197,12 @@ def test_the_bare_phrase_system_prompt_in_prose_is_a_subfloor_corroborator():
         assert _rules(scan_change({**BENIGN_EVENT, "body": text}))["prompt-injection"] == "high", text
         assert _rules(scan_change({**BENIGN_EVENT, "comments": [_comment("b", "NONE", text)]}))[
             "prompt-injection"] == "high", text
-    # ... and so does the phrase in a CODE file. A documentation file is prose and reads gently.
+    # ... and so does the phrase in a file a shell reads and in source code. A documentation file is prose and reads gently.
     def patched(name):
         return {"filename": name, "status": "modified", "additions": 1, "deletions": 0,
                 "patch": "+| system prompt | translation |\n"}
+    assert _rules(scan_change({**BENIGN_EVENT, "files": [patched("i18n/glossary.sh")]}))[
+        "prompt-injection"] == "high"
     assert _rules(scan_change({**BENIGN_EVENT, "files": [patched("i18n/glossary.py")]}))[
         "prompt-injection"] == "high"
     assert _rules(scan_change({**BENIGN_EVENT, "files": [patched("i18n/GLOSSARY.md")]}))[

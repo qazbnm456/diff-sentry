@@ -2642,18 +2642,14 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
         _SUBST_TITLE: bool(all_substs) and all(subst_as_written(m) for m in substs),
         _PS_TITLE: bool(shells) and all(powershell_as_written(m) for m in shells),
     }
-    phrases = {re.sub(r"[\s\-]+", " ", m.group(0).lower()) for m in _INJECTION_RE.finditer(text)}
-    # A diff line begins with its own `+`/space marker; strip it so "+Ignore the system prompt" is a sentence start.
-    flat = re.sub(r"(?m)^[+ ]", "", text) if kind == "file" else text
-    weak = (bool(phrases) and phrases <= _WEAK_INJECTION_PHRASES
-            and not _SYSPROMPT_ATTACK_RE.search(flat) and not _SYSPROMPT_ADDRESSED_RE.search(flat))
+    weak = _bare_system_prompt(text, kind)
     out = []
     for h in hits:
         why = ""
         if h.rule == "curl-pipe-shell" and any(soft and h.title.startswith(t) for t, soft in soft_titles.items()):
             why = "a known installer, or no target, quoted in prose"
         elif h.rule == "prompt-injection" and weak:
-            why = "the bare phrase alone, in prose"
+            why = _BARE_PHRASE_WHY
         elif h.rule == "pwn-request":
             why = "a workflow shown in prose, not a workflow file"
         elif h.rule == "diff-viewport-evasion" and kind == "comment":
@@ -2917,6 +2913,83 @@ def _segment_hits(text: str, kind: str, scan: Callable[[str], list[IndicatorHit]
     return hits + _or_closed(partial(_rendered_extras, hits, text, kind, scan, prose_file=prose_file, diff=diff, soften=soften, markdown=markdown), [], "_rendered_extras")
 
 
+# Source languages in which a `$(`, a `${...}` or a backtick is not a shell's: JavaScript and TypeScript template literals,
+# Python, Go, the JVM, .NET, Rust, C. Ruby, Perl and PHP are not listed (their backticks run a shell), nor are Groovy and
+# Gradle's `.kts` (a Jenkins `sh '...'` step and a Gradle `exec` block hand a string to a shell), nor is any file a shell reads (scripts, Dockerfiles, workflows, Makefiles, `package.json`, Markdown) or a file of an unknown kind.
+_NON_SHELL_SOURCE_EXTS = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".vue", ".svelte", ".py", ".pyi", ".go",
+                          ".java", ".kt", ".scala", ".cs", ".fs", ".rs", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp",
+                          ".m", ".mm", ".swift", ".dart", ".lua")
+# A call that hands a string to a shell or starts a program, in those languages: there a substitution in a string can run.
+_EXEC_SINK_RE = re.compile(
+    r"child_process|\bexec(?:Sync|File|FileSync)\s*\(|\bspawn(?:Sync)?\s*\(|\bexeca\b|\bBun\.(?:spawn|\$)|\$`"
+    r"|\bos\.(?:system|popen|exec\w{0,3})\s*\(|subprocess|\bcommands\.getoutput\b|\bshell\s*[:=]\s*true\b"
+    r"|exec\.Command(?:Context)?\s*\(|Runtime\.getRuntime|ProcessBuilder\b|Process\.Start\b|Command::new\b|process::Command\b"
+    r"|\b(?:system|popen|execv\w{0,2}|execl\w{0,2})\s*\(|\bexec\.(?:exec|getExecOutput)\s*\(|\bgetExecOutput\b|\bshell\.exec\s*\("
+    r"|create_subprocess_|\bos\.spawn\w{0,3}\s*\(|\bsyscall\.Exec\b|\bProcess\.(?:run|runSync)\b|\bProcess\(\)"
+    r"|\bcommandLine\s*\(|\b(?:require|import)\s*\([^)'\"]{0,40}['\"][^'\"]{0,40}['\"]\s*\+", re.IGNORECASE)
+# Files a coding agent reads as its instructions or configuration: any change to them is aimed at the agent.
+_AGENT_FILE_RE = re.compile(
+    r"(?:^|/)(?:AGENTS?|CLAUDE|GEMINI|CONVENTIONS)(?:\.[\w-]{1,20})?\.md$|(?:^|/)\.(?:cursorrules|windsurfrules|clinerules)$"
+    r"|(?:^|/)\.(?:cursor|windsurf|clinerules|roo|claude|junie|kiro|amazonq|gemini|continue|codex)/"
+    r"|(?:^|/)\.github/(?:copilot-instructions\.md$|instructions/|prompts/|agents/|chatmodes/)"
+    r"|\.(?:prompt|agent|chatmode|instructions)\.md$|\.mdc$|(?:^|/)\.mcp\.json$", re.IGNORECASE)
+_SHELLISH_SPAN_RE = re.compile(r"[|;&]|<\(|\$[({A-Za-z_]")
+_BARE_PHRASE_WHY = "the bare phrase alone, in prose"
+
+
+def _bare_system_prompt(text: str, kind: str) -> bool:
+    """Whether the only prompt-injection trigger in the text is the bare phrase "system prompt", with no imperative aimed at
+    it and nothing addressed to a reviewer or a model."""
+    phrases = {re.sub(r"[\s\-]+", " ", m.group(0).lower()) for m in _INJECTION_RE.finditer(text)}
+    # A diff line begins with its own `+`/space marker; strip it so "+Ignore the system prompt" is a sentence start.
+    flat = re.sub(r"(?m)^[+ ]", "", text) if kind == "file" else text
+    return (bool(phrases) and phrases <= _WEAK_INJECTION_PHRASES
+            and not _SYSPROMPT_ATTACK_RE.search(flat) and not _SYSPROMPT_ADDRESSED_RE.search(flat))
+
+
+def _prose_substitutions(text: str) -> list[IndicatorHit]:
+    """The `command-substitution` hits of prose: a `$(...)`, or a backtick span with a shell operator inside (`` `a | b` ``),
+    since there a plain backtick span is code formatting. Built as `_scan_shell` builds them, so the ids are the same."""
+    real = (m for m in islice(_CMD_SUBST_RE.finditer(text), 5000)
+            if m.group(0).startswith("$(") or _SHELLISH_SPAN_RE.search(m.group(0)))
+    return [_hit("command-substitution", "medium", "shell command substitution (`$(…)` / backticks)", _snip(text, m.start(), m.end()))
+            for m in islice(real, 8)]
+
+
+def _scope_to_file(hits: list[IndicatorHit], path: str, text: str, kind: str = "file") -> list[IndicatorHit]:
+    """What the kind of a segment changes in its hits. In prose (a body, a comment, a documentation file),
+    `command-substitution` counts only for a `$(...)` or a backtick span that reads as a shell's (`_SHELLISH_SPAN_RE`); a
+    title keeps every one, since a workflow interpolates it into a shell. For a FILE, by its path:
+
+    * in source code that no shell reads (`_NON_SHELL_SOURCE_EXTS`), `command-substitution` counts only when the file also
+      calls a shell or starts a program (`_EXEC_SINK_RE`): a template literal is not a shell's substitution;
+    * in a file an agent reads as its instructions (`_AGENT_FILE_RE`), the bare phrase "system prompt" is never softened.
+
+    A branch name, a shell file, a file of an unknown kind and a file whose name holds a substitution keep every hit."""
+    prose = kind in ("body", "comment") or (kind == "file" and path.lower().endswith(_PROSE_FILE_EXTS)
+                                             and not path.lower().endswith(".ipynb"))      # a `!cmd` cell runs in a shell
+    source = kind == "file" and path.lower().endswith(_NON_SHELL_SOURCE_EXTS)
+    agent = kind == "file" and _AGENT_FILE_RE.search(path) is not None
+    if not (prose or source or agent):
+        return hits
+    named = kind == "file" and _CMD_SUBST_RE.search(path) is not None        # a file named for a substitution keeps them all
+    sink = None
+    out = []
+    if prose and not named and any(h.rule == "command-substitution" for h in hits):
+        location = next(h.location for h in hits if h.rule == "command-substitution")
+        hits = [h for h in hits if h.rule != "command-substitution"] + [
+            h.model_copy(update={"location": location}) if location else h for h in _prose_substitutions(text)]
+    for h in hits:
+        if h.rule == "command-substitution" and source:
+            sink = (named or bool(_EXEC_SINK_RE.search(text))) if sink is None else sink
+            if not sink:
+                continue
+        elif h.rule == "prompt-injection" and agent and h.title.endswith(f" — {_BARE_PHRASE_WHY}"):
+            h = h.model_copy(update={"severity": "high", "title": h.title[: -len(f" — {_BARE_PHRASE_WHY}")]})
+        out.append(h)
+    return out
+
+
 def scan_content(event: dict) -> list[IndicatorHit]:
     """Scan ONE event's untrusted content with the same per-file scoping `scan_diff` gives a raw diff.
 
@@ -2930,6 +3003,8 @@ def scan_content(event: dict) -> list[IndicatorHit]:
         prose_file = kind == "file" and label.lower().endswith(_PROSE_FILE_EXTS)
         diff = kind == "file"                                                  # a patch carries its own `+` markers; a body does not
         hits = _segment_hits(text, kind, partial(scan_indicators, location=label, diff=diff), prose_file=prose_file, diff=diff, markdown=not label.lower().endswith(_NOT_MARKDOWN_EXTS))
+        if kind != "branch":
+            hits = _or_closed(partial(_scope_to_file, hits, label, text, kind), hits, "_scope_to_file")
         for h in hits:
             if who:
                 h = h.model_copy(update={"via": who})
@@ -2949,14 +3024,15 @@ def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
         return scan_indicators(raw, location=location)
     deduped: dict[str, IndicatorHit] = {}
     for path, segment in segments:
-        for h in scan_indicators(segment, location=path or location):
+        found = scan_indicators(segment, location=path or location)
+        for h in _or_closed(partial(_scope_to_file, found, path, segment), found, "_scope_to_file") if path else found:
             keep_worse(deduped, h)
     if _LONE_CR_RE.search(raw):
         # `scan_indicators` reads a lone CR as a character of a word for a text it is handed as it is; the files of a diff were cut out of the text with the CR made a newline
         letters = _lf(_LONE_CR_RE.sub("x", raw))
         try:
             for path, segment in split_diff_by_file(letters) or [("", letters)]:
-                for h in _scan_shell(segment, True):
+                for h in _scope_to_file(_scan_shell(segment, True), path, segment) if path else _scan_shell(segment, True):
                     keep_worse(deduped, h.model_copy(update={"location": path or location}) if (path or location) and not h.location else h)
         except Exception as exc:  # noqa: BLE001 — fail CLOSED, as `scan_indicators` does
             keep_worse(deduped, _hit("scanner-error", "high", "the shell rules raised on this input with each lone CR read as a letter, so it was not fully scanned",

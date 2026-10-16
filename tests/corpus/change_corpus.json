@@ -778,7 +778,6 @@
       "family": "legit-dynamic-eval",
       "expected_signal": false,
       "expected_rules": [
-        "command-substitution",
         "dynamic-code-eval"
       ],
       "event": {

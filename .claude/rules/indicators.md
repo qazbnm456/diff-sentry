@@ -253,7 +253,8 @@ The first four bullets are over-alerts, not misses: for the examples they give, 
 
 ## Other prose softening
 
-All in `indicators._soften_prose`; a code file and a branch are never softened.
+All in `indicators._soften_prose`; a code file and a branch are never softened here (the file scope below
+changes `command-substitution` in source code and restores the phrase in agent files).
 
 - **`prompt-injection`** whose only trigger is the bare phrase "system prompt" is `medium`: ordinary in a thread
   about an LLM product. It is `high` when:
@@ -279,3 +280,43 @@ All in `indicators._soften_prose`; a code file and a branch are never softened.
   markdown file, it stays `high`.
 - A planner re-scan of text that is not byte-identical to the baseline's window mints another id (a title is scanned
   with the author appended by the baseline), and the stricter baseline hit for a code file always stays in the union.
+
+## What the kind of a segment changes
+
+`_scope_to_file` runs on every segment of an event but the branch name (`scan_content`) and on every file of a diff
+(`scan_diff`), after the detectors and the prose softening. A branch name and the planner's `scan_indicators` keep
+every hit.
+
+- **`command-substitution` in prose** (a body, a comment, a documentation file) is a `$(...)` or a backtick span that
+  reads as a shell's (`_SHELLISH_SPAN_RE`: an operator `|`, `;`, `&`, `<(`, or a `$` expansion); a plain backtick span is
+  Markdown's code formatting. A newline and `>` are not counted: a span that crosses a code fence and a placeholder such
+  as `<install folder>` hold them in ordinary issue text. The hits are rebuilt
+  from those matches only (`_prose_substitutions`), so the evidence shows what a shell would run. A title keeps every
+  substitution, because a workflow that interpolates it into `run:` executes backticks as it executes `$(`. A body or
+  a comment can be interpolated too, but there a span without an operator is code formatting nearly every time, and a
+  `$(...)` still counts. A notebook (`.ipynb`) is not prose for this rule: a `!cmd` or `%%bash` cell runs in a shell.
+- **`command-substitution` in source no shell reads** (`_NON_SHELL_SOURCE_EXTS`: JavaScript, TypeScript, Python, Go,
+  Java, Kotlin, Scala, C#, Rust, C, Swift, Dart, Lua) counts only when the file also calls a shell or starts a program
+  (`_EXEC_SINK_RE`: `child_process` or a `require`/`import(` whose name is built with `+`, `execSync`/`execFile`/`spawn`, zx's
+  `` $` ``, `@actions/exec`, shelljs's `shell.exec`, `os.system`/`os.spawn*`, `subprocess` and `create_subprocess_*`,
+  `exec.Command`, `syscall.Exec`, `ProcessBuilder`, Dart's `Process.run`, `system(`). A template literal is not a shell's
+  substitution. Ruby, Perl and PHP are not in the list, because their backticks run a shell, nor are Groovy and Gradle's
+  `.kts` (a Jenkins `sh` step, a Gradle `exec` block); neither is any file a shell reads (scripts, Dockerfiles, workflows,
+  Makefiles, `package.json`, Markdown) or a file of an unknown kind. In real campaigns `$(...)` arrived in branch names,
+  file names and titles: a branch name stays unscoped, a title keeps every substitution, and a file whose name holds one
+  keeps all of its own. A bare `exec(` is not a sink (it is a SQL or a local helper as often as `child_process.exec`), so
+  a hunk that calls a destructured `exec` without showing its `child_process` import is a known gap.
+- **`remote-fetch-to-disk` has no loopback exemption.** A fetch of `localhost` that writes to disk stays `high`: an
+  infostealer reads DevTools (`9222`, `9229`), the Docker API and the kubelet there, and each test that tells a local
+  service from those (the port, an option that overrides the URL, a second client, a raw socket, a computed `fetch`) has a
+  spelling around it.
+- **The bare phrase "system prompt" in source code keeps its reading** (`high`, as before). Softening it was tried as a
+  closed list of names ("the system prompt section"): every test that tells a name from an injection (a comment, a
+  docstring, an order word, the lines around it) had a spelling around it, and the Nx compromise put its agent prompt in
+  a string literal. A benign mention there is the model stage's to judge.
+- **A file an agent reads as its instructions** (`_AGENT_FILE_RE`: `AGENTS.md`, `AGENT.md`, `AGENTS.*.md`, `CLAUDE.md`,
+  `GEMINI.md`, `CONVENTIONS.md`, `.cursorrules`, `.windsurfrules`, `.clinerules`, the `.cursor/`, `.windsurf/`, `.roo/`,
+  `.claude/`, `.junie/`, `.kiro/`, `.amazonq/`, `.gemini/`, `.continue/` and `.codex/` directories,
+  `.github/copilot-instructions.md`, `.github/instructions/`, `.github/prompts/`, `.github/agents/`, `.github/chatmodes/`,
+  `*.prompt.md`, `*.agent.md`, `*.chatmode.md`, `*.instructions.md`, `*.mdc`, `.mcp.json`) never softens that phrase,
+  though it is Markdown: any change to such a file is aimed at an agent.
