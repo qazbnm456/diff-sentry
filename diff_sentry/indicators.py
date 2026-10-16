@@ -2915,7 +2915,8 @@ def _segment_hits(text: str, kind: str, scan: Callable[[str], list[IndicatorHit]
 
 # Source languages in which a `$(`, a `${...}` or a backtick is not a shell's: JavaScript and TypeScript template literals,
 # Python, Go, the JVM, .NET, Rust, C. Ruby, Perl and PHP are not listed (their backticks run a shell), nor are Groovy and
-# Gradle's `.kts` (a Jenkins `sh '...'` step and a Gradle `exec` block hand a string to a shell), nor is any file a shell reads (scripts, Dockerfiles, workflows, Makefiles, `package.json`, Markdown) or a file of an unknown kind.
+# Gradle's `.kts` (a Jenkins `sh '...'` step and a Gradle `exec` block hand a string to a shell), nor is any file a shell
+# reads (scripts, Dockerfiles, workflows, Makefiles, `package.json`, Markdown) or a file of an unknown kind.
 _NON_SHELL_SOURCE_EXTS = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".vue", ".svelte", ".py", ".pyi", ".go",
                           ".java", ".kt", ".scala", ".cs", ".fs", ".rs", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp",
                           ".m", ".mm", ".swift", ".dart", ".lua")
@@ -2934,6 +2935,9 @@ _AGENT_FILE_RE = re.compile(
     r"|(?:^|/)\.github/(?:copilot-instructions\.md$|instructions/|prompts/|agents/|chatmodes/)"
     r"|\.(?:prompt|agent|chatmode|instructions)\.md$|\.mdc$|(?:^|/)\.mcp\.json$", re.IGNORECASE)
 _SHELLISH_SPAN_RE = re.compile(r"[|;&]|<\(|\$[({A-Za-z_]")
+_LINE_SPAN_RE = re.compile(r"`[^`\n]{1,200}`")                # the backticks of one line paired among themselves
+_ANY_SPAN_RE = re.compile(r"(?=(`[^`\n]{1,200}`))")          # every backtick of a line read as an opener
+_ESCAPED_BACKTICK_RE = re.compile(r"(?<!\\)((?:\\\\)*)\\`")       # after an odd number of backslashes
 _BARE_PHRASE_WHY = "the bare phrase alone, in prose"
 
 
@@ -2949,11 +2953,25 @@ def _bare_system_prompt(text: str, kind: str) -> bool:
 
 def _prose_substitutions(text: str) -> list[IndicatorHit]:
     """The `command-substitution` hits of prose: a `$(...)`, or a backtick span with a shell operator inside (`` `a | b` ``),
-    since there a plain backtick span is code formatting. Built as `_scan_shell` builds them, so the ids are the same."""
-    real = (m for m in islice(_CMD_SUBST_RE.finditer(text), 5000)
-            if m.group(0).startswith("$(") or _SHELLISH_SPAN_RE.search(m.group(0)))
-    return [_hit("command-substitution", "medium", "shell command substitution (`$(…)` / backticks)", _snip(text, m.start(), m.end()))
-            for m in islice(real, 8)]
+    since there a plain backtick span is code formatting. Read on the text `_scan_shell` reads (`_lf`), so the ids are the
+    same. A stray backtick shifts the pairing of every later one, so the backticks of each line are also paired among
+    themselves, and on a line with an odd number of them each one is also read as an opener."""
+    text = _lf(text)
+    # An escaped backtick is a literal one to a shell and to Markdown alike: masked (same length) so it pairs with nothing.
+    plain = _ESCAPED_BACKTICK_RE.sub(lambda m: m.group(1) + "\\'", text)
+    spans = {m.span(): m.group(0) for m in islice(_CMD_SUBST_RE.finditer(plain), 5000)}
+    start = 0
+    for line in plain.split("\n"):
+        if "`" in line:
+            for m in islice(_LINE_SPAN_RE.finditer(plain, start, start + len(line)), 200):
+                spans.setdefault(m.span(), m.group(0))
+            if line.count("`") % 2:
+                for m in islice(_ANY_SPAN_RE.finditer(plain, start, start + len(line)), 200):
+                    spans.setdefault(m.span(1), m.group(1))
+        start += len(line) + 1
+    real = [span for span, g in sorted(spans.items()) if g.startswith("$(") or _SHELLISH_SPAN_RE.search(g)]
+    return [_hit("command-substitution", "medium", "shell command substitution (`$(…)` / backticks)", _snip(text, a, b))
+            for a, b in real[:8]]
 
 
 def _scope_to_file(hits: list[IndicatorHit], path: str, text: str, kind: str = "file") -> list[IndicatorHit]:

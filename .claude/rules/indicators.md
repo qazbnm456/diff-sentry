@@ -291,12 +291,15 @@ every hit.
   reads as a shell's (`_SHELLISH_SPAN_RE`: an operator `|`, `;`, `&`, `<(`, or a `$` expansion); a plain backtick span is
   Markdown's code formatting. A newline and `>` are not counted: a span that crosses a code fence and a placeholder such
   as `<install folder>` hold them in ordinary issue text. The hits are rebuilt
-  from those matches only (`_prose_substitutions`), so the evidence shows what a shell would run. A title keeps every
+  from those matches only (`_prose_substitutions`, on the `_lf` text the shell rules read), so the evidence shows what a
+  shell would run. The backticks of each line are also paired among themselves, and on a line with an odd number of them
+  every one is also read as an opener, since a stray one shifts the pairing of the rest. An escaped backtick
+  (`` \` ``) pairs with nothing: it is a literal one to a shell and to Markdown. A title keeps every
   substitution, because a workflow that interpolates it into `run:` executes backticks as it executes `$(`. A body or
   a comment can be interpolated too, but there a span without an operator is code formatting nearly every time, and a
   `$(...)` still counts. A notebook (`.ipynb`) is not prose for this rule: a `!cmd` or `%%bash` cell runs in a shell.
-- **`command-substitution` in source no shell reads** (`_NON_SHELL_SOURCE_EXTS`: JavaScript, TypeScript, Python, Go,
-  Java, Kotlin, Scala, C#, Rust, C, Swift, Dart, Lua) counts only when the file also calls a shell or starts a program
+- **`command-substitution` in source no shell reads** (`_NON_SHELL_SOURCE_EXTS`: JavaScript, TypeScript, Vue, Svelte,
+  Python, Go, Java, Kotlin, Scala, C#, F#, Rust, C, C++, Objective-C, Swift, Dart, Lua) counts only when the file also calls a shell or starts a program
   (`_EXEC_SINK_RE`: `child_process` or a `require`/`import(` whose name is built with `+`, `execSync`/`execFile`/`spawn`, zx's
   `` $` ``, `@actions/exec`, shelljs's `shell.exec`, `os.system`/`os.spawn*`, `subprocess` and `create_subprocess_*`,
   `exec.Command`, `syscall.Exec`, `ProcessBuilder`, Dart's `Process.run`, `system(`). A template literal is not a shell's
