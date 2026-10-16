@@ -59,8 +59,22 @@ paths:
   `max_deep_per_hour`) default off. A shed change keeps its `screened/` record and a `shed` state.
 - **The screen is not a trajectory.** `cli.screen` writes `screened/{run_id}.json`, never a trace, so the
   rollout corpus stays trajectories. Its early alert is `stage=screen`; the run's own is `stage=final`.
-- **One model worker.** dspy's global configuration is bound to the thread that first set it up. The poller
-  is a second thread and touches no model. Do not add a worker pool without proving `setup` is safe there.
+- **A run never shares a thread.** dspy's global configuration is bound to the thread that first set it up. With
+  `workers=1` the worker thread runs the model itself; with more, each run goes to a `spawn` process of a
+  `ProcessPoolExecutor` (its own interpreter and dspy), and the worker thread keeps every read and write of the state
+  (claim, settle, finalize). Never run the model in a thread pool. A child that dies breaks the pool: every run in it
+  counts as a failed attempt and the pool is rebuilt; a run that finished first keeps its result. A stopped pool
+  terminates its children and leaves their rows claimed for `recover()`; an unexpected error settles them as a
+  failed attempt, so a long-lived watcher strands nothing. A claim or a submit that fails touches
+  its own row only. Whatever a child's future raises, a Ctrl-C included, is that run failing, never the worker
+  thread's end. A child exits as soon as its watcher is gone (`_child_init`), so a watcher killed outright cannot
+  leave a run going while a restart runs the same run id again. A run sets the change's state only while it is the
+  change's latest revision (`_mark`). An examined change's row, its queue row and the change shed to make room are
+  written in one transaction (`record_examined`): a change never reads `queued` without a queue row (the next poll
+  would call it unchanged and never run it), and a worker never claims a change without a row. A claim that cannot be
+  followed through is given back (`unclaim`). A stop or a Ctrl-C leaves
+  the runs it cuts off claimed; only an error settles them. More than one worker needs a runner and poster that pickle, checked before any
+  file is opened. The poller is a separate thread and touches no model.
 - **A failed change must not block the ones behind it, and must be retried.** A failure holds the watermark below it
   and withholds the page-1 ETag (otherwise the next listing answers 304 and it is never retried), backs off
   exponentially, and after `_MAX_FAILS` is parked as `error` so it stops holding the listing. The others are skipped

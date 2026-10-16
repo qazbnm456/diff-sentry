@@ -451,7 +451,7 @@ def _cmd_watch(args) -> int:
             "backfill_s": int(args.backfill_hours * 3600) if args.backfill_hours is not None else None,
             "recheck_s": int(args.recheck_hours * 3600) if args.recheck_hours is not None else None,
             "screen_only": args.screen_only or None, "deep_min_severity": args.deep_min_severity,
-            "max_queue": args.max_queue, "max_deep_per_hour": args.max_deep_per_hour,
+            "max_queue": args.max_queue, "max_deep_per_hour": args.max_deep_per_hour, "workers": args.workers,
         }
         config = WatchConfig.from_env(**overrides)     # also parses DS_WATCH_REPOS and the other env knobs
     except (ValueError, OSError, OverflowError) as exc:
@@ -607,6 +607,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="only queue for the model when the screen reached this severity (default: info = all)")
     w.add_argument("--max-queue", type=int, default=None, help="shed the lowest priority beyond this (0 = off)")
     w.add_argument("--max-deep-per-hour", type=int, default=None, help="cap model runs per hour (0 = off)")
+    w.add_argument("--workers", type=int, default=None,
+                   help="model runs at once, each in a process of its own (DS_WATCH_WORKERS, default 1)")
     w.add_argument("--no-emit", action="store_true", help="do not emit SIEM signals")
     w.add_argument("--once", action="store_true", help="one poll, run the queue, exit")
     w.add_argument("--stats", action="store_true", help="print the watcher's state counts and exit (read-only)")

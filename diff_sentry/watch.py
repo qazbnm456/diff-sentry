@@ -31,8 +31,10 @@ Design facts, each of which a test pins:
 * **Re-checks catch what an author does afterwards.** A change is re-ingested on a schedule (15 min, 1 h,
   6 h, 24 h by default) to see a deleted fork, a deleted account, or an edited body.
 
-One model worker plus one poller thread. dspy's global configuration is bound to the thread that first set it
-up, so a single long-lived worker is the supported shape. Neither thread dies on an unexpected exception.
+One poller thread and one worker thread. dspy's global configuration is bound to the thread that first set it
+up, so a run never shares a thread with another: with `workers=1` the worker thread runs the model itself, and
+with more each run goes to a process of its own (`spawn`, its own dspy), while the worker thread keeps every
+read and write of the state. Neither thread dies on an unexpected exception.
 
 Pure stdlib + the package's own modules; no dspy at import (the default runner imports `cli` lazily).
 """
@@ -42,11 +44,16 @@ from __future__ import annotations
 import json
 import logging
 import math
+import multiprocessing
 import os
+import pickle
 import re
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -145,6 +152,7 @@ class WatchConfig:
     max_queue: int = 0                  # 0 = unbounded; when set, the lowest priority is shed (recorded)
     max_deep_per_hour: int = 0          # 0 = unlimited model runs per hour
     rate_reserve: int = 200             # stop polling when the API's remaining budget falls below this
+    workers: int = 1                    # model runs at once; above 1, each in a process of its own
 
     @classmethod
     def from_env(cls, **overrides: Any) -> WatchConfig:
@@ -159,11 +167,14 @@ class WatchConfig:
             "max_queue": _env_int("DS_WATCH_MAX_QUEUE", 0),
             "max_deep_per_hour": _env_int("DS_WATCH_MAX_DEEP_PER_HOUR", 0),
             "rate_reserve": _env_int("DS_WATCH_RATE_RESERVE", 200),
+            "workers": _env_int("DS_WATCH_WORKERS", 1),
         }
         base.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**base)
 
     def __post_init__(self) -> None:
+        if self.workers < 1:
+            raise ValueError(f"workers must be at least 1, got {self.workers}")
         if severity_rank(self.deep_min_severity) < 0:
             raise ValueError(f"deep_min_severity must be one of info/low/medium/high/critical, "
                              f"got {self.deep_min_severity!r}")
@@ -271,18 +282,43 @@ class WatchState:
 
     def upsert_change(self, repo: str, kind: str, number: int, **cols: Any) -> None:
         with self._lock:
-            exists = self._db.execute("SELECT 1 FROM changes WHERE repo=? AND kind=? AND number=?",
-                                      (repo, kind, number)).fetchone()
-            if exists:
-                sets = ", ".join(f"{k}=?" for k in cols)
-                self._db.execute(f"UPDATE changes SET {sets} WHERE repo=? AND kind=? AND number=?",
-                                 (*cols.values(), repo, kind, number))
-            else:
-                names = ["repo", "kind", "number", *cols]
-                marks = ",".join("?" * len(names))
-                self._db.execute(f"INSERT INTO changes ({','.join(names)}) VALUES ({marks})",
-                                 (repo, kind, number, *cols.values()))
+            self._upsert(repo, kind, number, cols)
             self._db.commit()
+
+    def _upsert(self, repo: str, kind: str, number: int, cols: dict[str, Any]) -> None:
+        exists = self._db.execute("SELECT 1 FROM changes WHERE repo=? AND kind=? AND number=?",
+                                  (repo, kind, number)).fetchone()
+        if exists:
+            sets = ", ".join(f"{k}=?" for k in cols)
+            self._db.execute(f"UPDATE changes SET {sets} WHERE repo=? AND kind=? AND number=?",
+                             (*cols.values(), repo, kind, number))
+        else:
+            names = ["repo", "kind", "number", *cols]
+            marks = ",".join("?" * len(names))
+            self._db.execute(f"INSERT INTO changes ({','.join(names)}) VALUES ({marks})",
+                             (repo, kind, number, *cols.values()))
+
+    def record_examined(self, repo: str, kind: str, number: int, cols: dict[str, Any], *,
+                        queue: tuple[str, int, dict, datetime] | None = None, shed: str | None = None) -> None:
+        """What one examination decided, in ONE transaction: the change row, its queue row (`queue`: run id,
+        priority, event, time), and the change `shed` to make room. A failure writes none of them, so a change
+        never reads `queued` without a queue row (the next poll would call it unchanged and never run it), and a
+        worker never claims a queue row whose change has no row."""
+        with self._lock:
+            try:
+                if shed is not None:
+                    self._db.execute("DELETE FROM queue WHERE run_id=?", (shed,))
+                    self._db.execute("UPDATE changes SET state='shed' WHERE run_id=?", (shed,))
+                self._upsert(repo, kind, number, cols)
+                if queue is not None:
+                    run_id, priority, event, now = queue
+                    self._db.execute(
+                        "INSERT OR REPLACE INTO queue (run_id, priority, enqueued_at, event_json) VALUES (?,?,?,?)",
+                        (run_id, priority, _iso(now), json.dumps(event, ensure_ascii=False, default=str)))
+                self._db.commit()
+            except BaseException:
+                self._db.rollback()
+                raise
 
     def due_checks(self, now: datetime) -> list[sqlite3.Row]:
         with self._lock:
@@ -322,6 +358,9 @@ class WatchState:
                 self._db.execute("UPDATE queue SET claimed=1, attempts=attempts+1 WHERE run_id=?", (row["run_id"],))
                 self._db.commit()
             return row
+
+    def unclaim(self, run_id: str) -> None:
+        self._q("UPDATE queue SET claimed=0, attempts=MAX(attempts-1, 0) WHERE run_id=? AND claimed=1", (run_id,))
 
     def complete(self, run_id: str) -> None:
         self._q("DELETE FROM queue WHERE run_id=?", (run_id,))
@@ -480,6 +519,12 @@ class Watcher:
         self.config = config
         self.detect_config = detect_config or (DetectConfig.screen_from_env() if config.screen_only
                                                else DetectConfig.from_env())
+        if config.workers > 1 and not config.screen_only:       # checked before any file is opened
+            try:
+                pickle.dumps((runner, poster, self.detect_config))
+            except Exception as exc:
+                raise ValueError("workers > 1 runs the model in other processes: the runner and the poster must "
+                                 f"be importable functions, not closures ({exc})") from exc
         self._list_api = list_api or _gh_cli_list()
         self._api = api
         self._raw = raw
@@ -821,14 +866,19 @@ class Watcher:
                 pending = run_id   # refused, unreachable, or the screen itself failed: send again next poll
                 log.warning("early alert for %s was not delivered — will retry", run_id)
 
-        state = "screened"
+        state, prio, victim = "screened", 0, None
         if not self.config.screen_only and self._wants_model(hits):
-            state = self._enqueue(run_id, hits, event, now, report)
-        self.state.upsert_change(repo, kind, number, updated_at=updated, content_sha256=digest, flags=flags,
-                                 revision=revision, run_id=run_id, state=state, first_seen=first_seen,
-                                 checks=checks, next_check_at=next_check, gone_at=None,
-                                 alerted=json.dumps(sorted(alerted)), alert_pending=pending, alert_fails=0,
-                                 **healthy)
+            state, prio, victim = self._admit(run_id, hits, event)
+        self.state.record_examined(
+            repo, kind, number,
+            {"updated_at": updated, "content_sha256": digest, "flags": flags, "revision": revision, "run_id": run_id,
+             "state": state, "first_seen": first_seen, "checks": checks, "next_check_at": next_check, "gone_at": None,
+             "alerted": json.dumps(sorted(alerted)), "alert_pending": pending, "alert_fails": 0, **healthy},
+            queue=(run_id, prio, event, now) if state == "queued" else None, shed=victim)
+        if victim is not None or state == "shed":
+            report.shed += 1
+            log.info("queue full — shed %s", victim or run_id)
+        report.queued += state == "queued"
         log.info("%s %s#%s rev=%d sev=%s hits=%d → %s", kind, repo, number, revision,
                  max((h.severity for h in hits), key=severity_rank, default="info"), len(hits), state)
 
@@ -860,27 +910,17 @@ class Watcher:
         top = max((severity_rank(h.severity) for h in hits), default=0)
         return top >= severity_rank(self.config.deep_min_severity)
 
-    def _enqueue(self, run_id: str, hits: list[IndicatorHit], event: dict, now: datetime,
-                 report: PollReport) -> str:
+    def _admit(self, run_id: str, hits: list[IndicatorHit], event: dict) -> tuple[str, int, str | None]:
+        """Whether the change joins the queue (`queued`) or is shed (`shed`), its priority, and the less urgent
+        change to shed to make room when the queue is capped. Decides only: `record_examined` writes it all."""
         prio = _priority(hits, event.get("provenance") or {})
         cap = self.config.max_queue
         if cap and self.state.queue_size() >= cap:
             worst = self.state.lowest()
             if worst is not None and worst["priority"] < prio:
-                self._mark_shed(worst["run_id"])          # make room by shedding the least urgent
-                report.shed += 1
-            else:
-                report.shed += 1
-                log.info("queue full — %s shed (priority %d)", run_id, prio)
-                return "shed"
-        self.state.enqueue(run_id, prio, event, now)
-        report.queued += 1
-        return "queued"
-
-    def _mark_shed(self, run_id: str) -> None:
-        self.state.drop(run_id)
-        self.state.set_state_of_run(run_id, "shed")
-        log.info("queue full — shed %s", run_id)
+                return "queued", prio, worst["run_id"]      # make room by shedding the least urgent
+            return "shed", prio, None
+        return "queued", prio, None
 
     # ── the model worker ───────────────────────────────────────────────────────────────────────────
 
@@ -888,46 +928,61 @@ class Watcher:
         cap = self.config.max_deep_per_hour
         return not cap or len(self.state.deep_last_hour(self._clock())) < cap
 
-    def run_next(self) -> str | None:
-        """Run the highest-priority ready change through the model. Returns its run id, or None when nothing is
-        ready or the hourly cap is reached. A run that itself fails (a model outage) is retried with backoff up
-        to `_MAX_ATTEMPTS` times before the change is marked `failed`."""
+    def _claim(self) -> tuple[sqlite3.Row, dict] | None:
+        """Take the highest-priority ready change, unless the hourly cap is reached, and mark it running."""
         if not self._may_run():
             return None
         row = self.state.claim(self._clock())
         if row is None:
             return None
-        run_id = row["run_id"]
-        event = json.loads(row["event_json"])
+        try:
+            event = json.loads(row["event_json"])
+            self._mark(row["run_id"], event, "running")
+            self.state.note_deep(self._clock())
+        except Exception:
+            self.state.unclaim(row["run_id"])            # nothing ran: give back the attempt it counted
+            raise
+        return row, event
+
+    def _mark(self, run_id: str, event: dict, state: str) -> None:
+        """Set the change's state, but only for its latest revision: an older one finishing, failing or starting
+        again is not the state of the change."""
         repo, kind, number = event["repo"], event["kind"], event["number"]
-        self.state.note_deep(self._clock())
-        self.state.upsert_change(repo, kind, number, state="running")
-        runner = self._runner
-        if runner is None:
-            from .cli import run as runner
-        arts = None
+        latest = self.state.change(repo, kind, number)
+        if latest is None or latest["run_id"] == run_id:
+            self.state.upsert_change(repo, kind, number, state=state)
+
+    def _run_args(self, run_id: str) -> tuple:
+        return (self._runner, run_id, self.config.out_dir, self.detect_config, self._emit, self._poster)
+
+    def run_next(self) -> str | None:
+        """Run the highest-priority ready change through the model, in this thread. Returns its run id, or None
+        when nothing is ready or the hourly cap is reached. A run that itself fails (a model outage) is retried
+        with backoff up to `_MAX_ATTEMPTS` times before the change is marked `failed`."""
+        claimed = self._claim()
+        if claimed is None:
+            return None
+        row, event = claimed
+        self._settle(row, event, _run_model(event, *self._run_args(row["run_id"])))
+        return row["run_id"]
+
+    def _settle(self, row: sqlite3.Row, event: dict, outcome: tuple | None) -> None:
+        """Record what a run produced: the verdict onto the sighting and the queue row done, or a retry with
+        backoff, or after `_MAX_ATTEMPTS` the change buried as `failed`. `outcome` is `_outcome`'s tuple."""
+        run_id = row["run_id"]
         try:
-            extra = {"emit_failed": False} if _accepts(runner, "emit_failed") else {}
-            arts = runner(event, run_id=run_id, outdir=self.config.out_dir, config=self.detect_config,
-                          emit=self._emit, poster=self._poster, **extra)
-        except Exception as exc:  # noqa: BLE001 — `cli.run` never raises; a custom runner might
-            log.warning("run %s crashed: %s", run_id, exc)
-        try:
-            assembled = getattr(arts, "assembled", None)
-            if assembled is not None:
-                self.actors.finalize(run_id, verdict=assembled.verdict, signal=assembled.signal,
-                                     max_severity=assembled.max_indicator_severity)
-                latest = self.state.change(repo, kind, number)
-                if latest is not None and latest["run_id"] == run_id:      # an older revision finishing is not "done"
-                    self.state.upsert_change(repo, kind, number, state="done")
+            if outcome is not None:
+                verdict, signal, top = outcome
+                self.actors.finalize(run_id, verdict=verdict, signal=signal, max_severity=top)
+                self._mark(run_id, event, "done")
                 self.state.complete(run_id)
             elif row["attempts"] + 1 < _MAX_ATTEMPTS:
                 delay = _backoff(row["attempts"] + 1)
                 self.state.retry(run_id, row["attempts"] + 1, self._clock() + delay)
-                self.state.upsert_change(repo, kind, number, state="queued")
+                self._mark(run_id, event, "queued")
                 log.warning("run %s failed (attempt %d) — retrying in %s", run_id, row["attempts"] + 1, delay)
             else:
-                self.state.upsert_change(repo, kind, number, state="failed")
+                self._mark(run_id, event, "failed")
                 self.state.bury(run_id)
                 log.error("run %s failed %d times — marked failed (kept; `watch --requeue-failed` brings it back)",
                           run_id, _MAX_ATTEMPTS)
@@ -940,10 +995,89 @@ class Watcher:
                 self.state.set_state_of_run(run_id, "done")
             except Exception:  # noqa: BLE001,S110 — the store itself is failing; the log line above is the record
                 pass
-        return run_id
+
+    # ── several runs at once: one process each ──
+
+    def _new_pool(self) -> ProcessPoolExecutor:
+        return ProcessPoolExecutor(max_workers=self.config.workers, mp_context=multiprocessing.get_context("spawn"),
+                                   initializer=_child_init, initargs=(logging.getLogger().level, os.getpid()))
+
+    def _pump(self, pool: ProcessPoolExecutor, inflight: dict[Future, tuple[sqlite3.Row, dict]],
+              budget: int | None) -> tuple[int, bool]:
+        """Fill the free processes with ready changes (at most `budget` more), then settle whatever finished
+        within a second. Returns how many it started and whether the pool broke (a child died)."""
+        started = 0
+        while len(inflight) < self.config.workers and (budget is None or started < budget):
+            try:
+                claimed = self._claim()
+            except Exception:
+                log.exception("claiming the next change failed")             # the runs in flight go on
+                break
+            if claimed is None:
+                break
+            row, event = claimed
+            try:
+                inflight[pool.submit(_run_model, event, *self._run_args(row["run_id"]))] = claimed
+            except Exception as exc:  # noqa: BLE001 — BrokenProcessPool, or a spawn that failed (ENOMEM, EMFILE)
+                log.warning("could not start %s: %s", row["run_id"], exc)
+                self._settle(row, event, None)
+                return started, True                         # start over with a new pool, without waiting
+            started += 1
+        if not inflight:
+            return started, False
+        done, _ = wait(list(inflight), timeout=1, return_when=FIRST_COMPLETED)
+        broken = False
+        for fut in done:
+            row, event = inflight.pop(fut)
+            outcome, died = _result(fut, row["run_id"])
+            broken = broken or died
+            self._settle(row, event, outcome)
+        return started, broken
+
+    def _settle_all(self, inflight: dict[Future, tuple[sqlite3.Row, dict]]) -> None:
+        """Settle every run still in flight from what its future holds: a finished one keeps its result, the rest
+        count as a failed attempt (their process is gone or about to be)."""
+        for fut, (row, event) in list(inflight.items()):
+            inflight.pop(fut)
+            self._settle(row, event, _result(fut, row["run_id"])[0] if fut.done() else None)
+
+    def _run_pool(self, limit: int | None, *, serving: bool = False) -> int:
+        """Run ready changes `workers` at a time until none is left and none is running (`drain`, at most
+        `limit`), or, `serving`, until `stop()`. Returns how many it started. A stop or an interrupt leaves the
+        runs it cuts off claimed for `recover()`; an error settles them, so a long-lived watcher strands nothing."""
+        pool = self._new_pool()
+        inflight: dict[Future, tuple[sqlite3.Row, dict]] = {}
+        ran = 0
+        failed = False
+        try:
+            while not self._stop.is_set():
+                budget = None if limit is None else limit - ran
+                started, broken = self._pump(pool, inflight, budget)
+                ran += started
+                if broken:                                   # every run in a broken pool fails; settle and start over
+                    self._settle_all(inflight)
+                    _terminate(pool)
+                    pool = self._new_pool()
+                    continue
+                if not inflight:
+                    if not serving:
+                        break
+                    self._wake.wait(timeout=30)
+                    self._wake.clear()
+        except Exception:
+            failed = True
+            raise
+        finally:
+            _terminate(pool)
+            # An error settles what it cut off; a stop or an interrupt (Ctrl-C) leaves it claimed for `recover()`.
+            if failed and inflight and not self._stop.is_set():
+                self._settle_all(inflight)
+        return ran
 
     def drain(self, limit: int | None = None) -> int:
         """Run ready changes until none is left (or `limit`, or the hourly cap). Returns how many ran."""
+        if self.config.workers > 1:
+            return self._run_pool(limit)
         ran = 0
         while (limit is None or ran < limit) and self.run_next() is not None:
             ran += 1
@@ -960,7 +1094,8 @@ class Watcher:
         model never delays the screen or the early alert (a slow SIEM endpoint still delays polling: the POST
         is synchronous, bounded by its 15 s timeout)."""
         self.recover()
-        worker = threading.Thread(target=self._work_loop, name="diff-sentry-worker", daemon=True)
+        worker = threading.Thread(target=self._work_loop if self.config.workers == 1 else self._pool_loop,
+                                  name="diff-sentry-worker", daemon=True)
         if not self.config.screen_only:
             worker.start()
         try:
@@ -997,10 +1132,74 @@ class Watcher:
                 self._wake.wait(timeout=30)
                 self._wake.clear()
 
+    def _pool_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._run_pool(None, serving=True)
+            except Exception:
+                log.exception("worker pass failed")
+                self._stop.wait(5)
+
     def close(self) -> None:
         self.state.close()
         self.actors.close()
         self._lock.release()
+
+
+def _outcome(arts: Any) -> tuple | None:
+    """What the watcher keeps of a run: (verdict, signal, max severity), or None for a run that produced none."""
+    assembled = getattr(arts, "assembled", None)
+    if assembled is None:
+        return None
+    return assembled.verdict, assembled.signal, assembled.max_indicator_severity
+
+
+def _run_model(event: dict, runner: Callable[..., Any] | None, run_id: str, out_dir: str, config: DetectConfig,
+               emit: bool, poster: Callable[[str, dict, dict], int] | None) -> tuple | None:
+    """One model run, in the worker thread or in a child process. Never raises: `cli.run` does not, and a custom
+    runner that does counts as a failed run."""
+    if runner is None:
+        from .cli import run as runner
+    try:
+        extra = {"emit_failed": False} if _accepts(runner, "emit_failed") else {}
+        return _outcome(runner(event, run_id=run_id, outdir=out_dir, config=config, emit=emit, poster=poster, **extra))
+    except Exception as exc:  # noqa: BLE001 — `cli.run` never raises; a custom runner might
+        log.warning("run %s crashed: %s", run_id, exc)
+        return None
+
+
+def _child_init(level: int, parent: int) -> None:
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(processName)s %(message)s")
+
+    def orphaned() -> None:
+        # A watcher killed outright (SIGKILL, the OOM killer) cannot stop its children. One left running would
+        # finish its run while a restarted watcher runs the same run id again: exit as soon as the parent is gone.
+        while os.getppid() == parent:
+            time.sleep(1)
+        os._exit(1)
+
+    threading.Thread(target=orphaned, name="diff-sentry-orphan-watch", daemon=True).start()
+
+
+def _result(fut: Future, run_id: str) -> tuple[tuple | None, bool]:
+    """A finished future's outcome, and whether its process died. Whatever it raises counts as a failed run, a
+    `KeyboardInterrupt` a child received with the terminal's Ctrl-C included, so the worker thread lives on."""
+    try:
+        return fut.result(), False
+    except BrokenProcessPool:
+        log.warning("the process running %s died", run_id)
+        return None, True
+    except BaseException as exc:  # noqa: BLE001 — a child's KeyboardInterrupt or SystemExit is its run failing
+        log.warning("run %s crashed: %r", run_id, exc)
+        return None, False
+
+
+def _terminate(pool: ProcessPoolExecutor) -> None:
+    """Stop a pool now, its running children included (a model run can take minutes)."""
+    for proc in list(getattr(pool, "_processes", {}).values()):
+        if proc.is_alive():
+            proc.terminate()
+    pool.shutdown(wait=True, cancel_futures=True)
 
 
 def _accepts(fn: Callable[..., Any], name: str) -> bool:

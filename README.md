@@ -167,7 +167,9 @@ poll (ETag) → ingest → snapshot archive → actor store → screen → queue
 deterministic screen only decides the order: highest severity first. The optional caps are off unless you
 set them: `DS_WATCH_DEEP_MIN_SEVERITY`, `DS_WATCH_MAX_QUEUE`, `DS_WATCH_MAX_DEEP_PER_HOUR`. A change the
 queue sheds keeps its screened record and a `shed` state. The queue is a table, so a restart loses nothing.
-There is one model worker and one poller thread, so a slow model never delays the screen or its alert.
+The poller and the model worker are separate threads, so a slow model never delays the screen or its alert.
+One model run takes minutes, so a busy watchlist outruns a single run at a time: `--workers N`
+(`DS_WATCH_WORKERS`, default 1) runs N at once, each in a process of its own, as many as the model host serves.
 
 **The alert does not wait for the model.** Evidence at the signal floor is emitted the moment the screen
 finishes (`"stage": "screen"`); the model's own signal follows under the same `run_id` (`"stage": "final"`).
