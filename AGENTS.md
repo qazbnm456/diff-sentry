@@ -50,7 +50,15 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
   planner may only CITE ids (`indicator_ids`). `assemble.assemble_verdict` unions every hit in the trace
   (run_start `baseline_indicators` ∪ each `scan_indicators` tool_call) and derives
   `signal = verdict ∈ emit_on OR max severity ≥ SIGNAL_SEVERITY_FLOOR`. A false-benign verdict cannot
-  suppress evidence; a cited id with no recorded hit lands in `cited_unknown_ids`. The same assembly runs
+  suppress evidence; a cited id with no recorded hit lands in `cited_unknown_ids`. The floor reads GROUNDED
+  hits only (`floor_indicator_severity`; `max_indicator_severity` keeps meaning every hit): the baseline always
+  is, and a planner scan is when its region is copied from the change or decoded from a span the change holds
+  (`decoded_from`) or from a value an earlier call of the run decoded (each layer of a multi-layer encoding;
+  only decoded values are remembered: by digest for the whole run, and as text newest-first for a layer cut from
+  a slice), decided in the tool, which holds the change, and recorded on
+  the call. Nothing asks that span to look encoded: the change's author picks the encoding. A hit on text the planner wrote stays in the
+  evidence, marked `grounded: false`, and never lifts a grounded sighting of the same id; a trace without the
+  field reads as grounded. The same assembly runs
   on every read path (live, re-render, `rl_export`). Never add a hits/severity/signal field to the SUBMIT
   type or a second signal derivation.
 - **An ungroundable input yields `inconclusive`, never a confident verdict.** `inconclusive` is a

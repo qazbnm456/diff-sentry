@@ -55,12 +55,16 @@ def signal_payload(response: DetectionResponse, *, stage: str = "final") -> dict
         "confidence": response.confidence,
         "recommended_action": response.recommended_action,
         "max_indicator_severity": response.max_indicator_severity,
+        "floor_indicator_severity": response.floor_indicator_severity or response.max_indicator_severity,
         "techniques": response.techniques,
         "suspect_files": response.suspect_files,
         "summary": response.summary,
         "indicators": [
-            {"id": h.id, "rule": h.rule, "severity": h.severity, "title": h.title, "location": h.location}
-            for h in sorted(response.indicators, key=lambda h: -severity_rank(h.severity))[:_MAX_SIGNAL_INDICATORS]
+            {"id": h.id, "rule": h.rule, "severity": h.severity, "title": h.title, "location": h.location,
+             "grounded": h.grounded}
+            # grounded first: a hit on text the planner wrote must not crowd the change's own evidence out
+            for h in sorted(response.indicators,
+                            key=lambda h: (not h.grounded, -severity_rank(h.severity)))[:_MAX_SIGNAL_INDICATORS]
         ],
         "indicator_count": len(response.indicators),
     }

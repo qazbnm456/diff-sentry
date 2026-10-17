@@ -3812,17 +3812,106 @@ def scan_provenance(provenance: dict) -> list[IndicatorHit]:
     return hits
 
 
-def make_indicator_tool() -> Callable[[str], str]:
+# ── grounding: did a planner's scan read the change, or text the planner wrote? ────────────────────
+# The planner may scan anything, and every hit it records joins the evidence (MF3). A region it composed to test
+# the scanner (`$(id) \`whoami\``) once raised a benign change to a signal. A region counts toward the signal floor
+# only when it is taken from the change, or was decoded from a span the change holds (`decoded_from`). Nothing asks
+# the span to LOOK encoded: the author of the change picks the encoding (ROT13, a reversed string, `chr()` sums,
+# a split string), and a test on its shape would let them keep the planner's decoded evidence below the floor. The
+# check runs in the tool, where the change is at hand, and its answer is recorded with the call.
+
+# A line of a region or of the change, as compared: diff markers dropped, whitespace collapsed.
+_GROUND_WS_RE = re.compile(r"\s+")
+_GROUND_MARKER_RE = re.compile(r"^[+\- ](?=\S)")
+# Lines a planner adds around text it copied: a code fence, a shebang.
+_GROUND_WRAPPER_RE = re.compile(r"(?:`{3,}|~{3,})[\w.+-]{0,20}|#![^\n]{0,80}")
+# The escapes a JSON string spells and its decoded value does not.
+_JSON_ESCAPE_RE = re.compile(r'\\(["\\/])')
+_MAX_GROUND_LINES = 20_000
+_MAX_PARTIAL_LINES = 64
+_MAX_DERIVED_CHARS = 2_000_000    # what one run's grounded regions may add to the change it grounds against
+
+
+def _ground_line(line: str) -> str:
+    return _GROUND_WS_RE.sub(" ", _GROUND_MARKER_RE.sub("", _JSON_ESCAPE_RE.sub(r"\1", line.strip()))).strip()
+
+
+def _squeeze(text: str) -> str:
+    """The text with every line's diff marker and all whitespace gone: a value the planner joined across lines."""
+    return "".join(_GROUND_WS_RE.sub("", _ground_line(line)) for line in _lf(text).split("\n"))
+
+
+class _Change:
+    """The change as a scan is grounded against: its lines in the compared form, and the whole squeezed."""
+
+    def __init__(self, event: dict) -> None:
+        from .normalize import content_segments_ex, normalize_event
+
+        texts = [normalize_event(event)] + [text for _, text, _, _ in content_segments_ex(event)]
+        lines = [_ground_line(line) for t in texts for line in _lf(t).split("\n")]
+        self.lines = frozenset(lines)
+        self.text = "\n".join(lines)
+        self.squeezed = "\n".join(_squeeze(t) for t in texts)
+        self._entries: deque[tuple[str, str]] = deque()
+        self._digests: set[bytes] = set()
+        self.derived = ""            # decoded values grounded earlier in this run, squeezed and line by line
+        self.derived_lines = ""
+
+    def holds(self, text: str) -> bool:
+        """Every non-blank line of `text` (wrappers aside) is part of a line of the change, or the whole of it is
+        part of the change once whitespace is gone (a value joined across lines)."""
+        lines = [g for g in (_ground_line(line) for line in _lf(text or "").split("\n"))
+                 if g and not _GROUND_WRAPPER_RE.fullmatch(g)]
+        if not lines or len(lines) > _MAX_GROUND_LINES:
+            return False
+        # A line not in the change as a whole line is searched in it, for at most `_MAX_PARTIAL_LINES` such lines
+        # (an honest slice cuts its first and last line); past that the squeezed comparison answers alone.
+        partial = [line for line in lines if line not in self.lines]
+        if len(partial) <= _MAX_PARTIAL_LINES and all(
+                line in self.text or line in self.derived_lines for line in partial):
+            return True
+        squeezed = "".join(_GROUND_WS_RE.sub("", line) for line in lines)
+        return bool(squeezed) and (squeezed in self.squeezed or squeezed in self.derived)
+
+    def decoded_before(self, text: str) -> bool:
+        """`text` is, whole, a value an earlier call of this run grounded through `decoded_from`."""
+        return hashlib.sha1(_squeeze(text).encode("utf-8", "replace")).digest() in self._digests
+
+    def remember(self, text: str) -> None:
+        """A value grounded through `decoded_from` (the change does not hold it): the next layer of a multi-layer
+        encoding is decoded from it. Its digest is kept for the whole run, so a planner passing the previous value
+        whole always grounds the next layer, whatever the change makes it decode in between. The text itself is
+        also kept, oldest first out past `_MAX_DERIVED_CHARS`, for a layer decoded from a slice of it."""
+        self._digests.add(hashlib.sha1(_squeeze(text).encode("utf-8", "replace")).digest())
+        self._entries.append((_squeeze(text), "\n".join(_ground_line(line) for line in _lf(text).split("\n"))))
+        while len(self._entries) > 1 and sum(len(a) + len(b) for a, b in self._entries) > _MAX_DERIVED_CHARS:
+            self._entries.popleft()
+        self.derived = "\n".join(a for a, _ in self._entries)
+        self.derived_lines = "\n".join(b for _, b in self._entries)
+
+
+def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
     """Build the sync `scan_indicators` RLM tool. It scans a region the planner passes and RECORDS the
     full structured hits into the trace (so the evidence is a fact, re-sourced on read), then returns a
-    compact text summary + the hit ids the planner may cite. Sync — dspy.RLM invokes tools synchronously."""
+    compact text summary + the hit ids the planner may cite. Sync — dspy.RLM invokes tools synchronously.
+
+    Given the change (`event`), it also records whether the region is GROUNDED in it (`_Change.holds`): an
+    ungrounded hit stays in the evidence but never reaches the signal floor. Without one (a direct caller, a
+    test), every region counts, as before."""
     from rlm_harness.trace import record_tool_call
 
-    def scan_indicators_tool(region: str) -> str:
-        """Scan a snippet of the change (or a value you decoded) for malicious indicators — shell
+    change = _Change(event) if event is not None else None
+
+    def scan_indicators_tool(region: str, decoded_from: str | None = None) -> str:
+        """Scan a snippet of the change, or a value you decoded from it, for malicious indicators — shell
         injection, obfuscated payloads, secret exfiltration, known exfil/OAST callback services,
         CI/CODEOWNERS tampering, workflow permission escalation, CI-skip bypass, prompt injection. Returns
-        the hits found (id, rule, severity, title). Cite an id in your final `indicator_ids`."""
+        the hits found (id, rule, severity, title). Cite an id in your final `indicator_ids`.
+
+        Pass text copied from the change as `region`. When `region` is a value you DECODED, pass what you decoded
+        it from as `decoded_from`: the span of the change, or a value you already scanned (each layer of a
+        multi-layer encoding). Hits on text that is neither (an example you wrote, your own notes) are kept but do
+        not count as evidence of the change."""
         # scan_diff, not scan_indicators: when the planner hands back a whole diff this scopes it per
         # file exactly as the host-side baseline did, so the two scans of the same content still mint
         # the same ids and de-duplicate to one union member (MF3). A sub-region is not a diff and falls
@@ -3837,12 +3926,23 @@ def make_indicator_tool() -> Callable[[str], str]:
         # and a region with both added lines and `- ` lines and no header cannot be told apart from the other: it is not softened
         hits = _segment_hits(text, "body", scan_diff, prose_file=False, diff=header or added,
                              softened=header or not (added and re.search(r"^-[ \t]", text, re.MULTILINE)))
-        record_tool_call("scan_indicators", args={"region": (region or "")[:200]}, ok=True,
+        copied = change is None or change.holds(text)
+        grounded = copied or (bool(decoded_from) and (change.holds(decoded_from) or change.decoded_before(decoded_from)))
+        if not copied and grounded and _squeeze(text):
+            change.remember(text)       # a decoded value: the next layer of a multi-layer encoding comes from it
+        if not grounded:
+            hits = [h.model_copy(update={"grounded": False}) for h in hits]
+        args = {"region": (region or "")[:200]}
+        if decoded_from:
+            args["decoded_from"] = decoded_from[:200]
+        record_tool_call("scan_indicators", args=args, ok=True, grounded=grounded,
                          hits=[h.model_dump() for h in hits], n=len(hits))
         if not hits:
             return "No indicators fired on this region."
         lines = [f"- {h.id} [{h.severity}] {h.rule}: {h.title}" for h in hits]
-        return f"{len(hits)} indicator(s):\n" + "\n".join(lines)
+        note = ("" if grounded else "\n(Not found in the change, nor decoded from a span of it or from a value you "
+                "scanned before: these hits are kept but are not evidence of the change.)")
+        return f"{len(hits)} indicator(s):\n" + "\n".join(lines) + note
 
     # dspy registers a tool under its __name__, and the prompt (detect.INSTRUCTIONS) calls
     # `scan_indicators(region)`: any other name makes every sandbox call a NameError. The inner def
@@ -3855,8 +3955,11 @@ def make_indicator_tool() -> Callable[[str], str]:
 def hits_from_events(events: list[dict]) -> list[IndicatorHit]:
     """Re-source the UNION of every deterministic hit from a trace: the run_start meta BASELINE plus
     every `scan_indicators` tool_call's recorded hits, deduped by id. This is the evidence a signal is
-    built on — never the planner's self-report (MF3)."""
-    deduped: dict[str, IndicatorHit] = {}
+    built on — never the planner's self-report (MF3). An id seen on the change keeps its most severe GROUNDED
+    sighting: a more severe copy on text the planner wrote must not lift it (one match can be read at two
+    severities, as prose softening does). An id seen only on planner text keeps its ungrounded copy."""
+    grounded: dict[str, IndicatorHit] = {}
+    ungrounded: dict[str, IndicatorHit] = {}
 
     def _absorb(raw_hits) -> None:
         for h in raw_hits or []:
@@ -3864,7 +3967,7 @@ def hits_from_events(events: list[dict]) -> list[IndicatorHit]:
                 hit = IndicatorHit(**h) if isinstance(h, dict) else h
             except (TypeError, ValueError):
                 continue
-            keep_worse(deduped, hit)
+            keep_worse(grounded if hit.grounded else ungrounded, hit)
 
     for e in events:
         p = e.get("payload", {})
@@ -3872,4 +3975,5 @@ def hits_from_events(events: list[dict]) -> list[IndicatorHit]:
             _absorb((p.get("meta") or {}).get("baseline_indicators"))
         elif e.get("type") == "tool_call" and p.get("tool") == "scan_indicators":
             _absorb(p.get("hits"))
-    return list(deduped.values())
+    order = list(dict.fromkeys([*grounded, *ungrounded]))
+    return [grounded.get(i) or ungrounded[i] for i in order]

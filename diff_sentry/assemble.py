@@ -27,6 +27,7 @@ from .schema import (
     AssembledVerdict,
     ChangeVerdict,
     at_signal_floor,
+    floor_severity,
     max_severity,
 )
 
@@ -52,9 +53,10 @@ def assemble_verdict(
     known_ids = {h.id for h in hits}
     cited_unknown = [cid for cid in (verdict.indicator_ids or []) if cid not in known_ids]
     top_sev = max_severity([h.severity for h in hits])
+    floor_sev = floor_severity(hits)
 
     verdict_signals = (verdict.verdict or "").strip().lower() in {v.lower() for v in emit_on}
-    evidence_signals = at_signal_floor(top_sev)
+    evidence_signals = at_signal_floor(floor_sev)
     signal = bool(verdict_signals or evidence_signals)
 
     return AssembledVerdict(
@@ -67,6 +69,7 @@ def assemble_verdict(
         recommended_action=verdict.recommended_action,
         indicators=hits,
         max_indicator_severity=top_sev,
+        floor_indicator_severity=floor_sev,
         signal=signal,
         cited_unknown_ids=cited_unknown,
     )

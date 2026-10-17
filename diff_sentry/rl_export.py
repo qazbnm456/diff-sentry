@@ -86,7 +86,8 @@ def run_labels(events: list[dict]) -> dict:
     assembled = verdict_from_events(events)
     if assembled is None:
         return {"verdict": "none", "signal": False, "indicator_count": 0,
-                "max_indicator_severity": "info", "cited_unknown": 0, "inconclusive": False}
+                "max_indicator_severity": "info", "floor_indicator_severity": "info", "cited_unknown": 0,
+                "inconclusive": False}
     ev = _meta(events).get("event")
     groundable = has_groundable_content(ev) if isinstance(ev, str) else True
     inconclusive = (assembled.verdict or "").strip().lower() == INCONCLUSIVE_VERDICT or not groundable
@@ -95,6 +96,8 @@ def run_labels(events: list[dict]) -> dict:
         "signal": bool(assembled.signal),
         "indicator_count": len(assembled.indicators),
         "max_indicator_severity": assembled.max_indicator_severity,
+        # The highest GROUNDED severity, what `signal` read; equal to the max for a trace without planner text.
+        "floor_indicator_severity": assembled.floor_indicator_severity,
         "cited_unknown": len(assembled.cited_unknown_ids),
         "inconclusive": bool(inconclusive),
     }

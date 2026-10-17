@@ -68,6 +68,12 @@ def max_severity(sevs) -> str:
     return best if best_rank >= 0 else "info"
 
 
+def floor_severity(hits) -> str:
+    """The highest severity among GROUNDED hits: what the signal floor reads (`floor_indicator_severity`). A
+    hit minted on text the planner wrote itself is evidence of nothing in the change."""
+    return max_severity([h.severity for h in hits if getattr(h, "grounded", True)])
+
+
 # ── the deterministic evidence layer (produced by indicators.scan_indicators, NEVER the planner) ──
 
 class IndicatorHit(BaseModel):
@@ -89,6 +95,11 @@ class IndicatorHit(BaseModel):
         "", description="The login whose COMMENT carried the text this hit fired on, else empty. A structured "
         "field, not a substring of `location` (a file path is free-form and could be named to match), so the "
         "actor store attributes a comment to its writer and never to the change's author.")
+    grounded: bool = Field(
+        True, description="Whether the scanned text came from the change: the host-side baseline always did; a "
+        "planner scan did when its region is in the change, or was decoded from a span of it or from a value an "
+        "earlier grounded scan of the run held. An ungrounded hit stays in the evidence but never reaches the "
+        "signal floor (text the planner wrote itself).")
 
     @field_validator("title", "evidence", "location", "decoded", "via")
     @classmethod
@@ -164,10 +175,12 @@ class AssembledVerdict(BaseModel):
         default_factory=list, description="ALL deterministic hits (baseline ∪ tool calls), re-sourced.")
     max_indicator_severity: str = Field(
         "info", description="Highest severity across `indicators` — DERIVED, never self-reported.")
+    floor_indicator_severity: str = Field(
+        "info", description="Highest severity across the GROUNDED `indicators` — what the signal floor reads.")
     signal: bool = Field(
         False,
         description="Whether this run should emit a SIEM signal — DERIVED: the planner's verdict OR a "
-        "deterministic high/critical indicator (so a benign self-report can't suppress hard evidence).",
+        "grounded high/critical indicator (so a benign self-report can't suppress hard evidence).",
     )
     cited_unknown_ids: list[str] = Field(
         default_factory=list, description="indicator_ids the planner cited that match NO recorded hit.")
@@ -250,6 +263,8 @@ class DetectionResponse(BaseModel):
     recommended_action: str | None = None
     indicators: list[IndicatorHit] = Field(default_factory=list)
     max_indicator_severity: str = "info"
+    # None in a response stored before grounding existed, where every hit counted: read it as the max then.
+    floor_indicator_severity: str | None = None
     source: dict | None = Field(default=None, description="Echoed change metadata (repo/kind/number).")
     refusal: RefusalInfo | None = None
     process: ProcessInfo = Field(default_factory=ProcessInfo)

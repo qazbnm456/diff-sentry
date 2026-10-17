@@ -87,7 +87,7 @@
   function deriveState(r) {
     const status = r.status || "";
     if (status === "failed" || status === "inconclusive" || !r.verdict) return { key: "iron", head: status === "failed" ? "REFUSAL" : "INCONCLUSIVE" };
-    const hardEvidence = sevRank(r.max_indicator_severity) >= sevRank("high");
+    const hardEvidence = sevRank(r.floor_indicator_severity || r.max_indicator_severity) >= sevRank("high");
     if (r.signal && hardEvidence) return { key: "alert", head: "ALERT" };
     if (r.signal) return { key: "amber", head: "FLAGGED" };
     // No signal, but the planner did NOT clear it (e.g. a narrowed DS_EMIT_ON leaves a `suspicious`

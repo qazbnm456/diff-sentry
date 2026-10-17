@@ -54,7 +54,7 @@ async def detect_from_event(
     from .rubric import default_rubric, rubric_to_meta
 
     setup(config)
-    task = ClassifyChange(config=config, extra_tools=extra_tools)
+    task = ClassifyChange(config=config, extra_tools=extra_tools, event=event)
     event_str = normalize_event(event)
     # Host-side BASELINE scan — deterministic evidence in the trace before the planner runs (MF3).
     baseline = _baseline_indicators(event)

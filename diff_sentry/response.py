@@ -130,7 +130,7 @@ def build_response(assembled: AssembledVerdict, events: list[dict], run_id: str)
             status="inconclusive",
             refusal=RefusalInfo(reason=reason, detail=detail, indicators=assembled.indicators),
             indicators=assembled.indicators, max_indicator_severity=assembled.max_indicator_severity,
-            signal=assembled.signal, **common,
+            floor_indicator_severity=assembled.floor_indicator_severity, signal=assembled.signal, **common,
         )
     return DetectionResponse(
         status="classified",
@@ -144,6 +144,7 @@ def build_response(assembled: AssembledVerdict, events: list[dict], run_id: str)
         recommended_action=assembled.recommended_action,
         indicators=assembled.indicators,
         max_indicator_severity=assembled.max_indicator_severity,
+        floor_indicator_severity=assembled.floor_indicator_severity,
         **common,
     )
 
@@ -151,21 +152,21 @@ def build_response(assembled: AssembledVerdict, events: list[dict], run_id: str)
 def _floor_signal(events: list[dict]):
     """The evidence-only signal both no-verdict paths share: every hit in the trace, the highest severity,
     and whether it reaches the floor. One derivation, so the crash path and the screen path cannot diverge."""
-    from .schema import at_signal_floor, max_severity
+    from .schema import at_signal_floor, floor_severity, max_severity
 
     hits = hits_from_events(events)
-    top = max_severity([h.severity for h in hits])
-    return hits, top, at_signal_floor(top)
+    floor = floor_severity(hits)
+    return hits, max_severity([h.severity for h in hits]), floor, at_signal_floor(floor)
 
 
 def build_screened_response(run_id: str, events: list[dict]) -> DetectionResponse:
     """The deterministic SCREEN of a change the model has not judged (yet): the baseline evidence and the
     floor-derived signal, with `status="inconclusive"` and `reason="not_escalated"`. It is the early alert a
     watcher can raise while the change waits in the model queue, and the standing record if it is never run."""
-    hits, top, signal = _floor_signal(events)
+    hits, top, floor, signal = _floor_signal(events)
     return DetectionResponse(
         id=run_id, status="inconclusive", model=_models(events), source=_source(events),
-        signal=signal, indicators=hits, max_indicator_severity=top,
+        signal=signal, indicators=hits, max_indicator_severity=top, floor_indicator_severity=floor,
         refusal=RefusalInfo(reason="not_escalated", indicators=hits,
                             detail="Deterministic screen only — the model has not judged this change."),
         process=_process(events),
@@ -176,10 +177,10 @@ def build_failed_response(run_id: str, events: list[dict], detail: str, *, reaso
                           ) -> DetectionResponse:
     """The crash path (or a trace with no result event) — no verdict, but still carries the deterministic indicators gathered and
     the derived signal (a run that crashed AFTER a critical indicator fired must STILL be able to alert)."""
-    hits, top, signal = _floor_signal(events)
+    hits, top, floor, signal = _floor_signal(events)
     return DetectionResponse(
         id=run_id, status="failed", model=_models(events), source=_source(events),
-        signal=signal, indicators=hits, max_indicator_severity=top,
+        signal=signal, indicators=hits, max_indicator_severity=top, floor_indicator_severity=floor,
         refusal=RefusalInfo(reason=reason, detail=detail, indicators=hits),
         process=_process(events),
         rubric=_rubric(events),   # a failed run still has a partial trajectory worth labelling

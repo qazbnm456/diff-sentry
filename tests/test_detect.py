@@ -35,7 +35,9 @@ def test_instructions_inject_skill_manifest(configure_dummy):
     task = ClassifyChange(config=_cfg())
     assert "<available_skills>" in task.instructions
     assert "triage-a-change" in task.instructions
-    assert "prompt-injection-catalog" in task.instructions
+    for name in ("ci-and-workflows", "package-and-build-hooks", "developer-autorun", "runtime-droppers-and-exfil",
+                 "llm-directed-text", "concealment-and-provenance"):
+        assert name in task.instructions
 
 
 def test_tools_wired(configure_dummy):
