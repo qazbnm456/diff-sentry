@@ -26,6 +26,7 @@ import hashlib
 import html
 import json
 import math
+import posixpath
 import re
 import warnings
 from collections import Counter, deque
@@ -408,6 +409,22 @@ _CONTENT_HOST_RE = re.compile(
 # (`a`, `t`), never this form, so it is a strong obfuscation tell that base64 detection cannot see
 # (Miasma's 15k-char `validator.js` payload is this shape).
 _HEX_IDENT_RE = re.compile(r"_0x[0-9a-fA-F]{4,}")
+# The same tool's string-array machinery, which survives every identifier-name setting (a sample with random
+# mangled names carried no `_0x` at all): the rotation loop `while(!![]){try{...}catch(e){a['push'](a['shift']())}}`
+# and the decoder called with a hex index (`F(0x1f2)`) at every string use. Terser and esbuild emit `!0` and
+# `for(;;)`, never `!![]`, and index nothing by a hex literal: measured on 3,553 JavaScript files over 30 KB on a
+# developer machine (bundles and minified libraries among them) and 6,858 files of 857 live changes, the pair
+# appeared only in the attack it was written for.
+_OBF_LOOP_RE = re.compile(r"while[ \t]*\([ \t]*!![ \t]*\[[ \t]*\][ \t]*\)")
+_OBF_ROTATE_RE = re.compile(r"\[[ \t]*['\"]push['\"][ \t]*\][ \t]*\([ \t]*[A-Za-z_$][\w$]{0,40}[ \t]*\[[ \t]*['\"]shift['\"]")
+_OBF_INDEX_CALL_RE = re.compile(r"[A-Za-z_$][\w$]{0,40}\(0x[0-9a-fA-F]{1,5}\)")
+_OBF_INDEX_CALLS = 20
+# A font or image run as a program: the fake-font loader of the Contagious Interview / PolinRider campaigns
+# (`node public/fonts/fa-solid-400.woff2`). No build runs an asset through an interpreter.
+_ASSET_EXTS = r"(?:ttf|otf|woff2?|eot|png|jpe?g|gif|ico|bmp|webp)"
+_RUN_ASSET_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])(?:node|bun|deno)(?:[ \t]+run)?[ \t]+(?:-[A-Za-z0-9=_-]{1,40}[ \t]+){0,4}"
+    rf"['\"]?([^\s'\"`;&|()<>]{{1,300}}\.(?i:{_ASSET_EXTS}))(?![\w.-])")
 
 # What a sentence asks for once it has told the reader to drop its rules: an action to take.
 _ACTIONS = r"(?:approve|merge|run|execute|label|close|exfiltrat\w*|delete|push|comment|grant)"
@@ -710,6 +727,29 @@ def _scan_hex_identifiers(text: str) -> list[IndicatorHit]:
                      f"{len(set(found))} distinct over {len(found)} uses: "
                      f"{', '.join(sorted(set(found))[:6])}")]
     return []
+
+
+def _scan_string_array(text: str) -> list[IndicatorHit]:
+    """javascript-obfuscator's string array: the rotation loop plus either the push/shift rotation or a run of
+    hex-indexed decoder calls. Does not need `_0x` names, which a mangled-name setting removes."""
+    loop = _OBF_LOOP_RE.search(text)
+    if not loop:
+        return []
+    calls = sum(1 for _ in islice(_OBF_INDEX_CALL_RE.finditer(text), _OBF_INDEX_CALLS))
+    if not (_OBF_ROTATE_RE.search(text) or calls >= _OBF_INDEX_CALLS):
+        return []
+    return [_hit("obfuscated-string-array", "high",
+                 "string-array obfuscation (javascript-obfuscator's rotation loop) — machine-obfuscated JavaScript",
+                 _snip(text, loop.start(), loop.end()))]
+
+
+def _scan_run_asset(text: str) -> list[IndicatorHit]:
+    """A font or image file handed to a JavaScript runtime: the asset is a program in disguise."""
+    m = _RUN_ASSET_RE.search(text)
+    if not m:
+        return []
+    return [_hit("asset-run-as-code", "critical", "runs a font or image file as a program (fake-asset loader)",
+                 _snip(text, m.start(), m.end()))]
 
 
 def _scan_ci_paths(text: str) -> list[IndicatorHit]:
@@ -3061,7 +3101,7 @@ def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
 _DETECTORS = (
     _scan_shell, _scan_obfuscation, _scan_exfil, _scan_urls, _scan_exfil_domains, _scan_ci_paths, _scan_ci_bypass,
     _scan_workflow_perms, _scan_injection, _scan_entropy, _scan_workflow_config, _scan_diff_evasion, _scan_js_exec,
-    _scan_hex_identifiers,
+    _scan_hex_identifiers, _scan_string_array, _scan_run_asset,
 )
 
 
@@ -3190,12 +3230,353 @@ def scan_metadata(event: dict) -> list[IndicatorHit]:
     return hits
 
 
+# ── file-structure detectors: what a change's FILE LIST says, beside each file's text ─────────────────
+# A dev machine infected by the Contagious Interview / PolinRider loaders pushes its payload with ordinary work:
+# obfuscated JavaScript appended to a config that runs on lint or build, a "font" that is a script, and a way to
+# run it without anyone typing a command (a VS Code task that runs when the folder opens, an npm script that now
+# starts with `node <new file> &&`). The text rules see each piece; these read what only the file list knows:
+# which files the change ADDS, what kind of file a path claims to be, and which file is a run entry.
+#
+# `package.json` and the VS Code files are read as JSONC TOKENS, never line by line: a comment between a key and its
+# value, a value on the next line, a `\u` escape, a one-line `"scripts": {...}` and a task's `args` array are all
+# ordinary spellings, and a line regex misses each of them.
+
+# Formats git stores as binary: a real one has a NUL in its first bytes, so GitHub sends no patch and counts no added
+# lines. A text patch (or added lines with no patch, a text diff too large to show) under one of these names is text
+# wearing an asset's name. `.svg` is text by nature, and `.pdf` is often stored as text, so neither is here.
+_BINARY_EXTS = (".ttf", ".otf", ".woff", ".woff2", ".eot", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp",
+                ".zip", ".gz", ".tgz", ".jar", ".class", ".exe", ".dll", ".so", ".dylib", ".wasm", ".node")
+_ASSET_SUFFIXES = (".ttf", ".otf", ".woff", ".woff2", ".eot", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp")
+# A Git LFS pointer, the one text file that legitimately sits under a binary name: nothing but these three keys.
+_LFS_LINE_RE = re.compile(r"(?:version https://git-lfs\.github\.com/spec/v1|oid sha256:[0-9a-f]{64}|size [0-9]{1,20})")
+# Config files a developer's tools EXECUTE on lint, build, test, format or deploy.
+_DEV_CONFIG_RE = re.compile(
+    r"(?:^|/)(?:\.?(?:eslintrc|prettierrc|babelrc|stylelintrc|mocharc)|(?:eslint|vite|vitest|webpack|rollup|next|nuxt"
+    r"|vue|svelte|astro|tailwind|postcss|babel|jest|playwright|prettier|tsup|metro|remix|turbo|hardhat|commitlint"
+    r"|stylelint|lint-staged)\.config|truffle(?:-config)?|gatsby-(?:config|node|browser|ssr)|gulpfile|gruntfile"
+    r"|karma\.conf)(?:\.[a-z]{1,10})?\.[cm]?[jt]s$", re.IGNORECASE)
+# npm runs these without anyone naming them: on install, on publish, on pack.
+_NPM_LIFECYCLE = frozenset({"preinstall", "install", "postinstall", "prepare", "prepublish", "prepublishonly",
+                            "prepack", "postpack"})
+# Programs that run the file they are handed.
+_RUNTIMES = frozenset({"node", "nodejs", "bun", "deno", "tsx", "ts-node", "python", "python3", "bash", "sh", "zsh",
+                       "pwsh", "powershell", "cmd", "wscript", "cscript", "start",
+                       "node.exe", "bun.exe", "deno.exe", "python.exe", "bash.exe", "pwsh.exe", "powershell.exe",
+                       "cmd.exe", "wscript.exe", "cscript.exe"})
+_JSONC_WORD_RE = re.compile(r"[A-Za-z0-9_.$+-]{1,200}")
+_MAX_JSONC_TOKENS = 50_000
+_HUNK = "\x00@@"           # `_new_side`'s mark for a hunk header
+_OBJECT_REACH = 400         # tokens walked either way from a `command` to find its object's `args`
+# Words that run the command after them rather than being it.
+_RUN_WRAPPERS = frozenset({"npx", "exec", "env", "sudo", "time", "nohup", "cross-env", "command", "call", "start"})
+_ENV_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,60}=")
+# Where one command of a command line ends and the next begins.
+_RUN_SEGMENT_RE = re.compile(r"[;&|()\n]+")
+_MAX_RUN_ENTRIES = 500      # scripts / task commands read per file: each may walk 400 tokens for its `args`
+
+
+def _vscode_file(path: str) -> bool:
+    low = path.lower()
+    return low.startswith(".vscode/") or "/.vscode/" in low or low.endswith(".code-workspace")
+
+
+def _new_side(patch: str, *, removed: bool = False) -> list[tuple[str, bool]]:
+    """The lines of one side of a patch, each with whether the change wrote it: `+` and context lines for the new
+    side, `-` and context for the old. Hunk headers and `\\ No newline` notes are not content."""
+    mark = "-" if removed else "+"
+    out = []
+    for line in _lf(patch).split("\n"):
+        if line.startswith("@@"):
+            out.append((_HUNK, False))        # the lines between two hunks are unseen: no comment spans them
+            continue
+        if line.startswith(("\\", "+++", "---")):
+            continue
+        if line.startswith(mark):
+            out.append((line[1:], True))
+        elif line.startswith(" ") or line == "":
+            out.append((line[1:], False))
+    return out
+
+
+def _jsonc_tokens(lines: list[tuple[str, bool]]) -> list[tuple[str, str, bool]]:
+    """`(kind, value, written)` tokens of JSONC text: `s` a string (escapes decoded), `p` one of `{}[]:,`, `w` a bare
+    word. Comments are skipped, and a string cut by the end of a hunk line ends there. Linear in the input."""
+    tokens: list[tuple[str, str, bool]] = []
+    in_block = False
+    for text, written in lines:
+        if text == _HUNK:
+            in_block = False
+            continue
+        i, n = 0, len(text)
+        while i < n and len(tokens) < _MAX_JSONC_TOKENS:
+            if in_block:
+                end = text.find("*/", i)
+                if end < 0:
+                    break
+                in_block, i = False, end + 2
+                continue
+            c = text[i]
+            if c == "/" and text.startswith("//", i):
+                break
+            if c == "/" and text.startswith("/*", i):
+                in_block, i = True, i + 2
+                continue
+            if c == '"':
+                j = i + 1
+                while j < n and text[j] != '"':
+                    j += 2 if text[j] == "\\" else 1
+                raw = text[i + 1:min(j, n)]
+                try:
+                    value = json.loads(f'"{raw}"')
+                except ValueError:
+                    value = raw
+                tokens.append(("s", value, written))
+                i = j + 1
+                continue
+            if c in "{}[]:,":
+                tokens.append(("p", c, written))
+                i += 1
+                continue
+            m = _JSONC_WORD_RE.match(text, i)
+            if m:
+                tokens.append(("w", m.group(0), written))
+                i = m.end()
+                continue
+            i += 1
+    return tokens
+
+
+def _pairs(tokens: list[tuple[str, str, bool]]) -> Iterator[tuple[int, str, tuple[str, str, bool]]]:
+    """`(index, key, value-token)` for each `"key": value` in the token stream."""
+    for i in range(len(tokens) - 2):
+        if tokens[i][0] == "s" and tokens[i + 1] == ("p", ":", tokens[i + 1][2]):
+            yield i, tokens[i][1], tokens[i + 2]
+
+
+def _object_span(tokens: list[tuple[str, str, bool]], i: int) -> tuple[int, int]:
+    """The token range of the object around index `i`, each way bounded by `_OBJECT_REACH`."""
+    depth, lo = 0, i
+    while lo > max(0, i - _OBJECT_REACH):
+        lo -= 1
+        kind, value, _ = tokens[lo]
+        if kind == "p" and value in "}]":
+            depth += 1
+        elif kind == "p" and value in "{[":
+            if depth == 0:
+                break
+            depth -= 1
+    depth, hi = 0, i
+    while hi < min(len(tokens) - 1, i + _OBJECT_REACH):
+        hi += 1
+        kind, value, _ = tokens[hi]
+        if kind == "p" and value in "{[":
+            depth += 1
+        elif kind == "p" and value in "}]":
+            if depth == 0:
+                break
+            depth -= 1
+    return lo, hi
+
+
+def _task_command(tokens: list[tuple[str, str, bool]], i: int) -> tuple[str, list[str], bool]:
+    """A VS Code task's command at the `command` key `i` (a string, or the `{"value": ...}` quoting form) and the
+    `args` of the same object, wherever in the object they sit; with whether the change wrote any of it."""
+    kind, value, written = tokens[i + 2]
+    if kind == "p" and value == "{":
+        for j in range(i + 3, min(len(tokens) - 2, i + 12)):
+            if tokens[j][:2] == ("s", "value") and tokens[j + 1][1] == ":" and tokens[j + 2][0] == "s":
+                value, written = tokens[j + 2][1], written or tokens[j + 2][2]
+                break
+        else:
+            return "", [], False
+    elif kind != "s":
+        return "", [], False
+    lo, hi = _object_span(tokens, i)
+    args: list[str] = []
+    depth = 0
+    for j in range(lo + 1, hi):
+        k, v, _ = tokens[j]
+        if k == "p" and v in "{[":
+            depth += 1
+        elif k == "p" and v in "}]":
+            depth -= 1
+        elif depth == 0 and k == "s" and v == "args" and j + 2 < hi and tokens[j + 2][1] == "[":
+            for m in range(j + 3, hi):
+                if tokens[m][1] == "]":
+                    break
+                if tokens[m][0] == "s":
+                    args.append(tokens[m][1])
+                    written = written or tokens[m][2]
+    return value, args, written or tokens[i][2]
+
+
+def _runtime(word: str) -> bool:
+    """A runtime's program name, as a shell resolves it: case-sensitive, except a Windows `.exe`."""
+    name = posixpath.basename(word)
+    return (name.lower() if name.lower().endswith(".exe") else name) in _RUNTIMES
+
+
+def _run_targets(command: str, args: list[str], depth: int = 0) -> Iterator[str]:
+    """The file each command of a command line runs: a command whose program is a runtime (after any `VAR=x` and
+    wrapper such as `npx`) hands it its first word that is not a flag (`-x`, or `/x` for `cmd` and `start`) and not
+    itself a runtime (`cmd /c node x.js`). A word holding a whole command (`bash -c "node x.js"`) is read as one.
+    Other commands of the line (`cp logo.png dist/`) and later words (an image a script is given) are arguments."""
+    segments = _RUN_SEGMENT_RE.split(command)
+    for n, segment in enumerate(segments):
+        words = [w.strip("'\"").replace("\\", "/") for w in segment.split()]
+        if n == len(segments) - 1:
+            words += [a.replace("\\", "/") for a in args]
+        while words and (_ENV_ASSIGN_RE.match(words[0]) or words[0].lower() in _RUN_WRAPPERS):
+            words.pop(0)
+        if not words or not _runtime(words[0]):
+            continue
+        slash_flags = posixpath.basename(words[0]).lower() in ("cmd", "cmd.exe", "start")
+        for w in words[1:]:
+            if not w or w.startswith("-") or (slash_flags and w.startswith("/") and len(w) <= 3):
+                continue
+            if _runtime(w):
+                slash_flags = posixpath.basename(w).lower() in ("cmd", "cmd.exe", "start")
+                continue
+            if " " in w.strip():
+                if depth < 2:
+                    yield from _run_targets(w, [], depth + 1)
+                break
+            for var in ("${workspaceFolder}/", "${workspaceRoot}/", "${fileWorkspaceFolder}/"):
+                w = w.replace(var, "")
+            yield w
+            break
+
+
+def _run_entry_hits(f: dict, added: frozenset[str], tokens: list[tuple[str, str, bool]], autorun: bool) -> list[IndicatorHit]:
+    """A `package.json` script or a VS Code task command (with its `args`) the change writes, that runs a file the
+    same change adds, or runs a font or image at all. A codegen script and its npm entry arriving together is
+    honest work, so the first is `medium` alone and `high` when the entry runs without anyone choosing to (an npm
+    lifecycle hook, a task in a file with a folder-open task) or when an existing script was rewritten to run the new
+    file. Handing a runtime a font or image is `asset-run-as-code`, `critical`, whatever adds the file."""
+    path = f["filename"]
+    npm = path.lower().endswith("package.json")
+    if npm:
+        base = posixpath.dirname(path)
+    else:
+        low = path.lower()
+        cut = low.rfind(".vscode/")
+        base = posixpath.dirname(path) if cut < 0 else path[:max(cut - 1, 0)]
+    removed_keys = set()
+    if npm:
+        removed_keys = {k for _, k, v in _pairs(_jsonc_tokens(_new_side(f["patch"], removed=True))) if v[0] == "s"}
+    hits: list[IndicatorHit] = []
+    entries = 0
+    for i, key, value in _pairs(tokens):
+        if (npm and value[0] != "s") or (not npm and key != "command"):
+            continue
+        entries += 1
+        if entries > _MAX_RUN_ENTRIES:
+            break
+        if npm:
+            command, args, written = value[1], [], value[2] or tokens[i][2]
+        else:
+            command, args, written = _task_command(tokens, i)
+        if not written or not command:
+            continue
+        evidence = f"{key[:60]}: {command[:120]}" + (f" {' '.join(args)[:80]}" if args else "")
+        for raw in islice(_run_targets(command, args), 8):
+            target = posixpath.normpath(posixpath.join(base, raw)).lstrip("/")
+            if target.lower().endswith(_ASSET_SUFFIXES):
+                hits.append(_hit("asset-run-as-code", "critical",
+                                 "runs a font or image file as a program (fake-asset loader)", evidence, location=path, form=path))
+            if target not in added:
+                continue
+            lifecycle = npm and key.lower() in _NPM_LIFECYCLE
+            rewritten = npm and key in removed_keys
+            hidden = lifecycle or (not npm and autorun)
+            title = ("an npm lifecycle hook runs a file this change adds" if lifecycle
+                     else "a task that runs on folder open runs a file this change adds" if hidden
+                     else "an existing script now runs a file this change adds first" if rewritten
+                     else "a run entry runs a file this change adds")
+            hits.append(_hit("run-entry-new-file", "high" if hidden or rewritten else "medium",
+                             f"{title} (`{target[:80]}`)", evidence, location=path, form=path))
+    return hits
+
+
+def _autorun_hits(path: str, tokens: list[tuple[str, str, bool]]) -> tuple[list[IndicatorHit], bool]:
+    """A folder-open task (`"runOn": "folderOpen"`) and automatic tasks switched on for the workspace
+    (`task.allowAutomaticTasks`, flat or nested under `"task"`). Returns the hits the change wrote, and whether the
+    file holds a folder-open task at all (written now or already there), which raises its run entries."""
+    hits: list[IndicatorHit] = []
+    present = False
+    for i, key, value in _pairs(tokens):
+        written = tokens[i][2] or value[2]
+        if key == "runOn" and value[0] == "s" and value[1].lower() == "folderopen":
+            present = True
+            if written:
+                hits.append(_hit("vscode-autorun", "high", "a VS Code task set to run when the folder opens",
+                                 f'"runOn": "{value[1]}"', location=path, form=path))
+        elif (key in ("task.allowAutomaticTasks", "allowAutomaticTasks") and written
+              and value[1].lower() in ("true", "on")):
+            hits.append(_hit("vscode-autorun", "high", "turns on VS Code's automatic tasks for this workspace",
+                             f'"{key}": {value[1]}', location=path, form=path))
+    return hits, present
+
+
+def _file_structure_hits(f: dict, added: frozenset[str]) -> list[IndicatorHit]:
+    path, patch, low = f["filename"], f["patch"], f["filename"].lower()
+    hits: list[IndicatorHit] = []
+    if low.endswith(_BINARY_EXTS):
+        side = [text for text, _ in _new_side(patch) if text and text != _HUNK]
+        lfs = bool(side) and side[0].startswith("version ") and all(_LFS_LINE_RE.fullmatch(t) for t in side)
+        if patch.strip() and not lfs:
+            hits.append(_hit("binary-name-holds-text", "high",
+                             f"a `{posixpath.splitext(low)[1]}` file whose content is text (a script under an asset's name)",
+                             _snip(_added_lines(patch), 0, 0, pad=160), location=path, form=path))
+        elif not patch.strip() and f["additions"] > 0:
+            hits.append(_hit("binary-name-holds-text", "high",
+                             f"a `{posixpath.splitext(low)[1]}` file counted in added TEXT lines (too large to show)",
+                             f"{f['additions']} added lines, no patch", location=path, form=path))
+    if low.endswith("package.json") or (_vscode_file(path) and low.endswith((".json", ".code-workspace"))):
+        tokens = _jsonc_tokens(_new_side(patch))
+        autorun = False
+        if _vscode_file(path):
+            found, autorun = _autorun_hits(path, tokens)
+            hits += found
+        hits += _run_entry_hits(f, added, tokens, autorun)
+    if _DEV_CONFIG_RE.search(path):
+        new = _added_lines(patch)
+        if _scan_string_array(new):
+            hits.append(_hit("obfuscated-dev-config", "critical",
+                             "machine-obfuscated JavaScript added to a config file that runs on lint, build or test",
+                             _snip(new, 0, 0, pad=160), location=path, form=path))
+    return hits
+
+
+def _added_lines(patch: str) -> str:
+    return "\n".join(text for text, written in _new_side(patch) if written)
+
+
+def scan_files(event: dict) -> list[IndicatorHit]:
+    """The file-structure rules over an event's file list. Host-side, like `scan_metadata`: deterministic and
+    side-effect-free. A rule that raises on one file is a `scanner-error` for that file; the rest still run."""
+    from .normalize import _files
+
+    files = _files(event)
+    added = frozenset(posixpath.normpath(f["filename"]) for f in files if f["status"] == "added")
+    deduped: dict[str, IndicatorHit] = {}
+    for f in files:
+        try:
+            found = _file_structure_hits(f, added)
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED, as `scan_indicators` does
+            found = [_hit("scanner-error", "high", "a file-structure rule raised on this file, so it was not fully scanned",
+                          f"_file_structure_hits: {type(exc).__name__}", location=f["filename"])]
+        for h in found:
+            keep_worse(deduped, h)
+    return list(deduped.values())
+
+
 def scan_change(event: dict) -> list[IndicatorHit]:
     """Everything an event's own content and structure show: the text rules over each file, the title, the
     body, the head branch and the author's/outsiders' comments (`scan_content`), plus the structural rules
-    (`scan_metadata`). Provenance is separate: it describes the account, not the change."""
+    (`scan_metadata`, `scan_files`). Provenance is separate: it describes the account, not the change."""
     deduped: dict[str, IndicatorHit] = {}
-    for h in scan_content(event) + scan_metadata(event):
+    for h in scan_content(event) + scan_metadata(event) + scan_files(event):
         keep_worse(deduped, h)
     return list(deduped.values())
 

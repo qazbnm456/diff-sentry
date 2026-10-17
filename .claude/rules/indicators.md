@@ -281,6 +281,63 @@ changes `command-substitution` in source code and restores the phrase in agent f
 - A planner re-scan of text that is not byte-identical to the baseline's window mints another id (a title is scanned
   with the author appended by the baseline), and the stricter baseline hit for a code file always stays in the union.
 
+## The file-structure rules (`scan_files`)
+
+A dev machine infected by a loader of the Contagious Interview / PolinRider family pushes its payload with ordinary
+work: obfuscated JavaScript appended to a config that runs on lint or build, a "font" that is a script, and a way to
+run it nobody types (a VS Code task that runs on folder open, an npm script now starting with `node <new file> &&`).
+`scan_files` reads what only the file list knows; `scan_change` runs it beside `scan_content` and `scan_metadata`.
+
+- **`package.json` and the VS Code files are read as JSONC tokens, never line by line** (`_jsonc_tokens` over the new
+  side of the patch, each token marked written or context). A comment between a key and its value, a value on the
+  next line, a `\u` escape, a one-line `"scripts": {...}`, a task's `args` array and `allowAutomaticTasks` nested
+  under `"task"` are ordinary spellings, and a line regex missed each of them. A hit needs a token the change wrote.
+- **It pairs a run entry with the change's file LIST, not with another file's text.** `run-entry-new-file` asks
+  whether a `package.json` script, or a VS Code task `command` with its `args`, runs a file whose status is `added`.
+  That is a structural fact, so it does not break "a paired rule only pairs within one file". A target resolves
+  against the `package.json` directory, and against the parent of the `.vscode` folder for a VS Code file.
+- **`run-entry-new-file` is `medium` alone**: a codegen script and its npm entry arrive together in honest work. It
+  is `high` for an npm lifecycle hook (`preinstall`, `install`, `postinstall`, `prepare`, `prepublish`,
+  `prepublishOnly`, `prepack`, `postpack`), for a task in a file that holds a folder-open task (written now or
+  already there), and for an existing script rewritten to run the new file (the key also sits on a removed line).
+- **What a run entry runs** (`_run_targets`): each command of the line (split at `;`, `&`, `|`, parentheses) whose
+  program, after any `VAR=x` and wrapper (`npx`, `env`, `command`, ...), is a runtime (`node`, `bun`, `deno`, `tsx`,
+  `python`, `bash`, `sh`, `pwsh`, `cmd`, ...; case-sensitive, except a Windows `.exe`) runs its first word that is not
+  a flag (`-x`, or `/x` for `cmd` and `start`) and not itself a runtime (`cmd /c node x.js`); a word holding a whole
+  command (`bash -c "node x.js"`) is read as one. Known structural gaps, each still caught by the text rule when
+  the words share one string: `start "" node x` (the empty title), `deno run x` / `bun run x` (the subcommand), and
+  a flag that takes a value (`node --stack-size 4000 x`). Other commands of the line (`cp logo.png dist/`)
+  and later words (the image a script is given) are arguments. A VS Code task's `command` may be a string or the
+  `{"value": ...}` quoting form, and its `args` are read wherever they sit in the same object.
+- **`asset-run-as-code` is `critical`**: a runtime handed a font or image file, as a text rule (`node x.woff2` in any
+  text, the planner's scan included; the runtime word is lower case and the extension must end the path) and as a
+  structural one over the run entries above.
+- **`vscode-autorun` is `high`**: a written `"runOn": "folderOpen"` in a `.vscode/` file or a `.code-workspace`, and a
+  written `task.allowAutomaticTasks` set to `true` or `"on"`, which turns automatic tasks on for the workspace (VS
+  Code planned to make `off` the default). A maintainer adding a folder-open watcher task is an accepted
+  over-alert: the setting runs code on open, the campaign's own trigger.
+- **`binary-name-holds-text` is `high`**: a text patch under a font, image, archive or native-binary name, or added
+  lines with no patch (a text diff too large to show). A real file of those formats has a NUL in its first bytes, so
+  GitHub sends no patch and counts no lines. A Git LFS pointer is exempt only when its whole new side is pointer
+  keys (`version` first, then `oid sha256:<64 hex>`, `size <n>`), so an update that rewrites only `oid` and `size`
+  stays exempt and a script with a pointer line inside does not. `.svg` is text by nature and `.pdf` is often stored as
+  text, so neither is on the list.
+- **`obfuscated-dev-config` is `critical`**: `obfuscated-string-array` in the ADDED lines of a config a developer's
+  tools execute (`eslint`, `vite`, `vitest`, `webpack`, `rollup`, `next`, `nuxt`, `tailwind`, `postcss`, `babel`, `jest`,
+  `playwright`, `prettier`, `hardhat`, `commitlint`, `stylelint` configs and their `rc` files, `truffle-config`,
+  `gatsby-*`, `.mocharc`, gulpfile, Gruntfile, `karma.conf`). Removing it is cleanup.
+- **The token walks are bounded**: a comment never spans two hunks (the lines between them are unseen), and a
+  `command`'s object is searched at most `_OBJECT_REACH` tokens each way, for at most `_MAX_RUN_ENTRIES` entries a
+  file.
+- **A structural hit's id carries its path** (`form=path`): the same setting in `tasks.json` and `settings.json` is
+  two findings, not one deduped into the other.
+- **`obfuscated-string-array` (`high`) runs everywhere**: javascript-obfuscator's rotation loop `while(!![])` with the
+  push/shift rotation or 20 hex-indexed decoder calls. It needs no `_0x` names, which a mangled-name setting removes
+  (`obfuscated-identifiers` still reads those). Hand-rewritten output (`while(!0)`) is a known gap.
+- **Measured:** over 857 live changes (6,858 files from four large repositories) the rules fired only on the one
+  change they were written for, and the string-array signature appeared in none of 3,553 JavaScript files over 30 KB
+  (bundles and minified libraries among them). Terser and esbuild write `!0` and `for(;;)`, never `!![]`.
+
 ## What the kind of a segment changes
 
 `_scope_to_file` runs on every segment of an event but the branch name (`scan_content`) and on every file of a diff

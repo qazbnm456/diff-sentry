@@ -797,6 +797,133 @@
           }
         ]
       }
+    },
+    {
+      "name": "dev_machine_loader_fake_font_autorun",
+      "kind": "malicious",
+      "family": "dev-machine-loader",
+      "key_rule": "asset-run-as-code",
+      "expected_signal": true,
+      "expected_rules": [
+        "asset-run-as-code",
+        "binary-name-holds-text",
+        "diff-viewport-evasion",
+        "obfuscated-dev-config",
+        "obfuscated-string-array",
+        "run-entry-new-file",
+        "vscode-autorun"
+      ],
+      "event": {
+        "repo": "acme/editor",
+        "kind": "pull_request",
+        "number": 330,
+        "author": "dev",
+        "title": "Add domain allow-list policy",
+        "body": "Implements the policy and its tests.",
+        "files": [
+          {
+            "filename": "test/sanity/package.json",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0,
+            "patch": "@@ -6,3 +6,3 @@\n-    \"start\": \"node ./out/index.js\"\n+    \"start\": \"node api.js && node ./out/index.js\""
+          },
+          {
+            "filename": "test/sanity/api.js",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "patch": "@@ -0,0 +1,2 @@\n+export const api = {};\n+                                                                                                                                                                                                                                                                                                            (function(a,b){var c=d;while(!![]){try{var e=parseInt(c(0x1a))/0x1;if(e===b)break;else a['push'](a['shift']());}catch(f){a['push'](a['shift']());}}}(g,0x3f));"
+          },
+          {
+            "filename": "eslint.config.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0,
+            "patch": "@@ -10,2 +10,3 @@\n export default config;\n+(function(a,b){var c=d;while(!![]){try{var e=parseInt(c(0x1a))/0x1;if(e===b)break;else a['push'](a['shift']());}catch(f){a['push'](a['shift']());}}}(g,0x3f));"
+          },
+          {
+            "filename": "public/fonts/fa-brands-400.ttf",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "patch": "@@ -0,0 +1 @@\n+(function(a,b){var c=d;while(!![]){try{var e=parseInt(c(0x1a))/0x1;if(e===b)break;else a['push'](a['shift']());}catch(f){a['push'](a['shift']());}}}(g,0x3f));"
+          },
+          {
+            "filename": ".vscode/tasks.json",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0,
+            "patch": "@@ -1,2 +1,6 @@\n+  {\"label\": \"eslint-check\", \"type\": \"shell\",\n+   \"command\": \"node ./public/fonts/fa-brands-400.ttf\",\n+   \"runOptions\": {\"runOn\": \"folderOpen\"}}"
+          },
+          {
+            "filename": ".gitignore",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0,
+            "patch": "@@ -46,2 +46,3 @@\n dist\n+config.bat"
+          }
+        ]
+      }
+    },
+    {
+      "name": "legit_codegen_script_and_entry",
+      "kind": "benign",
+      "family": "legit-codegen-script",
+      "key_rule": "run-entry-new-file",
+      "expected_signal": false,
+      "expected_rules": [
+        "run-entry-new-file"
+      ],
+      "event": {
+        "repo": "acme/editor",
+        "kind": "pull_request",
+        "number": 331,
+        "author": "dev",
+        "title": "Generate the icon manifest at build time",
+        "body": "Implements the policy and its tests.",
+        "files": [
+          {
+            "filename": "package.json",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0,
+            "patch": "@@ -8,3 +8,4 @@\n     \"build\": \"tsc\",\n+    \"gen:icons\": \"node scripts/gen-icons.mjs\","
+          },
+          {
+            "filename": "scripts/gen-icons.mjs",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "patch": "@@ -0,0 +1,2 @@\n+import fs from 'node:fs';\n+fs.writeFileSync('icons.json', '[]');"
+          }
+        ]
+      }
+    },
+    {
+      "name": "legit_lfs_pointer_font",
+      "kind": "benign",
+      "family": "legit-lfs-asset",
+      "key_rule": "binary-name-holds-text",
+      "expected_signal": false,
+      "expected_rules": [],
+      "event": {
+        "repo": "acme/editor",
+        "kind": "pull_request",
+        "number": 332,
+        "author": "dev",
+        "title": "Track fonts with Git LFS",
+        "body": "Implements the policy and its tests.",
+        "files": [
+          {
+            "filename": "public/fonts/Inter.woff2",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "patch": "@@ -0,0 +1,3 @@\n+version https://git-lfs.github.com/spec/v1\n+oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n+size 48212"
+          }
+        ]
+      }
     }
   ]
 }
