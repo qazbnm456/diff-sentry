@@ -376,3 +376,50 @@ def test_a_runtime_behind_a_runtime(task):
 def test_a_capitalised_word_is_not_a_runtime():
     patch = '@@ -1 +1 @@\n+  "description": "Node logo.png generator",'
     assert not _rules(scan_files(_event(("package.json", "modified", patch))), "asset-run-as-code")
+
+
+# ── what the live watchlist showed: refactoring an existing script is not the payload shape ────────
+
+@pytest.mark.parametrize(("old", "new"), [
+    ('"build-fast": "node build/build-fast.js"', '"build-fast": "node build/next/build-fast.ts"'),            # repointed
+    ('"check": "node build/checker/a.ts"', '"check": "node build/checker/a.ts && node build/checker/b.ts"'),  # appended
+])
+def test_refactoring_an_existing_script_stays_medium(old, new):
+    target = "build/next/build-fast.ts" if "build-fast" in new else "build/checker/b.ts"
+    hits = scan_files(_event(("package.json", "modified", _pkg(f"-    {old},", f"+    {new},")),
+                             (target, "added", "@@ -0,0 +1 @@\n+;")))
+    assert _rules(hits) == [("run-entry-new-file", "medium", "package.json")]
+
+
+@pytest.mark.parametrize("sep", ["&&", ";", "||", "&"])
+def test_a_new_file_in_front_of_the_old_command_is_high(sep):
+    hits = scan_files(_event(
+        ("package.json", "modified", _pkg('-    "test": "jest --ci"', f'+    "test": "node setup.js {sep} jest --ci"')),
+        ("setup.js", "added", "@@ -0,0 +1 @@\n+;")))
+    assert _rules(hits) == [("run-entry-new-file", "high", "package.json")]
+
+
+def test_a_new_file_in_front_of_an_edited_command_is_medium():
+    # The old command did not survive unchanged: an ordinary rewrite, not a payload riding it.
+    hits = scan_files(_event(
+        ("package.json", "modified", _pkg('-    "test": "jest"', '+    "test": "node setup.js && jest --ci"')),
+        ("setup.js", "added", "@@ -0,0 +1 @@\n+;")))
+    assert _rules(hits) == [("run-entry-new-file", "medium", "package.json")]
+
+
+def test_a_key_that_is_also_a_dependency_keeps_its_script_value():
+    # `jest` names a script and a devDependency; the second old value must not hide the first.
+    patch = ('@@ -5,3 +5,3 @@\n-    "jest": "jest --ci",\n+    "jest": "node x.js && jest --ci",\n'
+             '@@ -30,3 +30,3 @@\n-    "jest": "^29.0.0",\n+    "jest": "^29.1.0",')
+    hits = scan_files(_event(("package.json", "modified", patch), ("x.js", "added", "@@ -0,0 +1 @@\n+;")))
+    assert _rules(hits) == [("run-entry-new-file", "high", "package.json")]
+
+
+def test_many_old_values_stay_fast():
+    import time
+
+    removed = "".join(f'-    "x": "v{i}",\n' for i in range(15_000))
+    added = "".join('+    "x": "node a.js && node a.js && node a.js",\n' for _ in range(500))
+    start = time.perf_counter()
+    scan_files(_event(("package.json", "modified", "@@ -1 +1 @@\n" + removed + added), ("a.js", "added", "+;")))
+    assert time.perf_counter() - start < 2.0

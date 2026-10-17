@@ -299,7 +299,10 @@ run it nobody types (a VS Code task that runs on folder open, an npm script now 
 - **`run-entry-new-file` is `medium` alone**: a codegen script and its npm entry arrive together in honest work. It
   is `high` for an npm lifecycle hook (`preinstall`, `install`, `postinstall`, `prepare`, `prepublish`,
   `prepublishOnly`, `prepack`, `postpack`), for a task in a file that holds a folder-open task (written now or
-  already there), and for an existing script rewritten to run the new file (the key also sits on a removed line).
+  already there), and when the new file is put in front of an existing script left unchanged behind it
+  (`node api.js && <the old command>`, the way a payload rides an ordinary command). Repointing a script at a new
+  file or appending a step after the old command is ordinary refactoring and stays `medium`: on the live watchlist
+  a fork-sync PR of upstream refactors did both.
 - **What a run entry runs** (`_run_targets`): each command of the line (split at `;`, `&`, `|`, parentheses) whose
   program, after any `VAR=x` and wrapper (`npx`, `env`, `command`, ...), is a runtime (`node`, `bun`, `deno`, `tsx`,
   `python`, `bash`, `sh`, `pwsh`, `cmd`, ...; case-sensitive, except a Windows `.exe`) runs its first word that is not

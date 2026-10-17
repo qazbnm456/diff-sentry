@@ -30,7 +30,7 @@ import posixpath
 import re
 import warnings
 from collections import Counter, deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from functools import partial
 from itertools import islice
 
@@ -3447,12 +3447,28 @@ def _run_targets(command: str, args: list[str], depth: int = 0) -> Iterator[str]
             break
 
 
+def _prepended_targets(command: str, olds: Iterable[str]) -> set[str]:
+    """What `command` runs IN FRONT of an old value it keeps unchanged behind it (`node api.js && <old>`): the way a
+    payload rides an existing script. Repointing a script at a new file, or appending a step after the old command,
+    is ordinary refactoring and runs nothing in front."""
+    new = command.strip()
+    out: set[str] = set()
+    for old in olds:
+        old = old.strip()
+        if not old or new == old or not new.endswith(old):
+            continue
+        head = new[: len(new) - len(old)].rstrip()
+        if head.endswith(("&&", ";", "||", "&", "|")):
+            out |= set(islice(_run_targets(head, []), 8))
+    return out
+
+
 def _run_entry_hits(f: dict, added: frozenset[str], tokens: list[tuple[str, str, bool]], autorun: bool) -> list[IndicatorHit]:
     """A `package.json` script or a VS Code task command (with its `args`) the change writes, that runs a file the
     same change adds, or runs a font or image at all. A codegen script and its npm entry arriving together is
     honest work, so the first is `medium` alone and `high` when the entry runs without anyone choosing to (an npm
-    lifecycle hook, a task in a file with a folder-open task) or when an existing script was rewritten to run the new
-    file. Handing a runtime a font or image is `asset-run-as-code`, `critical`, whatever adds the file."""
+    lifecycle hook, a task in a file with a folder-open task) or when the new file is put in front of an existing
+    script left unchanged behind it. Handing a runtime a font or image is `asset-run-as-code`, `critical`, whatever adds the file."""
     path = f["filename"]
     npm = path.lower().endswith("package.json")
     if npm:
@@ -3461,9 +3477,11 @@ def _run_entry_hits(f: dict, added: frozenset[str], tokens: list[tuple[str, str,
         low = path.lower()
         cut = low.rfind(".vscode/")
         base = posixpath.dirname(path) if cut < 0 else path[:max(cut - 1, 0)]
-    removed_keys = set()
+    old_values: dict[str, set[str]] = {}       # every old value per key: `"jest"` is a script and a dependency
     if npm:
-        removed_keys = {k for _, k, v in _pairs(_jsonc_tokens(_new_side(f["patch"], removed=True))) if v[0] == "s"}
+        for _, k, v in _pairs(_jsonc_tokens(_new_side(f["patch"], removed=True))):
+            if v[0] == "s":
+                old_values.setdefault(k, set()).add(v[1])
     hits: list[IndicatorHit] = []
     entries = 0
     for i, key, value in _pairs(tokens):
@@ -3479,6 +3497,7 @@ def _run_entry_hits(f: dict, added: frozenset[str], tokens: list[tuple[str, str,
         if not written or not command:
             continue
         evidence = f"{key[:60]}: {command[:120]}" + (f" {' '.join(args)[:80]}" if args else "")
+        in_front = _prepended_targets(command, old_values.get(key, ())) if npm else set()
         for raw in islice(_run_targets(command, args), 8):
             target = posixpath.normpath(posixpath.join(base, raw)).lstrip("/")
             if target.lower().endswith(_ASSET_SUFFIXES):
@@ -3487,11 +3506,11 @@ def _run_entry_hits(f: dict, added: frozenset[str], tokens: list[tuple[str, str,
             if target not in added:
                 continue
             lifecycle = npm and key.lower() in _NPM_LIFECYCLE
-            rewritten = npm and key in removed_keys
+            rewritten = raw in in_front
             hidden = lifecycle or (not npm and autorun)
             title = ("an npm lifecycle hook runs a file this change adds" if lifecycle
                      else "a task that runs on folder open runs a file this change adds" if hidden
-                     else "an existing script now runs a file this change adds first" if rewritten
+                     else "a file this change adds is put in front of an existing script" if rewritten
                      else "a run entry runs a file this change adds")
             hits.append(_hit("run-entry-new-file", "high" if hidden or rewritten else "medium",
                              f"{title} (`{target[:80]}`)", evidence, location=path, form=path))
