@@ -1,7 +1,7 @@
 """Map a diff-sentry trace event → a public SSE event (the single source of truth for the streamed
 event surface). Pure function, no web deps — unit-tested independently of the server.
 
-A trace event is `{type, step_id, ts, payload}` (rlm-harness's frozen trace/v1). We surface only the events
+A trace event is `{type, step_id, ts, payload}` (rlm-harness's trace, v1 or v2). We surface only the events
 a UI needs and rename them to a stable `detection.<noun>.<verb>` vocabulary (OpenAI-Responses-flavored).
 Unknown / internal events return None (skipped). The full structured result is NOT streamed — the client
 GETs `/v1/runs/{run_id}` after `detection.run.completed`.

@@ -8,7 +8,8 @@
   SSE (the `TraceRecorder`'s `on_event` observer; see `live.py`), ending with `detection.run.completed`
   carrying the durable `DetectionResponse`. SIEM emission is OFF (a viewer must not POST to a SIEM).
 
-The console reads diff-sentry's trace/v1 + DetectionResponse contract; it re-implements no harness logic.
+The console reads diff-sentry's trace (v1 or v2) + DetectionResponse contract; it re-implements no harness
+logic.
 NO cancel/Stop in v1 (a classification is one short change): a terminal Ctrl+C makes uvicorn wait for the
 live SSE to close (the run to finish) before exiting — set `--timeout-graceful-shutdown` as a bound.
 """

@@ -184,16 +184,16 @@ views by triage:
   client-side stream failure renders a `stream_error` refusal. Never blank.
 
 ### 5.7 Trajectory drawer (bottom sheet)
-Replays a finished run turn by turn from `GET /v1/runs/{id}/iterations`, opened by a `▤ Trajectory`
-handle once a run is on screen. It reads rlm-harness's `trace/v1` contract, which is additive-only within
-v1, so missing fields degrade instead of breaking. Parts: a tool timeline (segment width ∝ `duration_s`,
-colored by family scan/classify/analyst/fetch/skill, plus a generic family for other tools), a left nav
-of turns with a search box, a detail pane (Init → the change + instructions + model roles + budgets; a
-turn → reasoning + REPL; a tool → its structured content: scan hits, classify verdict, analyst Q→A, fetch
-head), and a replay transport `⏮ ▶/⏸ ⏭ N×` (1× to 64×; the pure decisions live in `replay-core.js`,
-unit-tested). Timing is honest about its two clocks: when the trace has live per-turn stamps
-(`per_turn_timing`) the drawer shows per-turn durations; otherwise it says so in an info note and
-replays each turn at a nominal pace.
+Replays a finished run turn by turn from `GET /v1/runs/{id}/iterations`, opened by a `▤ Trajectory` handle
+once a run is on screen. It reads rlm-harness's trace contract (`trace/v1`, or `v2`, which only moved
+`api_rounds`, a payload the drawer does not read), so missing fields degrade instead of breaking. Parts: a
+tool timeline (segment width ∝ `duration_s`, colored by family scan/classify/analyst/fetch/skill, plus a
+generic family for other tools), a left nav of turns with a search box, a detail pane (Init → the change +
+instructions + model roles + budgets; a turn → reasoning + REPL; a tool → its structured content: scan
+hits, classify verdict, analyst Q→A, fetch head), and a replay transport `⏮ ▶/⏸ ⏭ N×` (1× to 64×; the pure
+decisions live in `replay-core.js`, unit-tested). Timing is honest about its two clocks: when the trace
+has live per-turn stamps (`per_turn_timing`) the drawer shows per-turn durations; otherwise it says so in
+an info note and replays each turn at a nominal pace.
 
 ## 6. Depth / motion
 2px geometry (radius 2px for chips, buttons, and panels; 3px for the card). Depth comes from surface steps

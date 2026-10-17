@@ -93,6 +93,10 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
   `tool_call` in the trajectory. The analyst intercept (`intercept_sub_lm`) is tracing-only, zero
   transforms. Swapping the backend touches only `classify_backend` / `_selfclassify_chat`. The planner
   passes distilled findings, never the whole diff.
+- **Sandboxed code builds no sub-agents.** From dspy 3.4.1 the sandbox can construct dspy programs that run on
+  the host, call the analyst, can drive the task's tools, and record as one `sub_call` with no inner turns. The
+  kit's default allows it, so `setup` passes `sandbox_sub_agents=False` explicitly, and production never injects
+  an interpreter (which would bypass it); `test_program_offers_no_sub_agents` holds the behaviour.
 - **GitHub ingest, monitoring, and SIEM emission are host-side plumbing, never planner tools.** `ingest.py`
   shells out to `gh` host-side (transport injectable); `emit.emit_signal` POSTs and never raises; `watch`,
   `actors` and `snapshot` poll, remember, and archive outside the trajectory. Only choices the policy makes

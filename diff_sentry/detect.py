@@ -156,6 +156,10 @@ def setup(config: DetectConfig) -> DetectConfig:
             max_output_chars=config.max_output_chars,
             # ONE attempt, no whole-RLM retry: max_iterations is a HARD budget, never multiplied.
             max_retries=1,
+            # Sandboxed code never builds dspy sub-agents (dspy >= 3.4.1 offers it): they run on the host,
+            # call the analyst with the task's tools, and record as one sub_call with no inner turns, which
+            # would break one change = one trajectory and the second judgement being a TOOL.
+            sandbox_sub_agents=False,
         ),
         main_lm=main_lm,
         sub_lm=sub_lm,

@@ -109,6 +109,37 @@ def test_setup_passes_role_lm_kwargs_through():
     assert get_config().sub_lm_kwargs is None
 
 
+def test_setup_turns_sandbox_sub_agents_off():
+    from rlm_harness import get_config
+
+    from diff_sentry.detect import setup
+
+    # A sub-agent built in the sandbox runs on the host and leaves no inner turns in the trace.
+    setup(DetectConfig(main_model="x", sub_model="x", interpreter="mock", classifier_model="x"))
+    assert get_config().sandbox_sub_agents is False
+
+
+def test_program_offers_no_sub_agents():
+    """The behaviour behind the flag: on the interpreter the program runs on, dspy's sub-agent facade fails to
+    install, so its host tools are dropped and the prompt gets no sub-agent paragraph. Reaches into dspy's
+    RLM internals on purpose: if they move, this must be re-checked, not deleted."""
+    from dspy.predict.rlm import _LLMCallBudget
+
+    from diff_sentry.detect import setup
+
+    cfg = _cfg()
+    setup(cfg)
+    task = ClassifyChange(config=cfg)
+    rlm = task._build_rlm()
+    try:
+        repl = rlm._interpreter_factory()
+        rules = rlm._setup_facade(repl, _LLMCallBudget(8), rlm._interpreter_factory)
+        assert rules == ""
+        assert not any(name.startswith("__dspy") for name in repl.tools)
+    finally:
+        task._teardown_interpreter()
+
+
 def test_setup_refuses_a_kit_owned_key():
     from diff_sentry.detect import setup
 

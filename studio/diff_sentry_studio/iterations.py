@@ -11,7 +11,7 @@ consecutive events is the only signal of where the time went).
 
 `cited_unknown_ids` reconstructs the fabrication tell — indicator ids the planner CITED that match no
 recorded hit — from the trace. `assemble.AssembledVerdict` carries it, but `DetectionResponse` does not,
-so the studio re-derives it here (pure over the frozen trace/v1 contract; works replay-only, no
+so the studio re-derives it here (pure over the trace contract, v1 or v2; works replay-only, no
 diff_sentry import). This mirrors `assemble.assemble_verdict` (the union is baseline ∪ scan hits).
 """
 
