@@ -5,6 +5,8 @@ network/Deno. No forward() call (that needs a live model + classifier endpoint).
 
 from __future__ import annotations
 
+import pytest
+
 from diff_sentry.config import DetectConfig
 from diff_sentry.detect import INSTRUCTIONS, ClassifyChange
 from diff_sentry.schema import ChangeVerdict
@@ -93,6 +95,27 @@ def test_setup_passes_max_output_chars_through():
     setup(DetectConfig(main_model="x", sub_model="x", interpreter="mock", classifier_model="x",
                        max_output_chars=25_000))
     assert get_config().max_output_chars == 25_000
+
+
+def test_setup_passes_role_lm_kwargs_through():
+    from rlm_harness import get_config
+
+    from diff_sentry.detect import setup
+
+    budget = {"extra_body": {"thinking_token_budget": 8192}}
+    setup(DetectConfig(main_model="x", sub_model="x", interpreter="mock", classifier_model="x",
+                       planner_lm_kwargs=budget))
+    assert get_config().main_lm_kwargs == budget
+    assert get_config().sub_lm_kwargs is None
+
+
+def test_setup_refuses_a_kit_owned_key():
+    from diff_sentry.detect import setup
+
+    # The kit records nothing for these, so an override would leave a trace that misreports the run.
+    with pytest.raises(ValueError, match="model"):
+        setup(DetectConfig(main_model="x", sub_model="x", interpreter="mock", classifier_model="x",
+                           planner_lm_kwargs={"model": "elsewhere"}))
 
 
 def test_from_env_reads_roles_and_knobs(monkeypatch):

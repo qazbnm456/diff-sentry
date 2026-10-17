@@ -13,6 +13,7 @@ planner, schema, assemble, or export.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 
@@ -44,6 +45,21 @@ def _env_bool(name: str, default: bool) -> bool:
     return default if raw is None else raw.strip().lower() in _TRUTHY
 
 
+def _env_lm_kwargs(name: str) -> dict | None:
+    """A role's extra request parameters, a JSON object (unset or blank -> None). Malformed input fails
+    here, naming the variable, rather than as a run that ignored it."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} must be a JSON object: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a JSON object, got {type(value).__name__}")
+    return value
+
+
 @dataclass(frozen=True)
 class DetectConfig:
     # Planner (main) + analyst (sub), sharing one OpenAI-compatible proxy. No model name is assumed —
@@ -71,6 +87,11 @@ class DetectConfig:
     adapter: str = "json"
     # Generous, NOT None: a reasoning planner truncated before its answer returns empty content.
     planner_max_tokens: int | None = 16384
+    # Extra request parameters per role, passed to rlm-harness as-is (`main_lm_kwargs` / `sub_lm_kwargs`).
+    # A key under `extra_body` goes raw into the request, e.g. a vLLM `thinking_token_budget` that keeps a
+    # reasoning planner from thinking through the whole `planner_max_tokens` and answering nothing.
+    planner_lm_kwargs: dict | None = None
+    analyst_lm_kwargs: dict | None = None
     # HARD ceiling on the single RLM episode. No outer multi-run loop (max_retries=1) — one change =
     # one trajectory, so the trace stays valid training data. A failed run is INFRA, not a schema bug:
     # a non-retryable LM error escapes as the raw dspy.LMError, the rest as RLMTaskError.
@@ -146,6 +167,17 @@ class DetectConfig:
                 "DS_CLASSIFIER_BASE_URL / DS_CLASSIFIER_API_KEY if it is a separate box). See .env.example."
             )
         _pmt = os.getenv("DS_PLANNER_MAX_TOKENS")
+        planner_kw, analyst_kw = _env_lm_kwargs("DS_ROOT_LM_KWARGS"), _env_lm_kwargs("DS_SUB_LM_KWARGS")
+        # The kit refuses the keys it owns (model, endpoint, timeout) when `setup` builds its config; check
+        # here so a bad value stops the process instead of failing every run (dspy-free import).
+        from rlm_harness.config import RLMConfig
+
+        for name, field, kw in (("DS_ROOT_LM_KWARGS", "main_lm_kwargs", planner_kw),
+                                ("DS_SUB_LM_KWARGS", "sub_lm_kwargs", analyst_kw)):
+            try:
+                RLMConfig(main_model=planner, sub_model=analyst, **{field: kw})
+            except ValueError as exc:
+                raise ValueError(f"{name}: {exc}") from exc
         return cls(
             main_model=planner,
             sub_model=analyst,
@@ -165,6 +197,8 @@ class DetectConfig:
             observe=_env_bool("DS_OBSERVE", False),
             adapter=os.getenv("DS_ADAPTER", "json"),
             planner_max_tokens=int(_pmt) if _pmt and _pmt.strip() else 16384,
+            planner_lm_kwargs=planner_kw,
+            analyst_lm_kwargs=analyst_kw,
             max_iterations=int(os.getenv("DS_MAX_ITERATIONS", "25")),
             max_llm_calls=int(os.getenv("DS_MAX_LLM_CALLS", "8")),
             max_output_chars=int(os.getenv("DS_MAX_OUTPUT_CHARS", "10000")),

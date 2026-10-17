@@ -13,6 +13,7 @@ from diff_sentry.config import DetectConfig
 # Every DS_* var from_env reads — cleared before each test so ambient env can't leak in.
 _DS_ENV = (
     "DS_ROOT_LM", "DS_SUB_LM", "DS_BASE_URL", "DS_API_KEY", "DS_CLASSIFIER_LM", "DS_PLANNER_MAX_TOKENS",
+    "DS_ROOT_LM_KWARGS", "DS_SUB_LM_KWARGS",
     "DS_CLASSIFY_BACKEND", "DS_CLASSIFIER_BASE_URL", "DS_CLASSIFIER_API_KEY", "DS_CLASSIFIER_SYSTEM_PROMPT",
     "DS_CLASSIFIER_TIMEOUT", "DS_CLASSIFIER_MAX_TOKENS", "DS_CLASSIFIER_TRANSIENT_RETRIES",
     "DS_CLASSIFIER_CIRCUIT_BREAK", "DS_INTERPRETER", "DS_OBSERVE", "DS_ADAPTER", "DS_MAX_ITERATIONS",
@@ -66,6 +67,42 @@ def test_from_env_parses_knobs(clean_env):
     assert cfg.fetch_allow_cidrs == ("10.0.0.0/8", "192.168.0.0/16")
     assert cfg.max_iterations == 40
     assert cfg.enable_skills is False
+
+
+def test_role_lm_kwargs_default_unset(clean_env):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv("DS_SUB_LM_KWARGS", "  ")                 # blank reads as unset
+    cfg = DetectConfig.from_env()
+    assert cfg.planner_lm_kwargs is None and cfg.analyst_lm_kwargs is None
+
+
+def test_role_lm_kwargs_parse_per_role(clean_env):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv("DS_ROOT_LM_KWARGS", '{"extra_body": {"thinking_token_budget": 8192}}')
+    cfg = DetectConfig.from_env()
+    assert cfg.planner_lm_kwargs == {"extra_body": {"thinking_token_budget": 8192}}
+    assert cfg.analyst_lm_kwargs is None                     # one role's parameters never reach the other
+
+
+@pytest.mark.parametrize("raw", ["{not json", "[1, 2]", '"budget"'])
+def test_role_lm_kwargs_malformed_names_the_variable(clean_env, raw):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv("DS_SUB_LM_KWARGS", raw)
+    with pytest.raises(ValueError, match="DS_SUB_LM_KWARGS"):
+        DetectConfig.from_env()
+
+
+@pytest.mark.parametrize("var", ["DS_ROOT_LM_KWARGS", "DS_SUB_LM_KWARGS"])
+def test_role_lm_kwargs_kit_owned_key_fails_at_parse(clean_env, var):
+    # Caught at setup() instead, every run would fail and a watcher would bury its whole queue.
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv(var, '{"timeout": 600}')
+    with pytest.raises(ValueError, match=var):
+        DetectConfig.from_env()
 
 
 def test_post_init_rejects_unwired_backend():

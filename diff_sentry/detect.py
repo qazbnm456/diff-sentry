@@ -149,6 +149,8 @@ def setup(config: DetectConfig) -> DetectConfig:
             observe=config.observe,
             adapter=config.adapter,
             max_tokens=config.planner_max_tokens,
+            main_lm_kwargs=config.planner_lm_kwargs,
+            sub_lm_kwargs=config.analyst_lm_kwargs,
             max_iterations=config.max_iterations,
             max_llm_calls=config.max_llm_calls,
             max_output_chars=config.max_output_chars,
