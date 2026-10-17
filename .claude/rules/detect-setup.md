@@ -18,11 +18,13 @@ paths:
 - **An empty answer at the cap is a planner that thought too long, not one that cannot follow the format.**
   A reasoning planner whose call ends `finish_reason=length` with empty content fails the run with
   `AdapterParseError` (the "LM Response" quoted is its promoted reasoning, or `{}`), which reads like a
-  format failure; the raw call's `finish_reason` tells them apart. The fix is a thinking budget below `DS_PLANNER_MAX_TOKENS`
-  through `DS_ROOT_LM_KWARGS` (passed to rlm-harness's `main_lm_kwargs`), never a whole-run retry or a
-  different adapter. `from_env` refuses the keys the kit owns (model, endpoint, timeout), so a bad value
-  stops the process rather than failing every run. `DS_SUB_LM_KWARGS` reaches the analyst, never the
-  classifier, which builds its own request.
+  format failure; the raw call's `finish_reason` tells them apart. The fix is a thinking budget below
+  `DS_PLANNER_MAX_TOKENS` through `DS_ROOT_LM_KWARGS`, never a whole-run retry or a different adapter.
+- **`DS_ROOT_LM_KWARGS` / `DS_SUB_LM_KWARGS` are aliases of rlm-harness's `RLM_MAIN_LM_KWARGS` /
+  `RLM_SUB_LM_KWARGS`.** `setup` builds the kit's config itself and never calls the kit's `from_env`, the only
+  reader of those two; `DetectConfig.from_env` reads both names and refuses them set to different values. It
+  also refuses the keys the kit owns (model, endpoint, timeout), so a bad value stops the process rather than
+  failing every run. The analyst's parameters never reach the classifier, which builds its own request.
 - **Subscription auth is a lazy, opt-in branch.** A role whose model is `claude-agent-sdk/<id>` runs on
   rlm-harness's `ClaudeAgentLM`, imported only inside `detect._maybe_subscription_lm` and never from
   `__init__.py`, so `import diff_sentry` stays dspy-free and a proxy-only install never touches the SDK.

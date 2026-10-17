@@ -13,7 +13,7 @@ from diff_sentry.config import DetectConfig
 # Every DS_* var from_env reads — cleared before each test so ambient env can't leak in.
 _DS_ENV = (
     "DS_ROOT_LM", "DS_SUB_LM", "DS_BASE_URL", "DS_API_KEY", "DS_CLASSIFIER_LM", "DS_PLANNER_MAX_TOKENS",
-    "DS_ROOT_LM_KWARGS", "DS_SUB_LM_KWARGS",
+    "DS_ROOT_LM_KWARGS", "DS_SUB_LM_KWARGS", "RLM_MAIN_LM_KWARGS", "RLM_SUB_LM_KWARGS",
     "DS_CLASSIFY_BACKEND", "DS_CLASSIFIER_BASE_URL", "DS_CLASSIFIER_API_KEY", "DS_CLASSIFIER_SYSTEM_PROMPT",
     "DS_CLASSIFIER_TIMEOUT", "DS_CLASSIFIER_MAX_TOKENS", "DS_CLASSIFIER_TRANSIENT_RETRIES",
     "DS_CLASSIFIER_CIRCUIT_BREAK", "DS_INTERPRETER", "DS_OBSERVE", "DS_ADAPTER", "DS_MAX_ITERATIONS",
@@ -102,6 +102,35 @@ def test_role_lm_kwargs_kit_owned_key_fails_at_parse(clean_env, var):
     clean_env.setenv("DS_SUB_LM", "a")
     clean_env.setenv(var, '{"timeout": 600}')
     with pytest.raises(ValueError, match=var):
+        DetectConfig.from_env()
+
+
+@pytest.mark.parametrize(("kit_var", "field"), [("RLM_MAIN_LM_KWARGS", "planner_lm_kwargs"),
+                                                ("RLM_SUB_LM_KWARGS", "analyst_lm_kwargs")])
+def test_role_lm_kwargs_read_the_kit_variable(clean_env, kit_var, field):
+    # setup() builds the kit's config itself, so without this the kit's documented variable is ignored.
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv(kit_var, '{"extra_body": {"thinking_token_budget": 4096}}')
+    assert getattr(DetectConfig.from_env(), field) == {"extra_body": {"thinking_token_budget": 4096}}
+
+
+def test_role_lm_kwargs_alias_and_kit_variable_agree_or_refuse(clean_env):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv("DS_ROOT_LM_KWARGS", '{"extra_body": {"thinking_token_budget": 8192}}')
+    clean_env.setenv("RLM_MAIN_LM_KWARGS", '{"extra_body":{"thinking_token_budget":8192}}')  # same value
+    assert DetectConfig.from_env().planner_lm_kwargs == {"extra_body": {"thinking_token_budget": 8192}}
+    clean_env.setenv("RLM_MAIN_LM_KWARGS", '{"extra_body": {"thinking_token_budget": 1024}}')
+    with pytest.raises(ValueError, match="DS_ROOT_LM_KWARGS and RLM_MAIN_LM_KWARGS"):
+        DetectConfig.from_env()
+
+
+def test_role_lm_kwargs_kit_variable_error_names_it(clean_env):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv("RLM_SUB_LM_KWARGS", '{"model": "elsewhere"}')
+    with pytest.raises(ValueError, match="RLM_SUB_LM_KWARGS"):
         DetectConfig.from_env()
 
 

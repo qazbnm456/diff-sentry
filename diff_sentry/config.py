@@ -60,6 +60,16 @@ def _env_lm_kwargs(name: str) -> dict | None:
     return value
 
 
+def _role_lm_kwargs(alias: str, kit_name: str) -> tuple[str, dict | None]:
+    """A role's request parameters from the `DS_*` alias or rlm-harness's own variable (which `setup` would
+    otherwise never read, since it builds the kit's config itself). Both set to different values is refused
+    rather than one silently winning. Returns the name the value came from, for error messages."""
+    ours, kits = _env_lm_kwargs(alias), _env_lm_kwargs(kit_name)
+    if ours is not None and kits is not None and ours != kits:
+        raise ValueError(f"{alias} and {kit_name} name the same setting with different values; set one")
+    return (alias, ours) if ours is not None else (kit_name, kits)
+
+
 @dataclass(frozen=True)
 class DetectConfig:
     # Planner (main) + analyst (sub), sharing one OpenAI-compatible proxy. No model name is assumed —
@@ -167,13 +177,14 @@ class DetectConfig:
                 "DS_CLASSIFIER_BASE_URL / DS_CLASSIFIER_API_KEY if it is a separate box). See .env.example."
             )
         _pmt = os.getenv("DS_PLANNER_MAX_TOKENS")
-        planner_kw, analyst_kw = _env_lm_kwargs("DS_ROOT_LM_KWARGS"), _env_lm_kwargs("DS_SUB_LM_KWARGS")
+        planner_var, planner_kw = _role_lm_kwargs("DS_ROOT_LM_KWARGS", "RLM_MAIN_LM_KWARGS")
+        analyst_var, analyst_kw = _role_lm_kwargs("DS_SUB_LM_KWARGS", "RLM_SUB_LM_KWARGS")
         # The kit refuses the keys it owns (model, endpoint, timeout) when `setup` builds its config; check
         # here so a bad value stops the process instead of failing every run (dspy-free import).
         from rlm_harness.config import RLMConfig
 
-        for name, field, kw in (("DS_ROOT_LM_KWARGS", "main_lm_kwargs", planner_kw),
-                                ("DS_SUB_LM_KWARGS", "sub_lm_kwargs", analyst_kw)):
+        for name, field, kw in ((planner_var, "main_lm_kwargs", planner_kw),
+                                (analyst_var, "sub_lm_kwargs", analyst_kw)):
             try:
                 RLMConfig(main_model=planner, sub_model=analyst, **{field: kw})
             except ValueError as exc:
