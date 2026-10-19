@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from diff_sentry.schema import ChangeVerdict, max_severity, severity_rank
+import pytest
+from pydantic import ValidationError
+
+from diff_sentry.schema import ChangeVerdict, decisive_verdict_model, max_severity, severity_rank
 from tests.conftest import MALICIOUS_VERDICT
 
 
@@ -34,3 +37,15 @@ def test_severity_ordering():
     assert max_severity(["low", "critical", "medium"]) == "critical"
     assert max_severity([]) == "info"
     assert max_severity(["bogus"]) == "info"
+
+
+def test_the_decisive_model_is_the_submit_type_with_inconclusive_refused_twice():
+    model = decisive_verdict_model("3 files")
+    assert model.__name__ == "ChangeVerdict" and issubclass(model, ChangeVerdict)
+    assert model.model_json_schema() == ChangeVerdict.model_json_schema()     # the prompt the planner sees is unchanged
+    for _ in range(2):
+        with pytest.raises(ValidationError, match=r"refused: this change has content to classify \(3 files\)"):
+            model(**{**MALICIOUS_VERDICT, "verdict": " Inconclusive"})
+    assert model(**{**MALICIOUS_VERDICT, "verdict": "inconclusive"}).verdict == "inconclusive"
+    assert model(**MALICIOUS_VERDICT).verdict == "malicious"
+    assert decisive_verdict_model("x") is not model                          # each run counts its own refusals

@@ -66,7 +66,12 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
   `RefusalInfo(reason="insufficient_evidence")`. The host-side backstop `normalize.has_groundable_content`
   downgrades even a confident verdict when no groundable content exists. It is a reward-free negative
   outcome, not an escape hatch for a hard-but-real change, and not in `emit_on`, so hard indicator
-  evidence still signals on its own.
+  evidence still signals on its own. The converse is enforced in the loop: on a change with groundable
+  content and nothing GitHub withheld (a patch, or files past its list cap), `ClassifyChange` swaps in
+  `schema.decisive_verdict_model`, which refuses an `inconclusive` SUBMIT twice with a message naming the
+  content; dspy hands the refusal back as the step's output, so the planner decides in the same trajectory
+  (no retry), and the third stands. dspy's extract fallback at the iteration cap runs under
+  `schema.no_refusal` (`detect._FinalExtract`): no turn is left there to answer one.
 - **MF1: the metadata sandwich in `normalize_event`.** dspy previews ~1000 chars of head+tail, so an
   identical derived-metadata header and footer deny the attacker those edges, and attacker-authored
   metadata fields are capped (`_MAX_META_*`). The title/author ride in `raw_content` so the host-side

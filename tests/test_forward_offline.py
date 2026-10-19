@@ -26,13 +26,15 @@ from tests.conftest import BENIGN_SELF_REPORT, MALICIOUS_EVENT, MALICIOUS_VERDIC
 
 
 def _run_scripted(tmp_path, event, steps, planner_turns, *, chat_fn=None, run_id="pr-7",
-                  emit_on=("suspicious", "malicious")):
+                  emit_on=("suspicious", "malicious"), hand_over=False, max_iterations=10):
     """Drive one full scripted classification and return (planner_verdict, trace_events)."""
-    configure(RLMConfig(main_model="x", sub_model="x", interpreter="mock", observe=False),
+    configure(RLMConfig(main_model="x", sub_model="x", interpreter="mock", observe=False,
+                        max_iterations=max_iterations),
               main_lm=scripted_lm(planner_turns), sub_lm=scripted_lm([{"reasoning": "r", "verdict": "{}"}]))
     cfg = DetectConfig(main_model="x", sub_model="x", interpreter="mock", classifier_model="x",
                        emit_on=tuple(emit_on), siem_webhook_url="https://siem.example/hook")
-    task = ClassifyChange(config=cfg, chat_fn=chat_fn, interpreter=ScriptedInterpreter(steps))
+    task = ClassifyChange(config=cfg, chat_fn=chat_fn, interpreter=ScriptedInterpreter(steps),
+                          event=event if hand_over else None)
     event_str = normalize_event(event)
     ms = event_metadata(event)
     baseline = [h.model_dump() for h in scan_indicators(raw_content(event))]
@@ -121,3 +123,60 @@ def test_deep_classify_escalation_is_recorded(tmp_path):
                        {"reasoning": "submit", "code": "SUBMIT(...)"}])
     dc = [e for e in events if e["type"] == "tool_call" and e["payload"].get("tool") == "deep_classify"]
     assert dc and dc[0]["payload"].get("verdict") == "malicious"
+
+
+_INCONCLUSIVE = {**BENIGN_SELF_REPORT, "verdict": "inconclusive", "indicator_ids": []}
+
+
+def _main_outputs(events):
+    return [e["payload"].get("output", "") for e in events if e["type"] == "main_step"]
+
+
+def test_an_inconclusive_submit_on_a_real_change_is_refused_in_the_trajectory(tmp_path):
+    """A live run SUBMITted `inconclusive` on an 85-file PR: the loop hands the refusal back as the step's output and
+    the planner decides in the same trajectory."""
+    verdict, events = _run_scripted(
+        tmp_path, MALICIOUS_EVENT, hand_over=True,
+        steps=[submit({"verdict": _INCONCLUSIVE}), submit({"verdict": MALICIOUS_VERDICT})],
+        planner_turns=[{"reasoning": "unsure", "code": "SUBMIT(...)"}, {"reasoning": "decide", "code": "SUBMIT(...)"}])
+    assert verdict.verdict == "malicious"
+    refusal = _main_outputs(events)[0]
+    assert "refused" in refusal and "2 files, " in refusal and "characters in `event`" in refusal
+
+
+def test_an_inconclusive_submit_stands_after_two_refusals(tmp_path):
+    verdict, events = _run_scripted(
+        tmp_path, MALICIOUS_EVENT, hand_over=True,
+        steps=[submit({"verdict": _INCONCLUSIVE})] * 3,
+        planner_turns=[{"reasoning": "unsure", "code": "SUBMIT(...)"}] * 3)
+    assert verdict.verdict == "inconclusive"
+    assert sum("refused" in out for out in _main_outputs(events)) == 2
+
+
+def test_an_inconclusive_submit_on_an_empty_change_stands(tmp_path):
+    verdict, _events = _run_scripted(
+        tmp_path, {"repo": "acme/app", "kind": "push", "number": 0}, hand_over=True,
+        steps=[submit({"verdict": _INCONCLUSIVE})], planner_turns=[{"reasoning": "nothing", "code": "SUBMIT(...)"}])
+    assert verdict.verdict == "inconclusive"
+
+
+def test_an_inconclusive_at_the_iteration_cap_stands(tmp_path):
+    """dspy's extract fallback writes the verdict once the cap is reached; no planner turn is left to answer a
+    refusal, and refusing there would fail the run."""
+    import json
+
+    verdict, _events = _run_scripted(
+        tmp_path, MALICIOUS_EVENT, hand_over=True, max_iterations=1,
+        steps=[call("scan_indicators", region=raw_content(MALICIOUS_EVENT))],
+        planner_turns=[{"reasoning": "scan", "code": "scan_indicators(event)"},
+                       {"reasoning": "out of turns", "verdict": json.dumps(_INCONCLUSIVE)}])
+    assert verdict.verdict == "inconclusive"
+
+
+def test_an_inconclusive_stands_when_github_withheld_part_of_the_change(tmp_path):
+    withheld = {**MALICIOUS_EVENT, "files": [*MALICIOUS_EVENT["files"], {
+        "filename": "src/big.js", "status": "added", "additions": 90000, "deletions": 0, "patch": ""}]}
+    verdict, _events = _run_scripted(
+        tmp_path, withheld, hand_over=True,
+        steps=[submit({"verdict": _INCONCLUSIVE})], planner_turns=[{"reasoning": "unseen", "code": "SUBMIT(...)"}])
+    assert verdict.verdict == "inconclusive"

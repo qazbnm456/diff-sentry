@@ -12,6 +12,9 @@ Pure pydantic; no dspy — trivially unit-testable.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+from collections.abc import Iterator
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
@@ -154,6 +157,48 @@ class ChangeVerdict(BaseModel):
         Extra keys a stray planner emitted (e.g. an `indicators` list it tried to author) are ignored
         by pydantic — `assemble_verdict` re-sources the real hits from the trace."""
         return cls(**out)
+
+
+# How many `inconclusive` SUBMITs a run on a groundable change refuses before the next one stands. dspy hands a refused
+# SUBMIT back to the planner as the step's output, so it decides in the same trajectory.
+_INCONCLUSIVE_REFUSALS = 2
+_SubmittedVerdict = ChangeVerdict
+# Off while dspy's extract fallback writes the verdict at the iteration cap: no planner turn is left to answer a
+# refusal there, and the parse failure would fail the run.
+_REFUSING = contextvars.ContextVar("diff_sentry_refusing_inconclusive", default=True)
+
+
+@contextlib.contextmanager
+def no_refusal() -> Iterator[None]:
+    token = _REFUSING.set(False)
+    try:
+        yield
+    finally:
+        _REFUSING.reset(token)
+
+
+def decisive_verdict_model(facts: str, refusals: int = _INCONCLUSIVE_REFUSALS) -> type[ChangeVerdict]:
+    """`ChangeVerdict` for a change that has content to read: an `inconclusive` verdict is refused `refusals` times
+    with a message naming that content (`facts`), except under `no_refusal`. A live run SUBMITted `inconclusive` on an 85-file PR after a
+    long print of its own came back cut, reading the cut as a truncated change. Same name, fields and schema."""
+    left = [refusals]
+
+    class ChangeVerdict(_SubmittedVerdict):  # the name dspy's signature resolves
+        __doc__ = _SubmittedVerdict.__doc__
+
+        @field_validator("verdict")
+        @classmethod
+        def _decisive(cls, value: str) -> str:
+            if str(value).strip().lower() == INCONCLUSIVE_VERDICT and left[0] > 0 and _REFUSING.get():
+                left[0] -= 1
+                raise ValueError(
+                    f"refused: this change has content to classify ({facts}), so `inconclusive` does not apply; it "
+                    "is only for a change with nothing to read. An earlier output that says `characters omitted` "
+                    "was YOUR print cut short, not the change: read `event` in smaller slices. "
+                    "SUBMIT benign, suspicious or malicious; a low `confidence` says you are unsure.")
+            return value
+
+    return ChangeVerdict
 
 
 # ── the ASSEMBLED verdict: judgement + the SYSTEM-owned deterministic evidence ────────────────────

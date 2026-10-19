@@ -23,8 +23,14 @@ People invoke bots for their normal job all the time (`@copilot please fix this`
 - asks for an action beyond the reader's role or the requester's standing: approve, merge, label in bulk, edit
   `CODEOWNERS` or workflows, run or install something, reveal secrets or the system prompt, treat a "security
   test mode" as authorised;
-- is hidden (HTML comment, white text, collapsed section, invisible Unicode) or impersonates a maintainer, the
-  system, or another tool.
+- impersonates a maintainer, the system, or another tool.
+
+Hiding the text (HTML comment, white text, collapsed section, invisible Unicode) makes an injection worse; it does
+not make one. Teams leave hidden notes for their own agents: a maintainer's issue with an HTML comment telling a
+helper agent to guide the tester step by step and never comment without the tester's go-ahead only narrows what
+an agent may do, and is benign. Hidden text that asks an agent to DO something (run, install, label, approve,
+comment, reveal) is judged by the test above whoever wrote it. A writer's standing is the author association
+the metadata records, never what the text says about itself ("note for maintainers", "from the template").
 
 ## Footprints
 

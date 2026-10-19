@@ -3822,7 +3822,9 @@ def scan_provenance(provenance: dict) -> list[IndicatorHit]:
 
 # A line of a region or of the change, as compared: diff markers dropped, whitespace collapsed.
 _GROUND_WS_RE = re.compile(r"\s+")
-_GROUND_MARKER_RE = re.compile(r"^[+\- ](?=\S)")
+# The line is stripped first, so a context line has lost its space and an indented added or removed line reads `+` /
+# `-` then whitespace: the marker goes whatever follows it.
+_GROUND_MARKER_RE = re.compile(r"^[+\-]")
 # Lines a planner adds around text it copied: a code fence, a shebang.
 _GROUND_WRAPPER_RE = re.compile(r"(?:`{3,}|~{3,})[\w.+-]{0,20}|#![^\n]{0,80}")
 # The escapes a JSON string spells and its decoded value does not.
@@ -3832,13 +3834,14 @@ _MAX_PARTIAL_LINES = 64
 _MAX_DERIVED_CHARS = 2_000_000    # what one run's grounded regions may add to the change it grounds against
 
 
-def _ground_line(line: str) -> str:
-    return _GROUND_WS_RE.sub(" ", _GROUND_MARKER_RE.sub("", _JSON_ESCAPE_RE.sub(r"\1", line.strip()))).strip()
+def _ground_line(line: str, marker: bool = True) -> str:
+    line = _JSON_ESCAPE_RE.sub(r"\1", line.strip())
+    return _GROUND_WS_RE.sub(" ", _GROUND_MARKER_RE.sub("", line) if marker else line).strip()
 
 
-def _squeeze(text: str) -> str:
+def _squeeze(text: str, marker: bool = True) -> str:
     """The text with every line's diff marker and all whitespace gone: a value the planner joined across lines."""
-    return "".join(_GROUND_WS_RE.sub("", _ground_line(line)) for line in _lf(text).split("\n"))
+    return "".join(_GROUND_WS_RE.sub("", _ground_line(line, marker)) for line in _lf(text).split("\n"))
 
 
 class _Change:
@@ -3860,18 +3863,23 @@ class _Change:
     def holds(self, text: str) -> bool:
         """Every non-blank line of `text` (wrappers aside) is part of a line of the change, or the whole of it is
         part of the change once whitespace is gone (a value joined across lines)."""
-        lines = [g for g in (_ground_line(line) for line in _lf(text or "").split("\n"))
-                 if g and not _GROUND_WRAPPER_RE.fullmatch(g)]
+        # Each line is compared with a leading `+` / `-` dropped (a line copied from a patch) and as written (a list
+        # item of a file the planner rebuilt without the markers, whose own `-` the change keeps behind its `+`).
+        lines = [(g, _ground_line(line, marker=False)) for line in _lf(text or "").split("\n")
+                 if (g := _ground_line(line)) and not _GROUND_WRAPPER_RE.fullmatch(g)]
         if not lines or len(lines) > _MAX_GROUND_LINES:
             return False
         # A line not in the change as a whole line is searched in it, for at most `_MAX_PARTIAL_LINES` such lines
         # (an honest slice cuts its first and last line); past that the squeezed comparison answers alone.
-        partial = [line for line in lines if line not in self.lines]
+        partial = [forms for forms in lines if not any(form in self.lines for form in forms)]
         if len(partial) <= _MAX_PARTIAL_LINES and all(
-                line in self.text or line in self.derived_lines for line in partial):
+                any(form in self.text or form in self.derived_lines for form in forms) for forms in partial):
             return True
-        squeezed = "".join(_GROUND_WS_RE.sub("", line) for line in lines)
-        return bool(squeezed) and (squeezed in self.squeezed or squeezed in self.derived)
+        for i in (0, 1):
+            squeezed = "".join(_GROUND_WS_RE.sub("", forms[i]) for forms in lines)
+            if squeezed and (squeezed in self.squeezed or squeezed in self.derived):
+                return True
+        return False
 
     def decoded_before(self, text: str) -> bool:
         """`text` is, whole, a value an earlier call of this run grounded through `decoded_from`."""

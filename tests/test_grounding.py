@@ -153,6 +153,25 @@ def test_lines_regrouped_or_respaced_from_the_change_are_grounded(recorded):
     assert recorded[-1]["grounded"] is True
 
 
+_YAML = [f"  - '{name}-{i}/**'" for name in ("src", "lib") for i in range(40)] + [f"    run: step-{i} --flag" for i in range(80)]
+_REBUILT_EVENT = {**EVENT, "files": [{
+    "filename": ".github/codeql.yml", "status": "modified", "additions": len(_YAML), "deletions": 0,
+    "patch": "@@ -1,3 +1,163 @@\n paths-ignore:\n   - 'docs/**'\n" + "".join(f"+{line}\n" for line in _YAML)
+             + "   - 'vendor/**'\n"}]}
+
+
+def test_a_file_rebuilt_without_its_diff_markers_is_grounded(recorded):
+    # A live run rebuilt each file's new side as the skills say, and every indented line (most code) kept its `+` in
+    # the comparison, so files past the partial-line limit read as the planner's own text. The 80 list items rebuilt
+    # keep their own `-`, which the change holds behind its `+`: past that limit too.
+    patch = _REBUILT_EVENT["files"][0]["patch"].split("\n")[1:]
+    added = "\n".join(line[1:] for line in patch if line.startswith("+"))
+    new_side = "\n".join(line[1:] for line in patch if line[:1] in "+ ")
+    for region in (added, new_side, "\n".join(patch)):
+        _tool(_REBUILT_EVENT)(region)
+        assert recorded[-1]["grounded"] is True
+
+
 def test_without_the_change_every_region_counts(recorded):
     from diff_sentry.indicators import make_indicator_tool
 
