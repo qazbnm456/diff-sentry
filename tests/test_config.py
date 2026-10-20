@@ -16,7 +16,7 @@ _DS_ENV = (
     "DS_ROOT_LM_KWARGS", "DS_SUB_LM_KWARGS", "RLM_MAIN_LM_KWARGS", "RLM_SUB_LM_KWARGS",
     "DS_CLASSIFY_BACKEND", "DS_CLASSIFIER_BASE_URL", "DS_CLASSIFIER_API_KEY", "DS_CLASSIFIER_SYSTEM_PROMPT",
     "DS_CLASSIFIER_TIMEOUT", "DS_CLASSIFIER_MAX_TOKENS", "DS_CLASSIFIER_TRANSIENT_RETRIES",
-    "DS_CLASSIFIER_CIRCUIT_BREAK", "DS_INTERPRETER", "DS_OBSERVE", "DS_ADAPTER", "DS_MAX_ITERATIONS",
+    "DS_CLASSIFIER_CIRCUIT_BREAK", "DS_CLASSIFIER_LM_KWARGS", "DS_INTERPRETER", "DS_OBSERVE", "DS_ADAPTER", "DS_MAX_ITERATIONS",
     "DS_MAX_LLM_CALLS", "DS_MAX_OUTPUT_CHARS", "DS_ENABLE_FETCH", "DS_FETCH_TIMEOUT", "DS_FETCH_MAX_BYTES",
     "DS_FETCH_ALLOW_CIDRS", "DS_ENABLE_SKILLS", "DS_SIEM_WEBHOOK_URL", "DS_SIEM_TOKEN", "DS_EMIT_ON",
 )
@@ -143,3 +143,48 @@ def test_can_emit_reflects_webhook():
     assert DetectConfig(main_model="x", sub_model="x").can_emit is False
     assert DetectConfig(main_model="x", sub_model="x",
                         siem_webhook_url="https://siem.example/hook").can_emit is True
+
+
+def test_classifier_lm_kwargs_parse_on_their_own(clean_env):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv("DS_SUB_LM_KWARGS", '{"temperature": 0.7}')
+    clean_env.setenv("DS_CLASSIFIER_LM_KWARGS", '{"temperature": 1, "extra_body": {"thinking_token_budget": 1024}}')
+    cfg = DetectConfig.from_env()
+    assert cfg.classifier_lm_kwargs == {"temperature": 1, "extra_body": {"thinking_token_budget": 1024}}
+    assert cfg.analyst_lm_kwargs == {"temperature": 0.7}      # the analyst's parameters never reach the classifier
+
+
+@pytest.mark.parametrize("key", ["model", "messages", "stream", "n", "timeout", "max_tokens", "max_completion_tokens"])
+def test_classifier_lm_kwargs_refuse_what_the_classifier_settings_own(clean_env, key):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv("DS_CLASSIFIER_LM_KWARGS", f'{{"{key}": 1}}')
+    with pytest.raises(ValueError, match=f"DS_CLASSIFIER_LM_KWARGS may not set {key}"):
+        DetectConfig.from_env()
+
+
+def test_classifier_lm_kwargs_malformed_names_the_variable(clean_env):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv("DS_CLASSIFIER_LM_KWARGS", "[1]")
+    with pytest.raises(ValueError, match="DS_CLASSIFIER_LM_KWARGS"):
+        DetectConfig.from_env()
+
+
+def test_classifier_lm_kwargs_refuse_a_key_the_client_does_not_take(clean_env):
+    # sent as is, it would fail every call as an endpoint error that the circuit breaker never counts
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv("DS_CLASSIFIER_LM_KWARGS", '{"temprature": 1}')
+    with pytest.raises(ValueError, match="takes no temprature"):
+        DetectConfig.from_env()
+
+
+@pytest.mark.parametrize("raw", ['{"self": 1}', '{"extra_body": "x"}', '{"extra_body": {"max_tokens": 99999}}', '{"extra_body": {"stream": true}}'])
+def test_classifier_lm_kwargs_refuse_a_way_around_the_guard(clean_env, raw):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv("DS_CLASSIFIER_LM_KWARGS", raw)
+    with pytest.raises(ValueError, match="DS_CLASSIFIER_LM_KWARGS"):
+        DetectConfig.from_env()

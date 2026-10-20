@@ -13,6 +13,7 @@ planner, schema, assemble, or export.
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from dataclasses import dataclass
@@ -70,6 +71,36 @@ def _role_lm_kwargs(alias: str, kit_name: str) -> tuple[str, dict | None]:
     return (alias, ours) if ours is not None else (kit_name, kits)
 
 
+# The request keys the classifier's own settings own: the model and the messages it is sent, one reply that is not a stream
+# (`.choices[0]`), and the budget (`DS_CLASSIFIER_TIMEOUT`, `DS_CLASSIFIER_MAX_TOKENS`).
+_CLASSIFIER_OWNED_KEYS = ("model", "messages", "stream", "n", "timeout", "max_tokens", "max_completion_tokens")
+
+
+def _classifier_lm_kwargs() -> dict | None:
+    """`DS_CLASSIFIER_LM_KWARGS`: extra parameters of the classifier's request (`temperature`, a vLLM thinking budget under
+    `extra_body`). A key the classifier's own settings own is refused here, not at the first call mid-run."""
+    kw = _env_lm_kwargs("DS_CLASSIFIER_LM_KWARGS")
+    if not kw:
+        return kw
+    body = kw.get("extra_body", {})     # merged into the request's JSON, so it may not set them either
+    if not isinstance(body, dict):
+        raise ValueError("DS_CLASSIFIER_LM_KWARGS: extra_body must be a JSON object")
+    owned = sorted((set(kw) | set(body)) & set(_CLASSIFIER_OWNED_KEYS))
+    if owned:
+        raise ValueError(f"DS_CLASSIFIER_LM_KWARGS may not set {', '.join(owned)}: set DS_CLASSIFIER_LM, "
+                         "DS_CLASSIFIER_TIMEOUT or DS_CLASSIFIER_MAX_TOKENS instead")
+    # A key the client does not take fails every call as an endpoint error, which the circuit breaker never counts.
+    try:
+        from openai.resources.chat.completions import Completions
+    except ImportError:                     # the `classify` extra is not installed: the first call says so
+        return kw
+    unknown = sorted(set(kw) - (set(inspect.signature(Completions.create).parameters) - {"self"}))
+    if unknown:
+        raise ValueError(f"DS_CLASSIFIER_LM_KWARGS: the OpenAI client takes no {', '.join(unknown)}; a parameter only "
+                         "your server knows goes under extra_body")
+    return kw
+
+
 @dataclass(frozen=True)
 class DetectConfig:
     # Planner (main) + analyst (sub), sharing one OpenAI-compatible proxy. No model name is assumed —
@@ -88,6 +119,8 @@ class DetectConfig:
     classifier_timeout: float = 60.0
     classifier_max_tokens: int = 2048
     classifier_transient_retries: int = 1
+    # Extra request parameters of the classifier's call, over its `temperature=0.1` (`_classifier_lm_kwargs`).
+    classifier_lm_kwargs: dict | None = None
     # After this many CONSECUTIVE invalid classifications the tool short-circuits (rlm-harness make_model_tool).
     classifier_circuit_break: int = 4
 
@@ -204,6 +237,7 @@ class DetectConfig:
             classifier_max_tokens=int(os.getenv("DS_CLASSIFIER_MAX_TOKENS", "2048")),
             classifier_transient_retries=int(os.getenv("DS_CLASSIFIER_TRANSIENT_RETRIES", "1")),
             classifier_circuit_break=int(os.getenv("DS_CLASSIFIER_CIRCUIT_BREAK", "4")),
+            classifier_lm_kwargs=_classifier_lm_kwargs(),
             interpreter=os.getenv("DS_INTERPRETER", "pyodide"),
             observe=_env_bool("DS_OBSERVE", False),
             adapter=os.getenv("DS_ADAPTER", "json"),

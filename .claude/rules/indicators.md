@@ -72,7 +72,48 @@ paths:
 - **`invisible-unicode`** covers bidi overrides, embeddings and isolates; the word joiner and invisible math
   operators; the Hangul fillers; a ZWSP anywhere but right after `@` (Dependabot renders `@​user`); a BOM
   anywhere but the start of a line; Unicode tag characters (except the three subdivision flags); the
-  variation-selector supplement; and three or more plain variation selectors in a row.
+  variation-selector supplement; and three or more plain variation selectors in a row. It is `medium` in a body or a
+  comment (the baseline never softens it in a title or a file) when all it found are embeddings and isolates, at least
+  one opener, each opened after right-to-left text (the strong character nearest before it in its paragraph is Arabic
+  or Hebrew; a mark such as U+200F is not one), and their closers: Gmail quoting an Arabic reply. An override (U+202D,
+  U+202E) keeps it `high`. An LLM reads logical order, so these marks hide nothing from a model or the other rules;
+  they only reorder words for a human reader. The planner's scan reads every region it copies from the change as a body,
+  so a region of a title or a file is `medium` there and the baseline's `high` for that segment stays in the union; a
+  value it decodes keeps `high`.
+- **`inline-code-exec`** (`node -e`, or `-e` handed to `process.execPath`) is bounded by ASCII and also found after a
+  string's escape of a line break or a tab (`\n`, `\x0a`, `\u000a`, `\t`, ...); `node\t-e` in a string is one too.
+  Between `node` and `-e` a line break may carry a `+` (a YAML folded scalar puts them on lines of their own).
+  `process.execPath` and `'-e'` may be any 160 characters apart (`spawn(process.execPath, [<newline>'-e', code])`, as
+  prettier wraps it); another program's `'-e'` that close (`spawnSync('perl', ['-e', ...])`), also across a hunk
+  header, is an accepted over-alert. Known gaps: a backslash-continued `node \`, `node --eval`, `node -p`, and
+  `node --input-type=module -e`.
+- **A file's patch is read as its new file** (`_exec_view`) when its caller knows it is one: a file of the change whose
+  name holds no line break, a file of a `diff --git` diff (not the text in front of the first one). The removed lines
+  and `\ No newline` notes that rewriting a fold's `-e` line leaves between `node` and `-e` hide nothing, a removed
+  `'-e'` is no longer run, and a hunk header (only one git writes, `@@ -a,b +c,d @@`) puts no `node` next to an `-e`;
+  its section heading, an earlier line of the file, is read as a line of its own (when it is the line right above the
+  hunk, a fold across it is not read: the `node -e` it folds is unchanged code). Any other line makes the text be read as it is, and so does a lone
+  CR or a NUL (the file's language breaks a line at a CR and git does not; a NUL is deleted before a line is judged).
+  Every other text is read as it is, whatever it spells: a comment, a bot's comment, a decoded value and a planner's
+  region can all hold a hunk header line and bullets or `\` lines that a patch reader would drop.
+- **It is `medium` in a body or a comment whose writer is an OWNER, MEMBER or COLLABORATOR** (an issue's
+  reproduction steps; a comment is judged by its own writer). A title, a branch and every file keep it `high`, and so
+  does an outsider's text: a Clinejection-shaped issue asks a bot to run a `node -e` that reads `process.env` or
+  `~/.npmrc` and nothing else carries the floor there. Source code keeps it too: a hunk rarely shows the import of
+  what runs the string (`exec(`, a promisified alias, a hook or rc file the code writes), so no sink test holds.
+- **The planner's scan** reads every region as it is, beside the patch reading of any `diff --git` diff it holds, so
+  it never reads less than the text holds: it cannot tell a file's diff from one a bot's comment pasted, nor a decoded
+  value's `-function(){…}()` lines from removed ones. A scan of a file's hunk that removes a `node -e` line, or a `'-e'`
+  near `process.execPath`, is therefore `high` there (the baseline, which reads the file as its new file, is not): an
+  accepted over-alert. A region copied from the change, and not passed as a decoded value, is `medium` when every `node -e` in it (at most
+  50) has the same window, 120 characters on each side with whitespace collapsed, as one the baseline softened (the
+  author's body and own comments; a maintainer's comment on someone else's change is not scanned, and a scan of it stays
+  `high`), and it holds no `diff --git` diff (`_written_by_maintainer`). A match's lines alone do not do: a file can
+  share them with the maintainer's text while running something else (`node` / `-e` / code over three lines of a YAML
+  folded scalar). A decoded value keeps it `high`, and so does a region that cuts a window short (a line or a code block
+  of a longer body): an accepted over-alert. What it leaves to a trusted author is text the baseline never reads as
+  `node -e` (a bot's comment, the actor history, a spelling in the known gaps) that copies one of their own windows and
+  runs a payload past it.
 - **`branch-name-injection` is `high` unless the author is an OWNER, MEMBER or COLLABORATOR** (then `medium`): a
   maintainer can name a branch `fix/handle_${HOME}_expansion`.
 
@@ -253,8 +294,9 @@ The first four bullets are over-alerts, not misses: for the examples they give, 
 
 ## Other prose softening
 
-All in `indicators._soften_prose`; a code file and a branch are never softened here (the file scope below
-changes `command-substitution` in source code and restores the phrase in agent files).
+All in `indicators._soften_prose`, beside `invisible-unicode` in right-to-left text (above); a code file and a branch
+are never softened here (the file scope below changes `command-substitution` in source code and restores the phrase in
+agent files).
 
 - **`prompt-injection`** whose only trigger is the bare phrase "system prompt" is `medium`: ordinary in a thread
   about an LLM product. It is `high` when:
@@ -344,8 +386,8 @@ run it nobody types (a VS Code task that runs on folder open, an npm script now 
 ## What the kind of a segment changes
 
 `_scope_to_file` runs on every segment of an event but the branch name (`scan_content`) and on every file of a diff
-(`scan_diff`), after the detectors and the prose softening. A branch name and the planner's `scan_indicators` keep
-every hit.
+(`scan_diff`), after the detectors and the prose softening. A branch name keeps every hit, and so does the planner's
+`scan_indicators`, but for a maintainer's `inline-code-exec` it copies (`_written_by_maintainer`, above).
 
 - **`command-substitution` in prose** (a body, a comment, a documentation file) is a `$(...)` or a backtick span that
   reads as a shell's (`_SHELLISH_SPAN_RE`: an operator `|`, `;`, `&`, `<(`, or a `$` expansion); a plain backtick span is
@@ -369,6 +411,7 @@ every hit.
   file names and titles: a branch name stays unscoped, a title keeps every substitution, and a file whose name holds one
   keeps all of its own. A bare `exec(` is not a sink (it is a SQL or a local helper as often as `child_process.exec`), so
   a hunk that calls a destructured `exec` without showing its `child_process` import is a known gap.
+- **`inline-code-exec`** by the writer of a body or comment (above).
 - **`remote-fetch-to-disk` has no loopback exemption.** A fetch of `localhost` that writes to disk stays `high`: an
   infostealer reads DevTools (`9222`, `9229`), the Docker API and the kubelet there, and each test that tells a local
   service from those (the port, an option that overrides the URL, a second client, a raw socket, a computed `fetch`) has a

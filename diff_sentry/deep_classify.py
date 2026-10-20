@@ -27,6 +27,14 @@ from .config import DetectConfig
 from .schema import SUBMIT_VERDICTS
 
 
+class _CutReply(str):
+    """The classifier's reply when it stopped at `max_tokens` (`finish_reason == "length"`). A str, so rlm-harness's
+    `make_model_tool` hands it to the validator as it is, which names the cut: as an unusable reply it is not re-sent (the
+    same request is cut the same way) and it counts toward the circuit breaker."""
+
+    limit: int = 0
+
+
 @dataclass
 class ClassifyValidation:
     """The validator's verdict over the classifier's raw output — `.ok` / `.errors` for make_model_tool,
@@ -43,7 +51,17 @@ class ClassifyValidation:
 def _parse_classifier_json(raw: str) -> ClassifyValidation:
     """Deterministically validate the classifier's structured output: it must be JSON with a known
     `verdict`. A malformed/off-schema reply is `ok=False` so the planner re-asks or falls back — never
-    a silent bad verdict."""
+    a silent bad verdict. One cut at `max_tokens` (`_CutReply`) says so, whatever it holds."""
+    v = _parse_reply(raw)
+    if v.ok or not isinstance(raw, _CutReply):
+        return v
+    held = f"{len(raw.strip()):,} characters" if raw.strip() else "no answer"
+    return ClassifyValidation(ok=False, errors=[(
+        f"the classifier stopped at max_tokens={raw.limit} with {held}: a reasoning model can think through the whole "
+        "budget. Raise DS_CLASSIFIER_MAX_TOKENS, or give it a thinking budget in DS_CLASSIFIER_LM_KWARGS")])
+
+
+def _parse_reply(raw: str) -> ClassifyValidation:
     text = (raw or "").strip()
     if text.startswith("```"):
         text = text.strip("`")
@@ -84,16 +102,22 @@ def _selfclassify_chat(config: DetectConfig) -> Callable[[str], str]:
             timeout=config.classifier_timeout,
             max_retries=0,  # our own transient-retry loop owns retries; keep the timeout a HARD ceiling
         )
-        resp = client.chat.completions.create(
-            model=config.classifier_model,
-            messages=[
+        resp = client.chat.completions.create(**{
+            "temperature": 0.1,
+            **(config.classifier_lm_kwargs or {}),       # `config.from_env` refuses the keys set below
+            "model": config.classifier_model,
+            "messages": [
                 {"role": "system", "content": config.classifier_system_prompt},
                 {"role": "user", "content": findings},
             ],
-            temperature=0.1,
-            max_tokens=config.classifier_max_tokens,
-        )
-        return resp.choices[0].message.content or ""
+            "max_tokens": config.classifier_max_tokens,
+        })
+        choice = resp.choices[0]
+        content = choice.message.content or ""
+        if choice.finish_reason == "length":
+            content = _CutReply(content)
+            content.limit = config.classifier_max_tokens
+        return content
 
     return chat
 
@@ -133,7 +157,7 @@ def make_deep_classify_tool(config: DetectConfig, chat_fn: Callable[[str], str] 
                  if getattr(r, k, None) is not None}
         record_tool_call("deep_classify", args={"findings": findings[:400]}, ok=v.ok, raw=r.raw,
                          verdict=v.verdict, confidence=v.confidence, techniques=v.techniques,
-                         errors=v.errors, **child)
+                         errors=v.errors, **({"cut": True} if isinstance(r.raw, _CutReply) else {}), **child)
         if not v.ok:
             return ("DEEP_CLASSIFY returned an unusable (non-JSON / off-schema) reply — errors: "
                     + "; ".join(v.errors) + ". Decide from the deterministic indicators and your reading.")

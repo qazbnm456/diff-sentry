@@ -1745,7 +1745,7 @@ def test_scan_indicators_and_scan_diff_keep_the_worse_of_two_hits_with_one_id(mo
     monkeypatch.setattr(indicators, "_DETECTORS", (lambda text: [hit("medium"), hit("critical"), hit("low")],))
     assert [h.severity for h in indicators.scan_indicators("x")] == ["critical"]
     seen = iter(["medium", "critical"])
-    monkeypatch.setattr(indicators, "scan_indicators", lambda text, location="": [hit(next(seen))])
+    monkeypatch.setattr(indicators, "scan_indicators", lambda text, location="", **_: [hit(next(seen))])
     diff = "diff --git a/a b/a\n+x\ndiff --git a/b b/b\n+y\n"
     assert [h.severity for h in indicators.scan_diff(diff)] == ["critical"]
 

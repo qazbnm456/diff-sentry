@@ -67,7 +67,8 @@ the metadata records, never what the text says about itself ("note for maintaine
 
 ## Rules that fire here
 
-`prompt-injection` (softened to medium for a bare "system prompt" in prose), `invisible-unicode`. No rule
+`prompt-injection` (softened to medium for a bare "system prompt" in prose), `invisible-unicode` (medium for
+embeddings opened after Arabic or Hebrew text in a body or comment; overrides stay high). No rule
 reads: instruction-file rewrites without known phrases, MCP and agent settings, tag-character payloads beyond
 the detector's ranges. Those are yours to read.
 

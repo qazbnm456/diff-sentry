@@ -260,7 +260,7 @@ def literals(p):
 SHARED = ["${{x}}" * 40 + " ", "refs/pull/" + "${{x}}" * 30, "pull_request_target:\n" + "git checkout " * 10,
           "-" * 40, "a." * 40, "%2e" * 40, "\n" * 40, " \t" * 40, "curl x | a " + " " * 60 + "| b " + " " * 60,
           "curl x " + "| a b c d " * 12, "\n " * 40, "bash -c \"" + "\n " * 30, "curl 'a' \"b\" ' " * 12, "curl x \\\n| " * 20, "sudo -u a b c d e " * 10,
-          "<!-- " * 30, "> - # 1) \"( " * 20, "\ufeff" * 40, "curl | sh\n" * 20]
+          "<!-- " * 30, "> - # 1) \"( " * 20, "\ufeff" * 40, "curl | sh\n" * 20, "-node\n" * 20, "@node\n" * 20]
 def flatten(value, depth=0):
     if isinstance(value, re.Pattern):
         yield value

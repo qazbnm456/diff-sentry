@@ -273,7 +273,7 @@ class ActorStore:
         wanted = {h.id for h in chits}
         author = str(event.get("author") or "")
         for c in mine:
-            ids = {h.id for h in scan_indicators(str(c.get("body") or ""))}
+            ids = {h.id for h in scan_indicators(str(c.get("body") or ""), diff=False)}     # as the baseline reads a comment
             ids |= {h.id for h in scan_metadata({"author": author, "created_at": event.get("created_at"),
                                                   "comments": [c]})}
             if ids & wanted:

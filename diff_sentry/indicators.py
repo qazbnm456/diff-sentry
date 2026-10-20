@@ -28,6 +28,7 @@ import json
 import math
 import posixpath
 import re
+import unicodedata
 import warnings
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Iterator
@@ -384,8 +385,14 @@ _INVISIBLE_RE = re.compile(
 _JS_CHILD_PROC_RE = re.compile(
     r"child_process|\b(?:execSync|spawnSync|execFileSync|execFile|spawn|fork)\s*\(", re.IGNORECASE)
 _JS_DETACHED_RE = re.compile(r"detached\s*:\s*true|\.unref\s*\(\s*\)")
-_NODE_INLINE_EXEC_RE = re.compile(
-    r"\bnode\s+-e\b|process\.execPath[^\n]{0,120}['\"]-e['\"]|['\"]-e['\"][^\n]{0,120}process\.execPath")
+# The word is bounded by ASCII (`執行node -e`), and a string's escape of a line break or a tab in front of it (`\n`, `\x0a`,
+# `\u000a`, `\t`, ...) is a line break or a tab to whatever runs the string (`"#!/bin/sh\nnode -e …"`). Between `node` and
+# `-e` a line break may carry a `+` (a YAML folded scalar puts them on lines of their own, and a planner may copy the lines of
+# a patch; a patch with its header is read as its new file, `_exec_view`), and `process.execPath` and `'-e'` may be any 160 characters
+# apart (`spawn(process.execPath, [<newline>'-e', code])`).
+_NODE_INLINE_EXEC_RE = re.compile(r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrtvf])|(?<=\\x0[9aAbBcCdD])|(?<=\\u000[9aAbBcCdD]))"
+                                  r"node(?:[^\S\n]|\n\+?|\\[nrtvf])+-e\b"
+                                  r"|process\.execPath[\s\S]{0,160}?['\"]-e['\"]|['\"]-e['\"][\s\S]{0,160}?process\.execPath")
 _DYNAMIC_EVAL_RE = re.compile(r"\beval\s*\(|new\s+Function\s*\(")
 # The dropper shape: pull bytes off the network AND commit them to disk. Either half alone is ordinary
 # (every HTTP client fetches; every build writes files); together in one change they are a stage-2 loader.
@@ -691,19 +698,51 @@ def _scan_diff_evasion(text: str) -> list[IndicatorHit]:
     return hits
 
 
-def _scan_js_exec(text: str) -> list[IndicatorHit]:
-    """Node/npm execution primitives (the JS side of loaders and droppers)."""
+_HUNK_LINE_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", re.MULTILINE)
+
+
+def _exec_view(text: str) -> str | None:
+    """A patch as `inline-code-exec` reads it, or None for a text that is not one: from its first hunk header on, every line
+    is a hunk header, an added, removed or context line, a `\\ No newline` note or blank (a header line planted in a
+    file's comment is followed by code). Its added and context lines without their markers; each hunk header a bare `@@`
+    line that joins nothing, and its section heading (a line of the file above the hunk) a line between two of them.
+    Rewriting the `-e` line of a YAML folded scalar leaves the removed line between `node` and the new `-e`, but two hunks
+    are never adjacent (git merges those), and a removed `'-e'` near `process.execPath` is no longer run."""
+    first = _HUNK_LINE_RE.search(text)
+    if first is None:
+        return None
+    out = text[:first.start()].split("\n")[:-1]
+    for line in text[first.start():].split("\n"):
+        if line.startswith("@@"):
+            heading = _HUNK_HEADING_RE.match(line)
+            if heading is None:             # not a hunk header git writes (a file's name can spell `@@ -1 node -e …`)
+                return None
+            out += ["@@", heading.group(1), "@@"] if heading.group(1) else ["@@"]
+        elif line[:1] in ("+", " "):
+            out.append(line[1:] if line[:1] == "+" else line)
+        elif line and line[:1] != "-" and not line.startswith("\\ "):
+            return None
+    return "\n".join(out)
+
+
+def _scan_js_exec(text: str, patch: bool = False) -> list[IndicatorHit]:
+    """Node/npm execution primitives (the JS side of loaders and droppers). `inline-code-exec` reads a file's patch (`patch`:
+    a caller that knows it is one) as its new file (`_exec_view`), and any other text as it is: nothing in a text says it is
+    a patch, since a comment or a decoded value can spell a hunk header and bullets that read as removed lines. The baseline
+    passes `patch` for a file whose name holds no line break, and the planner's scan also reads every region as it is
+    (`make_indicator_tool`): a decoded value's `-` lines are code (`-function(){…}()`), and a bot's comment can paste a diff."""
     hits: list[IndicatorHit] = []
     detached = _JS_DETACHED_RE.search(text)
     if detached and _JS_CHILD_PROC_RE.search(text):
         hits.append(_hit("detached-process-spawn", "high",
                          "spawns a DETACHED child process (outlives the parent — stage-1 loader shape)",
                          _snip(text, detached.start(), detached.end())))
-    for m in _NODE_INLINE_EXEC_RE.finditer(text):
+    seen = (_exec_view(text) if patch and "-e" in text else None) or text
+    inline = _NODE_INLINE_EXEC_RE.search(seen)
+    if inline is not None:
         hits.append(_hit("inline-code-exec", "high",
                          "executes code passed inline to node (`node -e`)",
-                         _snip(text, m.start(), m.end())))
-        break
+                         _snip(seen, inline.start(), inline.end())))
     fetch = _JS_NET_FETCH_RE.search(text)
     write = _FILE_WRITE_RE.search(text)
     if fetch and write:
@@ -2401,7 +2440,7 @@ def _fold_word(m: re.Match[str]) -> str:
 
 
 def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file: bool = False, diff: bool = True, markdown: bool = True) -> list[IndicatorHit]:
-    """Prose (a title, a body, a comment, a documentation file) quotes things a payload would also say. Four of
+    """Prose (a title, a body, a comment, a documentation file) quotes things a payload would also say. Five of
     those are downgraded to the sub-floor `medium`, still recorded as evidence:
 
     * `curl-pipe-shell` when EVERY download of its FORM in the segment is a known installer (or, for the pipe form,
@@ -2414,7 +2453,10 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
       product, unless an imperative, a hand-over, or an instruction addressed to a reviewer is aimed at it;
     * `pwn-request`, because a workflow SHOWN in prose or documentation is not a workflow that runs;
     * `diff-viewport-evasion` in a COMMENT, where a 200-space run is a padded markdown table, not a payload
-      pushed off a diff viewer (it stays `high` in a file, where Miasma used it).
+      pushed off a diff viewer (it stays `high` in a file, where Miasma used it);
+    * `invisible-unicode` in a body or a comment when it found only embeddings and isolates opened after right-to-left
+      text (`_rtl_runs_only`): a mail client quoting an Arabic or Hebrew reply. An override, a zero-width character or a
+      tag character keeps it `high`, and so does a title or a file.
 
     Code is never softened: a script or a source file that pipes an installer into a shell is a change to what
     runs, and the rules stay as strict there."""
@@ -2694,6 +2736,8 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
             why = "a workflow shown in prose, not a workflow file"
         elif h.rule == "diff-viewport-evasion" and kind == "comment":
             why = "a wide markdown table or code block in a comment, not a diff"
+        elif h.rule == "invisible-unicode" and kind in ("body", "comment") and not prose_file and _rtl_runs_only(text):
+            why = "direction marks around a run in right-to-left text"
         if why:
             h = h.model_copy(update={"severity": "medium", "title": f"{h.title} — {why}"})
         out.append(h)
@@ -2991,6 +3035,40 @@ def _bare_system_prompt(text: str, kind: str) -> bool:
             and not _SYSPROMPT_ATTACK_RE.search(flat) and not _SYSPROMPT_ADDRESSED_RE.search(flat))
 
 
+# The bidi controls a mail client or an editor writes around a run of the other direction: embeddings and isolates with their
+# closers. An override (U+202D, U+202E) reorders the characters themselves and is never among them.
+_DIRECTIONAL_RUNS = frozenset("\u202a\u202b\u202c\u2066\u2067\u2068\u2069")
+_DIRECTIONAL_CLOSERS = frozenset("\u202c\u2069")
+_RTL_LOOKBACK = 200          # characters searched back from an opener for the strong one it follows
+_MAX_RTL_RUNS = 200
+
+
+def _rtl_runs_only(text: str) -> bool:
+    """Whether every hidden character `invisible-unicode` finds in the text is an embedding or isolate (or its closer) and
+    every opener follows right-to-left text: the strong character nearest before it on its line is Arabic or Hebrew (a mark
+    such as U+200F is not one). That is how Gmail quotes an Arabic reply: an RLE around the date, an LRE around the
+    sender's name."""
+    seen = _LEADING_BOM_RE.sub(r"\1", _VALID_FLAGS_RE.sub("", text))
+    found = opened = 0
+    for m in _INVISIBLE_RE.finditer(seen):
+        ch = m.group(0)
+        found += 1
+        if ch not in _DIRECTIONAL_RUNS or found > _MAX_RTL_RUNS:
+            return False
+        if ch in _DIRECTIONAL_CLOSERS:
+            continue
+        opened += 1
+        # the nearest strong character, within its paragraph (`B`: a line break, U+2029, NEL)
+        strong = next((b for c in reversed(seen[max(0, m.start() - _RTL_LOOKBACK):m.start()])
+                       if (b := unicodedata.bidirectional(c)) in ("L", "R", "AL", "B") and unicodedata.category(c) != "Cf"), "")
+        if strong not in ("R", "AL"):
+            return False
+    return opened > 0
+
+
+_INLINE_EXEC_TRUSTED_WHY = "in text a maintainer wrote"
+
+
 def _prose_substitutions(text: str) -> list[IndicatorHit]:
     """The `command-substitution` hits of prose: a `$(...)`, or a backtick span with a shell operator inside (`` `a | b` ``),
     since there a plain backtick span is code formatting. Read on the text `_scan_shell` reads (`_lf`), so the ids are the
@@ -3014,10 +3092,11 @@ def _prose_substitutions(text: str) -> list[IndicatorHit]:
             for a, b in real[:8]]
 
 
-def _scope_to_file(hits: list[IndicatorHit], path: str, text: str, kind: str = "file") -> list[IndicatorHit]:
+def _scope_to_file(hits: list[IndicatorHit], path: str, text: str, kind: str = "file", trusted: bool = False) -> list[IndicatorHit]:
     """What the kind of a segment changes in its hits. In prose (a body, a comment, a documentation file),
     `command-substitution` counts only for a `$(...)` or a backtick span that reads as a shell's (`_SHELLISH_SPAN_RE`); a
-    title keeps every one, since a workflow interpolates it into a shell. For a FILE, by its path:
+    title keeps every one, since a workflow interpolates it into a shell. `inline-code-exec` is `medium` in a body or
+    comment whose writer is an OWNER, MEMBER or COLLABORATOR (`trusted`). For a FILE, by its path:
 
     * in source code that no shell reads (`_NON_SHELL_SOURCE_EXTS`), `command-substitution` counts only when the file also
       calls a shell or starts a program (`_EXEC_SINK_RE`): a template literal is not a shell's substitution;
@@ -3030,6 +3109,7 @@ def _scope_to_file(hits: list[IndicatorHit], path: str, text: str, kind: str = "
     agent = kind == "file" and _AGENT_FILE_RE.search(path) is not None
     if not (prose or source or agent):
         return hits
+    exec_why = _INLINE_EXEC_TRUSTED_WHY if trusted and kind in ("body", "comment") else ""
     named = kind == "file" and _CMD_SUBST_RE.search(path) is not None        # a file named for a substitution keeps them all
     sink = None
     out = []
@@ -3044,8 +3124,57 @@ def _scope_to_file(hits: list[IndicatorHit], path: str, text: str, kind: str = "
                 continue
         elif h.rule == "prompt-injection" and agent and h.title.endswith(f" — {_BARE_PHRASE_WHY}"):
             h = h.model_copy(update={"severity": "high", "title": h.title[: -len(f" — {_BARE_PHRASE_WHY}")]})
+        elif h.rule == "inline-code-exec" and exec_why:
+            h = h.model_copy(update={"severity": "medium", "title": f"{h.title} — {exec_why}"})
         out.append(h)
     return out
+
+
+def _segments_trusted(event: dict) -> list[bool]:
+    """Per `normalize.content_segments_ex` segment, in its order: whether an OWNER, MEMBER or COLLABORATOR wrote it, which
+    only the body (the change's author) and a comment (its own writer) can say."""
+    from .normalize import _scanned_comments, content_segments_ex
+    prov = event.get("provenance")
+    author = isinstance(prov, dict) and str(prov.get("author_association") or "").upper() in _TRUSTED_ASSOCIATIONS
+    comments = iter(_scanned_comments(event))             # the comment segments are these, in this order
+    return [author if kind == "body" else next(comments)["association"] in _TRUSTED_ASSOCIATIONS if kind == "comment" else False
+            for _, _, kind, _ in content_segments_ex(event)]
+
+
+# How much of the text on each side of a `node -e` a planner scan must share with a maintainer's: the start of the code it runs.
+_MAINTAINER_WINDOW = 120
+_MAX_MAINTAINER_MATCHES = 50
+_WINDOW_WS_RE = re.compile(r"\s+")
+
+
+def _exec_window(text: str, m: re.Match) -> str:
+    """The text around a `node -e` match, whitespace collapsed (a line break is a space, as a folded YAML scalar reads it)."""
+    lo, hi = max(0, m.start() - _MAINTAINER_WINDOW), min(len(text), m.end() + _MAINTAINER_WINDOW)
+    return _WINDOW_WS_RE.sub(" ", text[lo:hi]).strip()
+
+
+_DIFF_GIT_LINE_RE = re.compile(r"^diff --git ", re.MULTILINE)
+
+
+def _maintainer_windows(event: dict) -> frozenset[str]:
+    """The window of every `node -e` the baseline softened: in the body of a change an OWNER, MEMBER or COLLABORATOR opened,
+    and in that author's own comments (a maintainer's comment on someone else's change is not scanned, and not softened)."""
+    from .normalize import content_segments_ex
+    windows: set[str] = set()
+    for (_, text, kind, _), trusted in zip(content_segments_ex(event), _segments_trusted(event)):
+        if trusted and kind in ("body", "comment"):
+            text = _lf(text)
+            windows.update(_exec_window(text, m) for m in islice(_NODE_INLINE_EXEC_RE.finditer(text), _MAX_MAINTAINER_MATCHES))
+    return frozenset(windows)
+
+
+def _written_by_maintainer(region: str, windows: frozenset[str]) -> bool:
+    """Whether every `node -e` in a region is one a maintainer wrote: its window is one the baseline read in a maintainer's
+    body or comment. A match is never judged by its lines alone, which a file can share with the maintainer's text while
+    running something else (`node` / `-e` / code folded over three lines of a YAML scalar)."""
+    text = _lf(region)
+    matches = list(islice(_NODE_INLINE_EXEC_RE.finditer(text), _MAX_MAINTAINER_MATCHES + 1))
+    return 0 < len(matches) <= _MAX_MAINTAINER_MATCHES and all(_exec_window(text, m) in windows for m in matches)
 
 
 def scan_content(event: dict) -> list[IndicatorHit]:
@@ -3057,12 +3186,13 @@ def scan_content(event: dict) -> list[IndicatorHit]:
     comment carries the commenter in `via`, decided by the segment's KIND, never by parsing its label."""
     from .normalize import content_segments_ex
     deduped: dict[str, IndicatorHit] = {}
-    for label, text, kind, who in content_segments_ex(event):
+    for (label, text, kind, who), trusted in zip(content_segments_ex(event), _segments_trusted(event)):
         prose_file = kind == "file" and label.lower().endswith(_PROSE_FILE_EXTS)
         diff = kind == "file"                                                  # a patch carries its own `+` markers; a body does not
-        hits = _segment_hits(text, kind, partial(scan_indicators, location=label, diff=diff), prose_file=prose_file, diff=diff, markdown=not label.lower().endswith(_NOT_MARKDOWN_EXTS))
+        patch = diff and "\n" not in label                                     # a name's own lines are no lines of its patch
+        hits = _segment_hits(text, kind, partial(scan_indicators, location=label, diff=diff, patch=patch), prose_file=prose_file, diff=diff, markdown=not label.lower().endswith(_NOT_MARKDOWN_EXTS))
         if kind != "branch":
-            hits = _or_closed(partial(_scope_to_file, hits, label, text, kind), hits, "_scope_to_file")
+            hits = _or_closed(partial(_scope_to_file, hits, label, text, kind, trusted), hits, "_scope_to_file")
         for h in hits:
             if who:
                 h = h.model_copy(update={"via": who})
@@ -3074,15 +3204,17 @@ def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
     """`scan_indicators` with per-file scoping — a paired rule can only fire when ONE file carries both
     halves. Non-diff input (a region the planner pulled out, a plain file) falls through to a single
     whole-text scan, so this is safe as the entry point for either shape. Both are read as a patch (a leading `+` is a diff marker):
-    the host-side baseline reads every channel with its own flag, and the union keeps its stricter hit."""
+    the host-side baseline reads every channel with its own flag, and the union keeps its stricter hit. Only the files of a
+    `diff --git` diff are a file's patch to `inline-code-exec` (`patch`); the fallthrough is read as it is."""
     raw = text or ""
     text = _lf(raw)
     segments = split_diff_by_file(text)
     if not segments:
         return scan_indicators(raw, location=location)
+    lone_cr = _LONE_CR_RE.search(raw) or "\0" in raw     # the files were cut out of the text `_lf` made
     deduped: dict[str, IndicatorHit] = {}
     for path, segment in segments:
-        found = scan_indicators(segment, location=path or location)
+        found = scan_indicators(segment, location=path or location, patch=bool(path) and not lone_cr)
         for h in _or_closed(partial(_scope_to_file, found, path, segment), found, "_scope_to_file") if path else found:
             keep_worse(deduped, h)
     if _LONE_CR_RE.search(raw):
@@ -3105,17 +3237,23 @@ _DETECTORS = (
 )
 
 
-def scan_indicators(text: str, *, location: str = "", diff: bool = True) -> list[IndicatorHit]:
+def scan_indicators(text: str, *, location: str = "", diff: bool = True, patch: bool = False) -> list[IndicatorHit]:
     """Run every detector over `text` and return the DEDUPED union of hits (by deterministic id).
 
-    `location` labels hits that don't carry their own (a filename/region tag). Deterministic and
+    `location` labels hits that don't carry their own (a filename/region tag). `patch` says the text is a file's patch
+    (a file of a change, or of a `diff --git` diff), which `inline-code-exec` reads as its new file. Deterministic and
     side-effect-free — safe to run host-side (baseline) and in-loop (tool)."""
     raw = text or ""
     text = _lf(raw)
+    # a lone CR is a line break to the file's own language but no line of the patch: a piece after it that starts with `-`
+    # is code, not a removed line, so such a patch is read as it is; and so is one with a NUL, which `_lf` deletes from in
+    # front of a line's first character
+    patch = patch and not _LONE_CR_RE.search(raw) and "\0" not in raw
     all_hits: list[IndicatorHit] = []
     for detector in _DETECTORS:
         try:
-            all_hits += detector(text, diff) if detector is _scan_shell else detector(text)
+            all_hits += (detector(text, diff) if detector is _scan_shell else detector(text, patch) if detector is _scan_js_exec
+                         else detector(text))
         except Exception as exc:  # noqa: BLE001 — fail CLOSED: a detector that crashed on this input is evidence
             # An input that crashes a detector must not silently disable the rest, or the whole change goes
             # unscanned. Record it as a finding (stable evidence, so it dedupes) and keep scanning.
@@ -3909,6 +4047,10 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
     from rlm_harness.trace import record_tool_call
 
     change = _Change(event) if event is not None else None
+    try:
+        windows = _maintainer_windows(event) if event is not None else frozenset()
+    except Exception:  # noqa: BLE001 — fail CLOSED: a planner scan keeps every `inline-code-exec` as found
+        windows = frozenset()
 
     def scan_indicators_tool(region: str, decoded_from: str | None = None) -> str:
         """Scan a snippet of the change, or a value you decoded from it, for malicious indicators — shell
@@ -3936,6 +4078,31 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
                              softened=header or not (added and re.search(r"^-[ \t]", text, re.MULTILINE)))
         copied = change is None or change.holds(text)
         grounded = copied or (bool(decoded_from) and (change.holds(decoded_from) or change.decoded_before(decoded_from)))
+        try:
+            # nothing tells which channel a region came from (a bot's comment can paste a `diff --git` diff the baseline
+            # never reads), so `inline-code-exec` also reads it as it is, beside the patch reading of any `diff --git` diff it
+            # holds: the planner's scan never reads less than the text holds
+            patched = [h for h in hits if h.rule == "inline-code-exec"] if _DIFF_GIT_LINE_RE.search(text) else []
+            raw = [h for h in _scan_js_exec(_lf(text)) if h.rule == "inline-code-exec"]
+            patched = [h for h in patched if h.severity == "high"] or raw or patched
+            hits = [h for h in hits if h.rule != "inline-code-exec"] + patched
+            # a value the planner decoded or wrote is no reply someone wrote: direction marks in it are not softened
+            if not copied and any(h.rule == "invisible-unicode" and h.severity != "high" for h in hits):
+                hits = [h for h in hits if h.rule != "invisible-unicode"] + [
+                    h for h in _scan_diff_evasion(_lf(text)) if h.rule == "invisible-unicode"]
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED, as `scan_indicators` does for a detector
+            hits = [*hits, _hit("scanner-error", "high", "the planner scan's second reading raised on this region",
+                                f"scan_indicators_tool: {type(exc).__name__}")]
+        # a region holding a `diff --git` diff was also read as a patch, whose `node -e` no window of the maintainer's tells
+        if (windows and copied and not decoded_from and not _DIFF_GIT_LINE_RE.search(text)
+                and any(h.rule == "inline-code-exec" and h.severity == "high" for h in hits)):
+            try:
+                quoted = _written_by_maintainer(text, windows)
+            except Exception:  # noqa: BLE001 — fail CLOSED
+                quoted = False
+            if quoted:      # what the baseline judged in the maintainer's text, read again
+                hits = [h.model_copy(update={"severity": "medium", "title": f"{h.title} — {_INLINE_EXEC_TRUSTED_WHY}"})
+                        if h.rule == "inline-code-exec" and h.severity == "high" else h for h in hits]
         if not copied and grounded and _squeeze(text):
             change.remember(text)       # a decoded value: the next layer of a multi-layer encoding comes from it
         if not grounded:

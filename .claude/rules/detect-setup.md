@@ -25,6 +25,15 @@ paths:
   reader of those two; `DetectConfig.from_env` reads both names and refuses them set to different values. It
   also refuses the keys the kit owns (model, endpoint, timeout), so a bad value stops the process rather than
   failing every run. The analyst's parameters never reach the classifier, which builds its own request.
+- **`DS_CLASSIFIER_LM_KWARGS` is the classifier's own**, over its `temperature=0.1`. `from_env` refuses the keys
+  its settings own (model, messages, stream, n, timeout, max_tokens, max_completion_tokens) and, when the `classify`
+  extra is installed, any key the OpenAI client does not take: that call would fail every time as an endpoint error,
+  which the circuit breaker never counts.
+- **A classifier reply cut at `max_tokens` is an unusable reply that names the cut** (`deep_classify._CutReply`,
+  read by the validator), not an endpoint error. The same request is cut the same way, so it is not re-sent, and a
+  classifier that keeps thinking through its budget trips the circuit breaker. A reply cut after a whole verdict
+  still counts. The tool_call records `cut: true`. The fix is a thinking budget in `DS_CLASSIFIER_LM_KWARGS` (raising
+  `DS_CLASSIFIER_MAX_TOKENS` alone can turn a slow model's cut into a timeout).
 - **Subscription auth is a lazy, opt-in branch.** A role whose model is `claude-agent-sdk/<id>` runs on
   rlm-harness's `ClaudeAgentLM`, imported only inside `detect._maybe_subscription_lm` and never from
   `__init__.py`, so `import diff_sentry` stays dspy-free and a proxy-only install never touches the SDK.
