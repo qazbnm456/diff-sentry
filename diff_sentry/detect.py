@@ -1,12 +1,12 @@
-"""ClassifyChange — the RLM task that classifies ONE GitHub change (PR/issue/push) for malicious intent.
+"""ClassifyChange: the RLM task that classifies ONE GitHub change (PR/issue/push) for malicious intent.
 
 A BewAIre-style detector re-expressed as an rlm-harness declaration. Model roles (configured, not fixed):
 - planner (main): a cheap, injection-resistant orchestrator that holds the diff in the REPL and triages.
-- analyst (sub_lm, via llm_query): an expensive brain for a subtle case — short distilled questions only.
+- analyst (sub_lm, via llm_query): an expensive brain for a subtle case; short distilled questions only.
 - deep_classify tool: the swappable SECOND-STAGE classifier (a model the planner CHOOSES to consult on
   an ambiguous change; recorded as a tool_call so the decision is in the trajectory).
 
-The prompt is DELIBERATELY TERSE — the MISSION frame (this is a DETECTOR of prompt injection, so it must
+The prompt is DELIBERATELY TERSE: the MISSION frame (this is a DETECTOR of prompt injection, so it must
 not fall to one), the tool cost-model, the triage loop, and the judgement-only SUBMIT contract. Attack
 taxonomy lives in the skills KB, pulled JIT via read_skill (catalog injected at startup).
 """
@@ -120,8 +120,8 @@ def _maybe_subscription_lm(model: str):
     Imports rlm-harness's `ClaudeAgentLM` LAZILY, inside the sentinel branch ONLY, so `import diff_sentry`
     stays dspy-free and a proxy-only install (no sentinel) never touches it. `claude-agent-sdk` is the
     optional `[subscription]` extra; the kit defers that import to construction, so a missing SDK
-    surfaces as an `ImportError` at build time HERE — re-raised as our uv-workflow-specific actionable
-    message. The stripped remainder is the Claude model — prefer a full id (`claude-sonnet-5` /
+    surfaces as an `ImportError` at build time HERE, re-raised as our uv-workflow-specific actionable
+    message. The stripped remainder is the Claude model; prefer a full id (`claude-sonnet-5` /
     `claude-fable-5`) over an alias, which drifts over time.
     """
     if not model.startswith(SUBSCRIPTION_PREFIX):
@@ -145,7 +145,7 @@ def setup(config: DetectConfig) -> DetectConfig:
 
     A role whose model is `claude-agent-sdk/<id>` runs on the user's Claude Pro/Max SUBSCRIPTION
     (rlm-harness's `ClaudeAgentLM`, injected through configure's public seam); every other role is built from
-    the DS_* proxy. Mixed auth is by design — the classifier (a separate tool)
+    the DS_* proxy. Mixed auth is by design: the classifier (a separate tool)
     always stays on its own OpenAI-compatible endpoint, never routed through the subscription.
     """
     # None → configure builds a dspy.LM from the proxy config.
@@ -221,8 +221,8 @@ class ClassifyChange(RLMTask):
                 (f"{files} file{'s' * (files != 1)}, " if files else "") + f"{len(text):,} characters in `event`")
         if config.enable_fetch:
             self.tools = self.tools + [make_github_fetch_tool(config)]
-        # A general extension seam: a consumer MAY pass extra sync tools. (SIEM emission is NOT here — it
-        # runs host-side after the run; see emit.py — so the planner needs no SIEM credentials.)
+        # A general extension seam: a consumer MAY pass extra sync tools. (SIEM emission is NOT here: it
+        # runs host-side after the run; see emit.py; so the planner needs no SIEM credentials.)
         self.tools = self.tools + list(extra_tools)
         if config.enable_skills:
             skills_dir = os.path.join(os.path.dirname(__file__), "skills")
@@ -236,7 +236,7 @@ class ClassifyChange(RLMTask):
                 + "\n\n"
                 + INSTRUCTIONS
             )
-        # Intercept the analyst (tracing only — zero transforms) so every llm_query escalation is a
+        # Intercept the analyst (tracing only, zero transforms) so every llm_query escalation is a
         # sub_call in the trace.
         kw.setdefault("sub_lm", intercept_sub_lm(get_sub_lm(), name="analyst"))
         super().__init__(**kw)

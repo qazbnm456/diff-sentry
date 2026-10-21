@@ -1,4 +1,4 @@
-"""The RLM task declaration — MISSION frame, skills wiring, tools, and a real dspy.RLM build.
+"""The RLM task declaration: MISSION frame, skills wiring, tools, and a real dspy.RLM build.
 
 Uses configure_dummy (DummyLM + mock interpreter): builds through the real dspy.RLM constructor with no
 network/Deno. No forward() call (that needs a live model + classifier endpoint)."""
@@ -46,7 +46,7 @@ def test_tools_wired(configure_dummy):
     assert "scan_indicators" in names             # the deterministic detector tool (registered name)
     assert "deep_classify" in names               # the second-stage seam
     assert "read_skill" in names
-    # fetch is OFF by default (exfil surface) — no fetch_url unless enable_fetch
+    # fetch is OFF by default (exfil surface): no fetch_url unless enable_fetch
     assert "fetch_url" not in names
 
 

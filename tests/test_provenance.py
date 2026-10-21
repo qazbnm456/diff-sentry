@@ -1,4 +1,4 @@
-"""Host-side PROVENANCE detectors (`indicators.scan_provenance`) — the source/identity signals from the
+"""Host-side PROVENANCE detectors (`indicators.scan_provenance`): the source/identity signals from the
 malicious-PR research (author association/type, account age, commit signatures), turned into deterministic
 BASELINE hits. Tuned exactly like the text rules: a new/first-time author and an unsigned commit are COMMON
 → sub-floor `low` corroborators; a bot IMPERSONATION is rare and high-signal → `high` (forces a signal).
@@ -53,7 +53,7 @@ def test_legit_hosted_machine_account_never_signals():
 
 def test_bot_lookalike_from_a_newcomer_is_a_subfloor_corroborator():
     # the REAL impersonation shape: a NEW User account with a bot-like login. A medium corroborator that
-    # combines with a payload — never a signal on its own.
+    # combines with a payload, never a signal on its own.
     prov = {"author_login": "dependabot-fix", "author_type": "User",
             "author_association": "FIRST_TIME_CONTRIBUTOR"}
     assert "bot-like-author" in _rules(prov)
@@ -74,7 +74,7 @@ def test_first_timer_and_unsigned_are_subfloor_corroborators():
     sev = _sev(prov)
     assert sev["unknown-contributor"] == "low" and sev["unsigned-commits"] == "low"
     assert severity_rank("low") < severity_rank(SIGNAL_SEVERITY_FLOOR)
-    assert _signal(prov) is False   # sub-floor — corroborators never force a signal on their own
+    assert _signal(prov) is False   # sub-floor: corroborators never force a signal on their own
 
 
 def test_young_account_flags_unknown_contributor():
@@ -131,7 +131,7 @@ def test_spoofed_commit_author_flags_only_outsider_bot_like_git_authors():
     # assert the specific rule's absence rather than an empty hit set)
     assert "spoofed-commit-author" not in _rules({**outsider, "unverified_commit_authors": ["realdev", "alice"]})
     # an ESTABLISHED account's unverified bot-named commits (self-hosted Renovate / github-actions via git)
-    # must NOT fire — same outsider gate as the login/display rules.
+    # must NOT fire: same outsider gate as the login/display rules.
     established = {"author_login": "renovate-bot", "author_type": "User", "author_association": "MEMBER",
                   "author_account_age_days": 900, "unverified_commit_authors": ["renovate[bot]"]}
     assert scan_provenance(established) == []
@@ -172,7 +172,7 @@ def test_provenance_summary_surfaces_unresolvable_but_not_display_name():
 # ── the cli baseline unions text + provenance (the live integration point) ─────────────────────────
 
 def test_cli_baseline_unions_provenance_hits():
-    """cli's host-side baseline records the text detectors ∪ the provenance detectors — dropping the
+    """cli's host-side baseline records the text detectors ∪ the provenance detectors; dropping the
     provenance union would silently lose the source signals, so pin it directly (a forged bot identity
     lands in the recorded baseline even with no textual payload)."""
     event = {"repo": "acme/x", "kind": "pull_request", "number": 7, "author": "renovate[bot]",

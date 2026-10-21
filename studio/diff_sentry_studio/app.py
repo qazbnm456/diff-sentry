@@ -1,9 +1,9 @@
 """The SSE server: two modes.
 
-- **Replay** (`GET /v1/runs/{id}` + `/events`) — serve a finished run's structured `DetectionResponse`
+- **Replay** (`GET /v1/runs/{id}` + `/events`): serve a finished run's structured `DetectionResponse`
   and replay its stored trace as SSE. A thin bridge over diff-sentry's per-run artifacts (`responses/`,
   `traces/`); defaults to this in-repo workspace root, override with `DS_ARTIFACTS_DIR`.
-- **Live** (`POST /v1/classify`) — drive a LIVE classification via diff-sentry's `cli.run` from a change
+- **Live** (`POST /v1/classify`): drive a LIVE classification via diff-sentry's `cli.run` from a change
   (a pasted payload, or a `pr`/`issue` ingested host-side via `gh`) and stream the ACTION trajectory as
   SSE (the `TraceRecorder`'s `on_event` observer; see `live.py`), ending with `detection.run.completed`
   carrying the durable `DetectionResponse`. SIEM emission is OFF (a viewer must not POST to a SIEM).
@@ -11,7 +11,7 @@
 The console reads diff-sentry's trace (v1 or v2) + DetectionResponse contract; it re-implements no harness
 logic.
 NO cancel/Stop in v1 (a classification is one short change): a terminal Ctrl+C makes uvicorn wait for the
-live SSE to close (the run to finish) before exiting — set `--timeout-graceful-shutdown` as a bound.
+live SSE to close (the run to finish) before exiting; set `--timeout-graceful-shutdown` as a bound.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ ARTIFACTS = Path(
     os.environ.get("DS_ARTIFACTS_DIR") or REPO_ROOT / "output"
 ).expanduser().resolve()
 # The bundled incident corpus is a REPO asset (ships with the studio), NOT a per-deployment artifact, so
-# it is anchored to the repo root INDEPENDENTLY of ARTIFACTS — a `DS_ARTIFACTS_DIR` override must not empty
+# it is anchored to the repo root INDEPENDENTLY of ARTIFACTS: a `DS_ARTIFACTS_DIR` override must not empty
 # the demo picker.
 CORPUS = REPO_ROOT / "tests" / "corpus"
 STATIC = Path(__file__).resolve().parent.parent / "static"
@@ -53,7 +53,7 @@ app = FastAPI(title="diff-sentry-studio", version="0.1.0")
 
 
 class _RevalidateStatic(StaticFiles):
-    """Serve static assets with `Cache-Control: no-cache` so the browser ALWAYS revalidates — it still
+    """Serve static assets with `Cache-Control: no-cache` so the browser ALWAYS revalidates; it still
     304s when unchanged (via the ETag StaticFiles already sends, so it's cheap). Without this the
     zero-build `app.js`/`style.css` cache indefinitely, so a shipped frontend change silently shows the
     OLD UI until a manual hard-refresh."""
@@ -89,7 +89,7 @@ _SUBSCRIPTION_PREFIX = "claude-agent-sdk/"  # mirrors diff_sentry.config.SUBSCRI
 
 def _role_or_none(explicit: str | None, fallback: str | None) -> str | None:
     """`explicit or fallback`, EXCEPT a role that can't run on a subscription (the second-stage
-    classifier — a separate make_model_tool endpoint, not the Agent SDK) must not surface a
+    classifier, a separate make_model_tool endpoint, not the Agent SDK) must not surface a
     subscription-sentinel fallback: `from_env` REJECTS a `claude-agent-sdk/…` classifier, so showing the
     analyst there would display a config a run couldn't use. Fall back only to a real (non-sub) model."""
     if explicit:
@@ -100,7 +100,7 @@ def _role_or_none(explicit: str | None, fallback: str | None) -> str | None:
 def _slug_id(raw: str) -> str:
     """A filesystem-/URL-safe id token: keep [A-Za-z0-9._-], fold the rest (incl. `/`) to '-', strip
     leading/trailing '.'/'-' so it can NEVER become a traversal segment (`..`, an absolute path, a nested
-    dir). run_id embeds attacker-influenceable input (a repo string), and it becomes a file path — a
+    dir). run_id embeds attacker-influenceable input (a repo string), and it becomes a file path: a
     detection console must not open a path traversal on itself."""
     token = re.sub(r"[^A-Za-z0-9._-]+", "-", raw or "").strip("-.")
     return token or "unknown"
@@ -123,7 +123,7 @@ def _causal_key(event: dict) -> tuple:
     """Replay order = CAUSAL order: `ts` first, `step_id` as the tiebreak, a missing/malformed `ts` last.
 
     `step_id` is WRITE order, and it lies about `main_step`: rlm-harness flushes the whole trajectory after
-    the run, so every turn's step_id trails every live tool_call/sub_call of the run. `ts` does not lie —
+    the run, so every turn's step_id trails every live tool_call/sub_call of the run. `ts` does not lie:
     a turn is stamped when its reasoning was PARSED (the flush only backfills that live stamp), so by `ts`
     a turn precedes the tool calls its own code then made; the same interleave rlm-harness's
     `export_actions` produces. `step_id` stays as the tiebreak so same-`ts` events (a trace with no live
@@ -181,7 +181,7 @@ def config() -> JSONResponse:
 
 @app.get("/v1/runs")
 def list_runs() -> JSONResponse:
-    """Run ids that have a stored response, sorted — feeds the Load picker so the user can discover what
+    """Run ids that have a stored response, sorted; feeds the Load picker so the user can discover what
     is loadable instead of guessing a run id."""
     d = ARTIFACTS / "responses"
     runs = sorted((p.stem for p in d.glob("*.json")), key=lambda s: s.lower()) if d.is_dir() else []
@@ -190,7 +190,7 @@ def list_runs() -> JSONResponse:
 
 @app.get("/v1/fixtures")
 def fixtures() -> JSONResponse:
-    """The bundled hackerbot-claw incident events as ready-made demo inputs — one click loads a real
+    """The bundled hackerbot-claw incident events as ready-made demo inputs: one click loads a real
     reconstructed attack into the classify box, with its `expected_signal`/`expected_rules` so the UI can
     show expected-vs-actual. Read-only, from `tests/corpus/`. `{fixtures: []}` when the corpus is absent
     (a packaged deploy without the repo tree)."""
@@ -199,7 +199,7 @@ def fixtures() -> JSONResponse:
         return JSONResponse({"fixtures": []})
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 — a malformed corpus must not 500 the console
+    except Exception:  # noqa: BLE001 (a malformed corpus must not 500 the console)
         return JSONResponse({"fixtures": []})
     out = [{"name": e.get("name"), "incident_ref": e.get("incident_ref"), "note": e.get("note"),
             "expected_signal": e.get("expected_signal"), "expected_rules": e.get("expected_rules"),
@@ -211,7 +211,7 @@ def fixtures() -> JSONResponse:
 @app.get("/v1/runs/{run_id}")
 def get_run(run_id: str) -> JSONResponse:
     """The durable, structured `DetectionResponse` for a finished run, AUGMENTED with `cited_unknown_ids`
-    (the planner's fabricated citations — re-derived from the trace, since the response envelope omits it;
+    (the planner's fabricated citations, re-derived from the trace, since the response envelope omits it;
     see iterations.cited_unknown_ids). Missing trace → `[]` (no fabrication tell available)."""
     p = _response_path(run_id)
     if not p.exists():
@@ -227,8 +227,8 @@ def get_run(run_id: str) -> JSONResponse:
 
 @app.get("/v1/runs/{run_id}/iterations")
 def get_iterations(run_id: str) -> JSONResponse:
-    """The per-iteration trajectory breakdown — planner reasoning + REPL code/output + each turn's tool
-    calls + timing — behind the Trajectory drawer. Built from the stored trace, read-only."""
+    """The per-iteration trajectory breakdown (planner reasoning + REPL code/output + each turn's tool
+    calls + timing), behind the Trajectory drawer. Built from the stored trace, read-only."""
     p = _trace_path(run_id)
     if not p.exists():
         raise HTTPException(404, f"no trace for run {run_id!r}")
@@ -237,7 +237,7 @@ def get_iterations(run_id: str) -> JSONResponse:
 
 @app.get("/v1/runs/{run_id}/events")
 async def stream_run(run_id: str, delay: float = 0.0) -> StreamingResponse:
-    """Replay the run's trace as SSE — the process build-up. `delay` (seconds) paces it to feel live.
+    """Replay the run's trace as SSE: the process build-up. `delay` (seconds) paces it to feel live.
     Wait for `detection.run.completed`, then GET `/v1/runs/{run_id}` for the full result."""
     p = _trace_path(run_id)
     if not p.exists():
@@ -257,7 +257,7 @@ async def stream_run(run_id: str, delay: float = 0.0) -> StreamingResponse:
             if delay:
                 await asyncio.sleep(delay)
         if not saw_completed:
-            # The trace never finalized — no `run_end` (e.g. a hard-killed run: SIGKILL skips the
+            # The trace never finalized: no `run_end` (e.g. a hard-killed run: SIGKILL skips the
             # recorder's __exit__, truncating the JSONL). Still close the replay with the terminal event,
             # so the client GETs the stored response instead of waiting forever "Classifying…".
             yield _sse("detection.run.completed", {})
@@ -299,7 +299,7 @@ async def classify(req: ClassifyRequest) -> StreamingResponse:
     `detection.run.completed` carrying the durable `DetectionResponse`. The run executes in a worker
     thread (it has blocking parts); the `on_event` observer pushes events onto a thread-safe queue this
     coroutine drains. The run writes the usual diff-sentry artifacts (so it is later GET-replayable).
-    409 if a FINALIZED run already owns this run_id and `overwrite` is not set — diff-sentry's `run`
+    409 if a FINALIZED run already owns this run_id and `overwrite` is not set; diff-sentry's `run`
     resets the trace per run_id, so a re-classify would clobber the stored response/trace."""
     run_id = _derive_run_id(req)
     if not req.overwrite and _response_path(run_id).exists():

@@ -1,11 +1,11 @@
 """Score one recorded diff-sentry run against its EvalTask, then aggregate rows into the scorecard.
 
 The READ side of the harness: it reconstructs the ATLAS judge's inputs DETERMINISTICALLY from the existing
-trace contract, reaching diff-sentry ONLY through its PUBLIC surface (the same rule the studio follows) —
+trace contract, reaching diff-sentry ONLY through its PUBLIC surface (the same rule the studio follows),
 never a private internal:
 
 - `diff_sentry.verdict_from_events` → the assembled `AssembledVerdict` (the planner's judgement UNIONed
-  with the deterministic indicator evidence + the DERIVED signal — so the judge grades the real artifact
+  with the deterministic indicator evidence + the DERIVED signal, so the judge grades the real artifact
   the system emits, not the planner's raw self-report);
 - `diff_sentry.run_labels` (verdict / signal / indicator_count / max_indicator_severity / cited_unknown) ∪
   `diff_sentry.run_metrics` (scan / deep_classify / analyst / fetch counts, cap) for the execution summary
@@ -41,7 +41,7 @@ def _run_id(events: list[dict]) -> str:
 
 
 def _trace_facts(events: list[dict]) -> dict:
-    """run_labels ∪ run_metrics — the deterministic facts every category lens slices. Their key-sets are
+    """run_labels ∪ run_metrics: the deterministic facts every category lens slices. Their key-sets are
     DISJOINT, so the merge drops nothing (mirrors `diff_sentry.rubric.trace_facts`, kept on the public
     surface)."""
     return {**run_labels(events), **run_metrics(events)}
@@ -71,7 +71,7 @@ def _change_for_judge(events: list[dict], eval_task: EvalTask) -> str:
 
 
 def _verdict_block(a: AssembledVerdict) -> str:
-    """The compact classification the judge grades — the assembled verdict + the planner's reasoning."""
+    """The compact classification the judge grades: the assembled verdict + the planner's reasoning."""
     techniques = ", ".join(a.techniques) or "(none)"
     suspects = ", ".join(a.suspect_files) or "(none)"
     return "\n".join([
@@ -85,7 +85,7 @@ def _verdict_block(a: AssembledVerdict) -> str:
 
 
 def _indicators_block(a: AssembledVerdict, *, limit: int = 20) -> str:
-    """The deterministic indicator evidence union, bounded — the FACTS a signal is built on (never the
+    """The deterministic indicator evidence union, bounded: the FACTS a signal is built on (never the
     planner's self-report). `cited_unknown_ids` are surfaced as the fabrication tell for the judge's TG/PA."""
     hits = a.indicators[:limit]
     if not hits:
@@ -103,7 +103,7 @@ def _indicators_block(a: AssembledVerdict, *, limit: int = 20) -> str:
 
 
 def _execution_summary(events: list[dict]) -> str:
-    """The deterministic narrative the judge reads — the derived verdict/signal/evidence + the effort
+    """The deterministic narrative the judge reads: the derived verdict/signal/evidence + the effort
     counters, all re-sourced from run_labels ∪ run_metrics, never the planner's self-report."""
     f = _trace_facts(events)
     refused = f.get("analyst_failures")
@@ -176,7 +176,7 @@ def aggregate(rows: list[EvalRow], *, taskset: str, judge_model: str = "",
     """Rows → the scorecard: per-category ARITHMETIC MEANS over the scored rows, TF primary.
 
     Unscored rows count in `n`/`n_unscored` but never enter the means (unscored is not 0). There is no
-    composite and no threshold here by design — the report is a measurement, not a signal.
+    composite and no threshold here by design; the report is a measurement, not a signal.
     """
     scored = [r for r in rows if not r.unscored and r.score is not None]
     means: dict[str, float] = {}

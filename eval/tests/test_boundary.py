@@ -22,7 +22,7 @@ def test_import_diff_sentry_does_not_import_the_eval_harness():
 
 def test_import_eval_pulls_diff_sentry_one_way_and_stays_light():
     """The harness reads diff-sentry's contract (the one-way direction) without dragging dspy or openai at
-    import time — scoring with the stub judge needs neither."""
+    import time; scoring with the stub judge needs neither."""
     code = ("import sys, diff_sentry_eval; assert 'diff_sentry' in sys.modules; "
             "assert 'dspy' not in sys.modules; assert 'openai' not in sys.modules; print('ok')")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)

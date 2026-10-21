@@ -1,4 +1,4 @@
-"""The external eval judge — ATLAS's 4-category 0-10 LLM-as-judge of the assembled VERDICT, on
+"""The external eval judge: ATLAS's 4-category 0-10 LLM-as-judge of the assembled VERDICT, on
 `rlm_harness.tools.make_model_tool`.
 
 Same base/wrap split as diff-sentry's `deep_classify`: rlm-harness owns the
@@ -6,15 +6,15 @@ generic chat → transient-retry → validate → circuit-breaker core; this mod
 the generic ATLAS change-analysis-eval prompt, and the strict 0-10 validator. Properties that keep the
 measure honest and separate from any training reward:
 
-- HOST-SIDE and offline — never a planner tool, never registered with dspy, never in a trace;
-- GENERIC prompt (no per-run rubric) — the fixed-external-judge property that keeps the measure unbiased
+- HOST-SIDE and offline: never a planner tool, never registered with dspy, never in a trace;
+- GENERIC prompt (no per-run rubric): the fixed-external-judge property that keeps the measure unbiased
   (it also never reads the in-run planner's self-judgement as truth);
-- four 0-10 category scores that stay a REPORT — a failed/off-schema judge yields an `unscored` verdict,
+- four 0-10 category scores that stay a REPORT: a failed/off-schema judge yields an `unscored` verdict,
   never a fake 0, and nothing here composes a reward;
 - READ-NEVER-EXECUTE: the judge assesses the classification STATICALLY (it is prompted not to run/build
-  the change and to treat the diff as untrusted data) — the same invariant the rest of diff-sentry holds.
+  the change and to treat the diff as untrusted data), the same invariant the rest of diff-sentry holds.
 
-The judge model is swappable via `DSEVAL_*` env (role-based, o4-mini-class per the paper — no model name
+The judge model is swappable via `DSEVAL_*` env (role-based, o4-mini-class per the paper; no model name
 hardcoded). `openai` is imported LAZILY inside the chat closure, so the stub path needs nothing installed.
 `stub_judge` is the deterministic offline double for tests/CI.
 """
@@ -94,12 +94,12 @@ Return STRICT JSON and nothing else:
 
 @dataclass
 class EvalJudgeConfig:
-    """The judge endpoint, role-based via DSEVAL_* env — never a hardcoded model name."""
+    """The judge endpoint, role-based via DSEVAL_* env, never a hardcoded model name."""
 
-    model: str = ""                 # DSEVAL_MODEL — empty means "no live judge configured" (use the stub)
-    base_url: str | None = None  # DSEVAL_BASE_URL — any OpenAI-compatible endpoint
+    model: str = ""                 # DSEVAL_MODEL: empty means "no live judge configured" (use the stub)
+    base_url: str | None = None  # DSEVAL_BASE_URL: any OpenAI-compatible endpoint
     api_key: str = ""               # DSEVAL_API_KEY
-    timeout: float = 60.0           # DSEVAL_TIMEOUT (seconds) — a HARD ceiling per call
+    timeout: float = 60.0           # DSEVAL_TIMEOUT (seconds): a HARD ceiling per call
     max_tokens: int = 1024
     transient_retries: int = 1
     max_consecutive_invalid: int | None = 4  # batch-scoped circuit breaker (make_model_tool)
@@ -118,7 +118,7 @@ class EvalJudgeConfig:
 class JudgeVerdict:
     """What a judge callable returns for one run: a score, or an explicit unscored reason.
 
-    Unscored is never a fake 0 — `score_run` turns `ok=False` into an `unscored` row excluded from means.
+    Unscored is never a fake 0: `score_run` turns `ok=False` into an `unscored` row excluded from means.
     """
 
     ok: bool
@@ -128,7 +128,7 @@ class JudgeVerdict:
 
 @dataclass
 class _EvalValidation:
-    """The validator's read of the judge's raw output — `.ok`/`.errors` for make_model_tool."""
+    """The validator's read of the judge's raw output: `.ok`/`.errors` for make_model_tool."""
 
     ok: bool
     errors: list[str] = field(default_factory=list)
@@ -162,7 +162,7 @@ def parse_eval_json(raw: str) -> _EvalValidation:
     errors: list[str] = []
     for cat in CATEGORIES:
         value = raw_scores.get(cat)
-        # bool is an int subclass — a true/false "score" is off-schema, not a number to clamp.
+        # bool is an int subclass: a true/false "score" is off-schema, not a number to clamp.
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             errors.append(f"scores.{cat} missing or not a number (got {value!r})")
             continue
@@ -231,12 +231,12 @@ def make_eval_judge(config: EvalJudgeConfig | None = None, *,
 
 
 def stub_judge(inputs: dict) -> JudgeVerdict:
-    """The deterministic OFFLINE judge double for tests/CI — fixed mid-scale scores, no model, no creds.
+    """The deterministic OFFLINE judge double for tests/CI: fixed mid-scale scores, no model, no creds.
 
     Same callable contract as `make_eval_judge`'s judge, so the whole pipeline (score → aggregate →
     report) runs end-to-end with zero network. Its notes state plainly that it is not a model verdict.
     """
-    del inputs  # deterministic by construction — the stub does not read the run
+    del inputs  # deterministic by construction; the stub does not read the run
     return JudgeVerdict(ok=True, score=EvalScore(
         TF=5.0, TA=5.0, TG=5.0, PA=5.0,
         notes="stub judge: deterministic offline placeholder scores (not a model verdict)",

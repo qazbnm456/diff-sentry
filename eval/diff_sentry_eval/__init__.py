@@ -1,7 +1,7 @@
-"""diff-sentry-eval — an OFFLINE, reward-free MEASUREMENT harness for diff-sentry runs.
+"""diff-sentry-eval: an OFFLINE, reward-free MEASUREMENT harness for diff-sentry runs.
 
 The boundary this package exists to keep: **it measures; it never rewards.** It is a one-way reader of
-diff-sentry's trace + assembled-verdict contract — the data flows trace → judge → report (a terminal
+diff-sentry's trace + assembled-verdict contract: the data flows trace → judge → report (a terminal
 scorecard), and the scores are read by a human, a CI gate, or a leaderboard render. They are NEVER
 
 - composed into a single weighted reward R(tau) (the report carries per-category means only),
@@ -9,7 +9,7 @@ scorecard), and the scores are read by a human, a CI gate, or a leaderboard rend
 - imported BY diff-sentry (`diff_sentry` never imports `diff_sentry_eval`; test-enforced one-way dep).
 
 This mirrors the ATLAS paper's own split: training rewards and the fixed external evaluation judge are
-different judges on purpose — folding the eval score into the rollout core would bias the very measure it
+different judges on purpose; folding the eval score into the rollout core would bias the very measure it
 provides. It also holds diff-sentry's read-never-execute invariant: the judge assesses the classification
 STATICALLY, it never runs/builds the change. If you find yourself importing `diff_sentry_eval` from the
 rollout core, stop: that is the violation.

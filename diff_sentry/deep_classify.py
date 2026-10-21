@@ -1,8 +1,8 @@
-"""The second-stage classifier tool — the SEAM designed to be swapped to a stronger/dedicated backend.
+"""The second-stage classifier tool: the SEAM designed to be swapped to a stronger/dedicated backend.
 
 `make_deep_classify_tool` builds the `deep_classify` tool from a `chat_fn` via rlm-harness's `make_model_tool`
 (chat + transient-retry + validate + circuit-breaker). The planner CHOOSES to consult it on an ambiguous
-change, so the call lands in the trajectory as a `tool_call` — the correct rlm-harness shape for a second
+change, so the call lands in the trajectory as a `tool_call`, the correct rlm-harness shape for a second
 model-JUDGEMENT (it must be a tool, not the sub-LM: a model grading the change is an agentic decision).
 
 - `classify_backend="self"` (the default and only wired backend): a general model returns a structured
@@ -10,7 +10,7 @@ model-JUDGEMENT (it must be a tool, not the sub-LM: a model grading the change i
 - A dedicated/stronger backend replaces only `_selfclassify_chat`; the planner, schema, assemble, and
   export stay untouched. Routing stage-2 through one `chat_fn` is what keeps that swap local.
 
-The chat call is injectable (`chat_fn`) so the pipeline is testable without a live endpoint. Sync — dspy
+The chat call is injectable (`chat_fn`) so the pipeline is testable without a live endpoint. Sync: dspy
 invokes tools synchronously.
 """
 
@@ -37,7 +37,7 @@ class _CutReply(str):
 
 @dataclass
 class ClassifyValidation:
-    """The validator's verdict over the classifier's raw output — `.ok` / `.errors` for make_model_tool,
+    """The validator's verdict over the classifier's raw output: `.ok` / `.errors` for make_model_tool,
     plus the parsed structured fields the caller surfaces to the planner."""
 
     ok: bool
@@ -50,7 +50,7 @@ class ClassifyValidation:
 
 def _parse_classifier_json(raw: str) -> ClassifyValidation:
     """Deterministically validate the classifier's structured output: it must be JSON with a known
-    `verdict`. A malformed/off-schema reply is `ok=False` so the planner re-asks or falls back — never
+    `verdict`. A malformed/off-schema reply is `ok=False` so the planner re-asks or falls back, never
     a silent bad verdict. One cut at `max_tokens` (`_CutReply`) says so, whatever it holds."""
     v = _parse_reply(raw)
     if v.ok or not isinstance(raw, _CutReply):

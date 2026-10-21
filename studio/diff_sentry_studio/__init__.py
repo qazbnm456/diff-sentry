@@ -1,1 +1,1 @@
-"""diff-sentry-studio — SSE server + web frontend over diff-sentry run artifacts."""
+"""diff-sentry-studio: SSE server + web frontend over diff-sentry run artifacts."""

@@ -1,14 +1,14 @@
-"""L4a — offline DETECTION-QUALITY corpus over the deterministic layer (scan_indicators + assemble).
+"""L4a: offline DETECTION-QUALITY corpus over the deterministic layer (scan_indicators + assemble).
 
 No model, no loop: just the pattern detectors + the read-time evidence floor. Each corpus event is
 assembled under a NEUTRAL benign verdict, so `signal` is driven PURELY by the deterministic evidence
 (the MF3 floor), never by a self-report. The harness pins three things:
 
   * recall == 1.0 on the malicious families (every malicious event fires its family's key rule and
-    reaches the signal floor — the detector cannot miss a family we claim to cover),
+    reaches the signal floor; the detector cannot miss a family we claim to cover),
   * false-positive rate == 0 on the CLEAN benigns (measured on `signal`, not on "no rule fired": a
     benign workflow edit legitimately fires `workflow-tamper`/medium, which is BELOW the signal floor),
-  * the known-fp bucket stays TRACKED — a security doc whose prose quotes injection phrasing fires
+  * the known-fp bucket stays TRACKED: a security doc whose prose quotes injection phrasing fires
     `prompt-injection` today; we count it, we don't pretend it's clean, so a future rule change that
     fixes OR worsens it is visible in the diff.
 
@@ -32,10 +32,10 @@ _EMIT_ON = ("suspicious", "malicious")
 
 
 def _assemble(event, *, verdict_label="benign"):
-    """Assemble the event under a chosen verdict, with only the host-side baseline in the trace — so the
+    """Assemble the event under a chosen verdict, with only the host-side baseline in the trace, so the
     signal derives from the deterministic evidence floor, exactly as the crash path and MF3 backstop do."""
     # scan_change, not scan_indicators(raw_content(...)): the corpus is the golden guard for the
-    # deterministic layer, so it has to exercise the path production actually takes — per-file scoped, plus the
+    # deterministic layer, so it has to exercise the path production actually takes: per-file scoped, plus the
     # structural rules over the file list.
     baseline = [h.model_dump() for h in scan_change(event)]
     events = [{"type": "run_start",
@@ -69,7 +69,7 @@ def test_signal_matches_label(entry):
 # ── the aggregate quality gates ───────────────────────────────────────────────────────────────────
 
 def test_recall_on_malicious_is_perfect():
-    """Every malicious family signals AND fires its declared key rule — even under a benign verdict, so
+    """Every malicious family signals AND fires its declared key rule, even under a benign verdict, so
     a false-benign self-report could not have suppressed it. Recall must be exactly 1.0."""
     mal = [e for e in _ENTRIES if e["kind"] == "malicious"]
     assert mal, "corpus must carry malicious families"
@@ -85,7 +85,7 @@ def test_recall_on_malicious_is_perfect():
 
 
 def test_false_positive_rate_on_clean_benigns_is_zero():
-    """No CLEAN benign may reach the signal floor. Measured on `signal`, NOT on 'no rule fired' — a legit
+    """No CLEAN benign may reach the signal floor. Measured on `signal`, NOT on 'no rule fired': a legit
     workflow edit fires `workflow-tamper`/medium (sub-floor), which correctly does not signal."""
     benign = [e for e in _ENTRIES if e["kind"] == "benign"]
     assert benign, "corpus must carry clean benigns"
@@ -96,7 +96,7 @@ def test_false_positive_rate_on_clean_benigns_is_zero():
 
 def test_known_false_positives_are_tracked_not_hidden():
     """The known-fp bucket is a documented, COUNTED false positive (prose quoting injection phrasing).
-    We assert it still signals today AND that the count is exactly what we checked in — so a rule change
+    We assert it still signals today AND that the count is exactly what we checked in, so a rule change
     that removes OR adds a known FP is a visible test diff, never a silent surprise."""
     known_fp = [e for e in _ENTRIES if e["kind"] == "known-fp"]
     assert len(known_fp) == 1, "update this count deliberately when the known-fp corpus changes"

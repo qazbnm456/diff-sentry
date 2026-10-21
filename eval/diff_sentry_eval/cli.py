@@ -1,4 +1,4 @@
-"""diff-sentry-eval — score diff-sentry runs against the ATLAS 4-category judge (a terminal scorecard).
+"""diff-sentry-eval: score diff-sentry runs against the ATLAS 4-category judge (a terminal scorecard).
 
     diff-sentry-eval score "output/traces/*.jsonl" demo      # score EXISTING traces (offline-capable)
     diff-sentry-eval run demo                                 # drive diff_sentry per change, then score
@@ -77,7 +77,7 @@ def _score_and_emit(rows, *, taskset: str, judge_model: str, prompt_version: str
     print(render_report(report))
     print(f"\n-> {path}")
     # A batch where NOTHING scored (no rows, or a dead judge / all-off-schema → every row unscored) is not
-    # a green run — exit non-zero so a CI gate keying on the exit code doesn't read an empty scorecard as pass.
+    # a green run; exit non-zero so a CI gate keying on the exit code doesn't read an empty scorecard as pass.
     if not rows or report.n_unscored == report.n:
         return 1
     return 0
@@ -112,7 +112,7 @@ def _cmd_score(args) -> int:
 
 def _cmd_run(args) -> int:
     """Run-then-score: drive `diff_sentry.cli.run` per task (run_id = task id), then score the fresh
-    trace's events. diff_sentry is imported LAZILY here — this is the only mode that pulls the solve stack
+    trace's events. diff_sentry is imported LAZILY here: this is the only mode that pulls the solve stack
     (dspy, Deno, DS_* creds). The task's `change` payload is ingested via diff_sentry's public
     `event_from_payload`; the SIEM emitter is disabled (an eval must have no side effects)."""
     from diff_sentry import event_from_payload

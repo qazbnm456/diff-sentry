@@ -1,4 +1,4 @@
-"""DetectConfig — env parsing (from_env), the classify_backend guard, and the can_emit property.
+"""DetectConfig: env parsing (from_env), the classify_backend guard, and the can_emit property.
 
 The developer's shell may carry ambient `DS_*` vars; every test scrubs the full set first so a real
 environment can't flip a default under the test.
@@ -10,7 +10,7 @@ import pytest
 
 from diff_sentry.config import DetectConfig
 
-# Every DS_* var from_env reads — cleared before each test so ambient env can't leak in.
+# Every DS_* var from_env reads, cleared before each test so ambient env can't leak in.
 _DS_ENV = (
     "DS_ROOT_LM", "DS_SUB_LM", "DS_BASE_URL", "DS_API_KEY", "DS_CLASSIFIER_LM", "DS_PLANNER_MAX_TOKENS",
     "DS_ROOT_LM_KWARGS", "DS_SUB_LM_KWARGS", "RLM_MAIN_LM_KWARGS", "RLM_SUB_LM_KWARGS",

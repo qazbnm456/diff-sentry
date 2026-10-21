@@ -1,5 +1,5 @@
-"""The live-run driver — verified with `cli.run` / ingest STUBBED, so it needs no LLM, dspy, gh, or
-diff_sentry. The action stream comes from the recorder's `on_event` (no dspy callback — diff-sentry's
+"""The live-run driver: verified with `cli.run` / ingest STUBBED, so it needs no LLM, dspy, gh, or
+diff_sentry. The action stream comes from the recorder's `on_event` (no dspy callback; diff-sentry's
 cli.run has none), so these tests exercise the sink mapping, the ingest dispatch, and the finalize path."""
 
 import json
@@ -23,8 +23,8 @@ def test_trace_event_sink_maps_tools_and_sub_calls_and_skips_the_rest():
     on_event({"type": "tool_call", "payload": {"tool": "scan_indicators", "hits": [{"severity": "high"}], "n": 1}})
     on_event({"type": "tool_call", "payload": {"tool": "deep_classify", "ok": True, "verdict": "malicious"}})
     on_event({"type": "sub_call", "payload": {"input": "q", "processed": "a"}})
-    on_event({"type": "main_step", "payload": {"reasoning": "r", "code": "c"}})   # SKIP — post-hoc burst
-    on_event({"type": "run_start", "payload": {}})                               # SKIP — endpoint owns created
+    on_event({"type": "main_step", "payload": {"reasoning": "r", "code": "c"}})   # SKIP: post-hoc burst
+    on_event({"type": "run_start", "payload": {}})                               # SKIP: endpoint owns created
     assert [e["event"] for e in sunk] == [
         "detection.scan", "detection.classify", "detection.analyst.escalation"]
     assert sunk[0]["data"]["worst"] == "high" and sunk[1]["data"]["verdict"] == "malicious"
@@ -130,7 +130,7 @@ def test_describe_exc_without_a_cause_is_just_the_error():
 
 def test_failed_dict_is_self_contained_when_diff_sentry_absent():
     # build_failed_response=None forces importing diff_sentry.response; when it is absent (replay-only) the
-    # minimal literal is returned — status=failed / object=change.detection / detail preserved, so the SSE
+    # minimal literal is returned: status=failed / object=change.detection / detail preserved, so the SSE
     # can always complete. (Uses a fake bfr here to stay import-light.)
     d = _failed_dict("r", "detail here", lambda run_id, events, detail: types.SimpleNamespace(
         model_dump=lambda: {"status": "failed", "detail": detail}))

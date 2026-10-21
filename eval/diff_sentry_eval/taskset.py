@@ -1,14 +1,14 @@
-"""Eval tasksets — the change PAYLOAD the planner sees + the concrete reference only the judge sees.
+"""Eval tasksets: the change PAYLOAD the planner sees + the concrete reference only the judge sees.
 
 That split is ATLAS's fuzzy-vs-concrete design. diff-sentry's planner classifies a CHANGE (a webhook-style
-payload — repo/kind/number/author/title/body/files); so a task carries a `change` dict the `run` subcommand
+payload: repo/kind/number/author/title/body/files); so a task carries a `change` dict the `run` subcommand
 ingests (`diff_sentry.event_from_payload` → the normalized untrusted content the planner sees), plus the
-judge-only `reference` — the concrete expected classification (the correct verdict + why) consumed ONLY by
-the eval judge, never shown to the planner. It is non-machine-checkable by design — a change admits nuanced
+judge-only `reference`: the concrete expected classification (the correct verdict + why) consumed ONLY by
+the eval judge, never shown to the planner. It is non-machine-checkable by design: a change admits nuanced
 reads, so there is no gold label; the judgement is deferred to the LLM judge exactly as the paper does.
 
 Runs pair to tasks by the `run_id == task id` convention. `demo_taskset()` is a tiny built-in set for the
-offline `score --stub` path (paired against synthetic or recorded traces). Pure stdlib + pydantic — no
+offline `score --stub` path (paired against synthetic or recorded traces). Pure stdlib + pydantic, no
 diff_sentry import (the `run` subcommand ingests the change).
 """
 
@@ -58,7 +58,7 @@ def load_taskset(path: str) -> list[EvalTask]:
 
 
 def demo_taskset() -> list[EvalTask]:
-    """A tiny built-in set — the offline fixture that proves the score→aggregate→report pipeline with the
+    """A tiny built-in set: the offline fixture that proves the score→aggregate→report pipeline with the
     stub judge and zero creds. The changes are deliberately compact; the references are judge-only, and
     cover both poles: a clearly MALICIOUS CI-injection change (must be caught + signal) and a plainly BENIGN
     docs change (must NOT be over-flagged), so a judge/scorecard exercises both regimes."""

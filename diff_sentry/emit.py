@@ -1,13 +1,13 @@
-"""Host-side SIEM emitter — the "emit a signal into a SIEM" stage, run AFTER the RLM finalizes.
+"""Host-side SIEM emitter: the "emit a signal into a SIEM" stage, run AFTER the RLM finalizes.
 
 Emitting a signal is DETERMINISTIC plumbing, not an agentic decision, so it runs HOST-SIDE outside the
-trajectory — the planner never gets SIEM credentials and the POST never appears as a tool call (the same
+trajectory: the planner never gets SIEM credentials and the POST never appears as a tool call (the same
 reasoning that keeps any finished-deliverable publish step host-side). A signal is emitted only when the
 assembled response says so (`response.signal`, derived deterministically in `assemble`) AND the config
 carries a webhook. The transport is injectable (`poster`) so this is unit-testable with no network; the
 whole call is guarded so a SIEM outage can never sink an already-finished classification.
 
-The signal PAYLOAD is a compact, machine-readable subset of the `DetectionResponse` — a Datadog Cloud
+The signal PAYLOAD is a compact, machine-readable subset of the `DetectionResponse`, a Datadog Cloud
 SIEM / Splunk-HEC / generic-webhook consumer builds detection rules on it. Pure stdlib + httpx; no dspy.
 """
 
@@ -23,7 +23,7 @@ from .schema import DetectionResponse, severity_rank
 # there were, and the full list stays in the response file.
 _MAX_SIGNAL_INDICATORS = 100
 
-# A poster maps (url, headers, json_payload) to an HTTP status code. Sync — this runs host-side, but a
+# A poster maps (url, headers, json_payload) to an HTTP status code. Sync: this runs host-side, but a
 # sync seam keeps it symmetric with the rest and trivially fakeable in tests.
 Poster = Callable[[str, dict, dict], int]
 
@@ -42,7 +42,7 @@ class EmitResult:
 
 
 def signal_payload(response: DetectionResponse, *, stage: str = "final") -> dict:
-    """The compact SIEM signal — verdict, severity, techniques, and the deterministic indicators.
+    """The compact SIEM signal: verdict, severity, techniques, and the deterministic indicators.
 
     `stage` is `screen` for the early alert a watcher sends the moment deterministic evidence reaches the
     floor (before the model has judged the change), `final` for the run's own signal. Both carry the same
@@ -96,6 +96,6 @@ def emit_signal(
     post = poster or _httpx_poster(timeout)
     try:
         code = post(config.siem_webhook_url, headers, signal_payload(response, stage=stage))
-    except Exception as exc:  # noqa: BLE001 — best-effort; the finished run is the source of truth
+    except Exception as exc:  # noqa: BLE001 (best-effort; the finished run is the source of truth)
         return EmitResult(emitted=False, error=f"{type(exc).__name__}: {exc}")
     return EmitResult(emitted=True, status_code=code)

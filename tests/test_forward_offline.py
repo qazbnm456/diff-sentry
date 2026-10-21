@@ -1,8 +1,8 @@
-"""L2 — offline INTEGRATION through the REAL dspy.RLM.aforward loop (no live model, no Deno, no network).
+"""L2: offline INTEGRATION through the REAL dspy.RLM.aforward loop (no live model, no Deno, no network).
 
 Uses rlm-harness's `rlm_harness.testing` seam: a scripted DummyLM drives the planner, a `ScriptedInterpreter`
 runs each turn's step (dispatching the REAL injected tools, so their tracing runs) and SUBMITs. This is
-the layer the unit tests can't reach — it exercises `planner → scan_indicators → (deep_classify) →
+the layer the unit tests can't reach: it exercises `planner → scan_indicators → (deep_classify) →
 verdict → assemble → response → emit` on a trace the real loop produced. It also pins the
 `scan_indicators` registered name end-to-end (a wrong name would KeyError in the `call(...)` step).
 """
@@ -55,7 +55,7 @@ def _run_scripted(tmp_path, event, steps, planner_turns, *, chat_fn=None, run_id
 
 def test_malicious_change_full_flow_offline(tmp_path):
     """The whole chain through the real loop: the planner scans, SUBMITs malicious, the assembled signal
-    fires, and the host-side emitter POSTs — the wiring holds end-to-end."""
+    fires, and the host-side emitter POSTs; the wiring holds end-to-end."""
     region = raw_content(MALICIOUS_EVENT)
     verdict, events = _run_scripted(
         tmp_path, MALICIOUS_EVENT,
@@ -96,7 +96,7 @@ def test_scan_indicators_tool_is_callable_in_the_loop(tmp_path):
 
 def test_mf3_backstop_through_the_real_loop(tmp_path):
     """A (wrong) benign SUBMIT over a malicious change, driven by the real loop: the deterministic
-    evidence still forces a signal — MF3 holds on a trace the loop actually wrote, not a hand-built one."""
+    evidence still forces a signal: MF3 holds on a trace the loop actually wrote, not a hand-built one."""
     verdict, events = _run_scripted(
         tmp_path, MALICIOUS_EVENT,
         steps=[call("scan_indicators", region=raw_content(MALICIOUS_EVENT)),
@@ -111,7 +111,7 @@ def test_mf3_backstop_through_the_real_loop(tmp_path):
 
 def test_deep_classify_escalation_is_recorded(tmp_path):
     """The planner consults the second-stage classifier through the loop; the tool_call lands in the
-    trace with the classifier's structured verdict (injected chat_fn — no network)."""
+    trace with the classifier's structured verdict (injected chat_fn, no network)."""
     def fake_chat(findings):
         return '{"verdict": "malicious", "confidence": 0.9, "rationale": "curl|bash", "techniques": ["x"]}'
 

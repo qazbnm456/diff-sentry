@@ -10,11 +10,11 @@ dependencies = [
 
 [project.optional-dependencies]
 # `live` pulls diff-sentry (and through it dspy/rlm-harness) so POST /v1/classify can drive a real run.
-# Replay (the GET endpoints) needs none of it — keep it optional so a replay-only deploy stays light.
+# Replay (the GET endpoints) needs none of it; keep it optional so a replay-only deploy stays light.
 # diff-sentry pins rlm-harness to an exact PyPI version, so a `live` install is self-contained.
 live = ["diff-sentry"]
 # `subscription` FORWARDS diff-sentry's OWN subscription extra (the Claude Agent SDK, for a
-# planner/analyst on a Claude Pro/Max subscription — `DS_ROOT_LM/DS_SUB_LM=claude-agent-sdk/<id>`). It
+# planner/analyst on a Claude Pro/Max subscription: `DS_ROOT_LM/DS_SUB_LM=claude-agent-sdk/<id>`). It
 # exists so a live studio run on a subscription requests BOTH capabilities in ONE studio-scoped command:
 # `uv run --package diff-sentry-studio --extra live --extra subscription uvicorn …`. A studio-scoped `uv`
 # command resolves extras against THIS member, so without the forward `--extra subscription` is rejected
@@ -23,7 +23,7 @@ subscription = ["diff-sentry[subscription]"]
 dev = ["pytest>=8", "httpx>=0.27"]
 
 # In-repo: diff-sentry is the workspace ROOT package (studio/ is a member of it). The `live` extra
-# resolves it as a workspace dep — no sibling-dir assumption. Third-party deps (rlm-harness) resolve at
+# resolves it as a workspace dep, with no sibling-dir assumption. Third-party deps (rlm-harness) resolve at
 # the workspace root's pyproject and apply here transitively.
 [tool.uv.sources]
 diff-sentry = { workspace = true }

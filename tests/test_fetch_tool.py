@@ -1,4 +1,4 @@
-"""The GitHub-allowlisted enrichment fetch (MF2) — the exfil-critical guard, tested offline.
+"""The GitHub-allowlisted enrichment fetch (MF2): the exfil-critical guard, tested offline.
 
 The change under classification is attacker-authored, so an injected instruction could try to steer the
 fetcher to a non-GitHub URL to exfiltrate context. These tests pin: only GitHub hosts are reachable,

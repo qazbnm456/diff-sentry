@@ -1,8 +1,8 @@
-"""Host-side ingestion — turn a GitHub PR/issue into the normalized change event diff-sentry classifies.
+"""Host-side ingestion: turn a GitHub PR/issue into the normalized change event diff-sentry classifies.
 
 This is PLUMBING that runs OUTSIDE the RLM (the planner never talks to GitHub). It shapes a webhook-style
-payload dict — `{repo, kind, number, author, title, body, files:[{filename,status,additions,deletions,
-patch}], provenance:{…}}` — that `normalize.normalize_event` renders into the untrusted `event: str`. The
+payload dict (`{repo, kind, number, author, title, body, files:[{filename,status,additions,deletions,
+patch}], provenance:{…}}`) that `normalize.normalize_event` renders into the untrusted `event: str`. The
 GitHub transport is injectable (`api`) so this is testable offline; the default shells out to `gh`.
 
 `provenance` is host-side source/identity ENRICHMENT, fetched via extra best-effort `gh api` calls: author
@@ -27,7 +27,7 @@ from typing import Any
 
 # An `api` maps a `gh api <path>` argument to parsed JSON. Injectable for tests; default uses `gh`.
 GhApi = Callable[[str], Any]
-# A `raw` maps (path, Accept media type) to the response TEXT — for the one surface that is not JSON:
+# A `raw` maps (path, Accept media type) to the response TEXT, for the one surface that is not JSON:
 # the `.patch` mbox, whose `Date:` headers keep the author's UTC offset (REST and GraphQL normalize it away).
 GhRaw = Callable[[str, str], str]
 
@@ -41,13 +41,13 @@ _MAX_PROFILE_FIELD = 200
 _MAX_PATCH_TEXT = 2_000_000
 
 # GitHub commit `verification.reason` values where a signature WAS attached but does not bind to the
-# committer's GitHub identity (spoofing-shaped) — distinct from a plain unsigned commit.
+# committer's GitHub identity (spoofing-shaped), distinct from a plain unsigned commit.
 _SIG_MISMATCH_REASONS = frozenset({"bad_email", "unknown_key", "no_user", "unverified_email"})
 
 
 class GhApiError(Exception):
     """A `gh api` call failed. `status` is the HTTP status when the failure was an HTTP error the CLI
-    reported (a POSITIVELY-confirmed 404 vs a transient/network error, which leaves `status=None`) — so an
+    reported (a POSITIVELY-confirmed 404 vs a transient/network error, which leaves `status=None`), so an
     enrichment caller can turn a real 404 into a fact while still omitting on any transient failure."""
 
     def __init__(self, message: str, *, status: int | None = None):
@@ -75,7 +75,7 @@ def _gh_cli_api(timeout: float = 30.0) -> GhApi:
                     status = int(raw) if raw is not None and str(raw).isdigit() else None
                 except (ValueError, TypeError):
                     status = None
-            # gh puts the human-readable error ("gh: Not Found (HTTP 404)", auth hints) on stderr — carry a
+            # gh puts the human-readable error ("gh: Not Found (HTTP 404)", auth hints) on stderr; carry a
             # bounded slice so a host-side status=failed response is diagnosable, not just "exit 1".
             detail = (out.stderr or "").strip()[:200]
             msg = f"gh api {path} failed (exit {out.returncode})" + (f": {detail}" if detail else "")
@@ -112,14 +112,14 @@ def _parse_ts(value: Any) -> datetime | None:
 
 
 def _iso(value: Any) -> str:
-    """The ISO-8601 string when `value` parses, else "" — a malformed timestamp is dropped, not carried."""
+    """The ISO-8601 string when `value` parses, else "": a malformed timestamp is dropped, not carried."""
     return str(value) if _parse_ts(value) is not None else ""
 
 
 def _age_days(created_at: Any, as_of: Any = None) -> int | None:
     """Account age in whole days from an ISO-8601 `created_at`, measured AS OF `as_of` (the event's own
     creation time). Without `as_of` it falls back to the wall clock, which is right for a live event and
-    wrong for a replay — hence the event time is passed whenever it is known. Host-side only."""
+    wrong for a replay, hence the event time is passed whenever it is known. Host-side only."""
     created = _parse_ts(created_at)
     if created is None:
         return None
@@ -132,7 +132,7 @@ def _clip(value: Any, n: int) -> str:
 
 
 def _domain(email: Any) -> str:
-    """The domain of an address — the only part of an email the store keeps (data minimization)."""
+    """The domain of an address, the only part of an email the store keeps (data minimization)."""
     text = str(email or "")
     return text.rsplit("@", 1)[1].strip().lower()[:100] if "@" in text else ""
 
@@ -191,7 +191,7 @@ def _mbox_offsets(text: str, limit: int = 100) -> dict[str, int]:
 def _provenance(repo: str, number: int | None, user: dict | None, association: Any,
                 call: GhApi, *, fetch_commits: bool, as_of: Any = None,
                 raw: GhRaw | None = None) -> dict:
-    """Best-effort HOST-SIDE source/provenance facts for a change — author identity/association, the
+    """Best-effort HOST-SIDE source/provenance facts for a change: author identity/association, the
     account's absolute `created_at` and its age as of the event, profile facts, and (PRs) commit signature
     counts, commit dates and UTC offsets, from `gh api`. Every enrichment call is guarded: a `gh` hiccup or a
     missing field just OMITS that key, never sinks the ingest. The `indicators.scan_provenance` detectors turn
@@ -206,7 +206,7 @@ def _provenance(repo: str, number: int | None, user: dict | None, association: A
         prov["author_id"] = uid
     if _iso(as_of):
         prov["event_created_at"] = str(as_of)
-    # `ghost` is GitHub's reserved deleted-user attribution — no lookup needed (scan_provenance flags the
+    # `ghost` is GitHub's reserved deleted-user attribution; no lookup needed (scan_provenance flags the
     # login). Otherwise prefer the immutable numeric id (rename-proof) over the login.
     if login and login.strip().lower() != "ghost":
         try:
@@ -215,17 +215,17 @@ def _provenance(repo: str, number: int | None, user: dict | None, association: A
             if age is not None:
                 prov["author_account_age_days"] = age
             if acct.get("name"):
-                prov["author_display_name"] = str(acct["name"])[:120]   # attacker-authored — kept OUT of MF1
+                prov["author_display_name"] = str(acct["name"])[:120]   # attacker-authored, kept OUT of MF1
             prov.update(_profile_facts(acct))
         except GhApiError as e:
             if e.status == 404:
                 prov["author_not_found"] = True                         # POSITIVE 404 → a fact
-        except Exception:  # noqa: BLE001,S110 — transient failure: omit, never sink the ingest
+        except Exception:  # noqa: BLE001,S110 (transient failure: omit, never sink the ingest)
             pass
     if fetch_commits and number is not None:
         try:
             commits = call(f"repos/{repo}/pulls/{number}/commits?per_page=100")
-        except Exception:  # noqa: BLE001 — best-effort; a failed lookup just omits the commit-signature facts
+        except Exception:  # noqa: BLE001 (best-effort; a failed lookup just omits the commit-signature facts)
             commits = None
         if isinstance(commits, list):
             # Tally everything BEFORE assigning, so a malformed element can't leave a half-populated dict.
@@ -273,7 +273,7 @@ def _provenance(repo: str, number: int | None, user: dict | None, association: A
             # offset. It is the author's CLAIM (a committer can set any date), so it is soft evidence.
             try:
                 offsets = _mbox_offsets(raw(f"repos/{repo}/pulls/{number}", _PATCH_ACCEPT))
-            except Exception:  # noqa: BLE001 — best-effort; the offsets are simply omitted
+            except Exception:  # noqa: BLE001 (best-effort; the offsets are simply omitted)
                 offsets = {}
             if offsets:
                 prov["commit_tz_offsets"] = offsets
@@ -281,7 +281,7 @@ def _provenance(repo: str, number: int | None, user: dict | None, association: A
 
 
 def _head_facts(pr: dict) -> dict:
-    """Where the PR's code comes from — the head repo/fork, its creation time, and the head sha. A `null`
+    """Where the PR's code comes from: the head repo/fork, its creation time, and the head sha. A `null`
     head repo means the fork was deleted after the PR was opened: an author cleanup tell."""
     head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
     facts: dict = {}
@@ -332,7 +332,7 @@ def _pages(call: GhApi, base: str, max_pages: int, *, start: int = 1) -> list:
 
 def _comments(call: GhApi, repo: str, number: int, *, review: bool, total: Any = None
               ) -> tuple[list[dict] | None, bool]:
-    """One thread of comments — the channel hackerbot used to fire `/format`-style workflow triggers. Comment
+    """One thread of comments: the channel hackerbot used to fire `/format`-style workflow triggers. Comment
     bodies are UNTRUSTED. Returns `(comments, truncated)`; `comments` is None when the lookup failed, so the
     caller can tell "no comments" from "could not read them": the two must not both read as an empty thread, or a
     transient error looks like an edit. When the thread is longer than `_MAX_COMMENT_PAGES` pages and the object
@@ -343,7 +343,7 @@ def _comments(call: GhApi, repo: str, number: int, *, review: bool, total: Any =
     start = max(1, last - _MAX_COMMENT_PAGES + 1) if last else 1
     try:
         items = _pages(call, base, _MAX_COMMENT_PAGES, start=start)
-    except Exception:  # noqa: BLE001 — best-effort; reported as incomplete, never a failed ingest
+    except Exception:  # noqa: BLE001 (best-effort; reported as incomplete, never a failed ingest)
         return None, False
     truncated = start > 1 or (last is None and len(items) >= _MAX_COMMENT_PAGES * 100)
     out: list[dict] = []
@@ -409,7 +409,7 @@ def _fill_age(prov: dict, event_created_at: str) -> dict:
 
 def event_from_payload(payload: dict) -> dict:
     """Normalize a webhook-style payload we already hold into the canonical change-event dict. Tolerant of
-    missing keys — every field defaults to empty so a partial payload still classifies."""
+    missing keys: every field defaults to empty so a partial payload still classifies."""
     files = []
     for f in payload.get("files") or []:
         files.append({
@@ -496,7 +496,7 @@ def pr_event(repo: str, number: int, *, api: GhApi | None = None, raw: GhRaw | N
 
 
 def issue_event(repo: str, number: int, *, api: GhApi | None = None) -> dict:
-    """Fetch an issue from GitHub (host-side) into a change-event dict — the issue body is the untrusted
+    """Fetch an issue from GitHub (host-side) into a change-event dict; the issue body is the untrusted
     content (the hackerbot-claw prompt-injection issues came in this shape)."""
     call = api or _gh_cli_api()
     issue = call(f"repos/{repo}/issues/{number}")
@@ -539,7 +539,7 @@ def public_activity(login: str, *, api: GhApi | None = None, pages: int = 3) -> 
     for page in range(1, max(1, pages) + 1):
         try:
             batch = call(f"users/{login}/events/public?per_page=100&page={page}")
-        except Exception:  # noqa: BLE001 — best-effort
+        except Exception:  # noqa: BLE001 (best-effort)
             break
         if not isinstance(batch, list) or not batch:
             break

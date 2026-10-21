@@ -29,7 +29,7 @@
     if (t.label === "scan") return "fam-scan";
     if (t.label === "classify") return t.circuit_broken || t.error ? "fam-bad" : (t.ok === false ? "fam-warn" : "fam-ok");
     if (t.ok === false || t.error) return "fam-bad";   // a failed analyst carries `error` but no `ok` key
-    // Unknown tools fall to a neutral generic family (never blank) — see the detailTool kv fallback.
+    // Unknown tools fall to a neutral generic family (never blank); see the detailTool kv fallback.
     return { fetch: "fam-signal", skill: "fam-skill", analyst: "fam-analyst" }[t.label] || "fam-tool";
   }
   const secs = (s) => s == null ? "" : s < 1 ? `${Math.round(s * 1000)}ms` : s < 60 ? `${s.toFixed(1)}s` : formatElapsed(s);

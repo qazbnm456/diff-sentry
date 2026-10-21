@@ -260,7 +260,7 @@ def test_pipe_to_sudo_shell_is_pipe_to_shell():
 
 
 def test_the_planners_rescan_of_a_quoted_installer_stays_below_the_floor():
-    import rlm_harness  # noqa: F401 — the tool records to a trace; a bare call is a no-op outside a run
+    import rlm_harness  # noqa: F401 (the tool records to a trace; a bare call is a no-op outside a run)
 
     from diff_sentry.indicators import make_indicator_tool
 

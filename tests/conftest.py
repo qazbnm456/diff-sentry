@@ -1,4 +1,4 @@
-"""Shared fixtures — a dummy rlm-harness config (no live model) and realistic change events + a trace builder.
+"""Shared fixtures: a dummy rlm-harness config (no live model) and realistic change events + a trace builder.
 
 Uses rlm-harness's public injection seam: configure with a DummyLM + mock interpreter so a task builds
 through the real dspy.RLM constructor with no network/Deno, and record a realistic trajectory (run_start
@@ -69,7 +69,7 @@ MALICIOUS_VERDICT = {
     "recommended_action": "block-merge",
 }
 
-# A DELIBERATELY WRONG benign self-report over a malicious change — used to prove the deterministic
+# A DELIBERATELY WRONG benign self-report over a malicious change, used to prove the deterministic
 # signal backstop (MF3): the evidence union must still force a signal.
 BENIGN_SELF_REPORT = {
     "summary": "Looks like a harmless CI tweak.",
@@ -92,7 +92,7 @@ def configure_dummy():
 
     dummy = DummyLM([{"reasoning": "r", "verdict": "{}"}])
     cfg = RLMConfig(main_model="x", sub_model="x", interpreter="mock", observe=False)
-    configure(cfg, main_lm=dummy, sub_lm=dummy)   # public injection seam — no _STATE poking
+    configure(cfg, main_lm=dummy, sub_lm=dummy)   # public injection seam, no _STATE poking
     return dummy
 
 
@@ -151,7 +151,7 @@ def make_trace(tmp_path):
         with TraceRecorder(path, run_id=run_id, meta=meta) as rec:
             record_tool_call("read_skill", args={"name": "triage-a-change"}, result_len=900,
                              preview="# Triage a change ...")
-            # An in-loop scan of a region the planner decoded — its hits union with the baseline.
+            # An in-loop scan of a region the planner decoded; its hits union with the baseline.
             region_hits = scan_indicators(raw_content(event))
             record_tool_call("scan_indicators", args={"region": "decoded filename"}, ok=True,
                              hits=[h.model_dump() for h in region_hits], n=len(region_hits))

@@ -1,10 +1,10 @@
-"""L4b — offline REPRODUCTION of the real hackerbot-claw incident (Feb-Mar 2026).
+"""L4b: offline REPRODUCTION of the real hackerbot-claw incident (Feb-Mar 2026).
 
 Datadog's public writeup ("Stopping hackerbot-claw with BewAIre") documents an AI agent that opened
 malicious PRs and prompt-injection issues against their public repos. The original artifacts
 (datadog-iac-scanner PR #7/#8, datadog-agent issues #47021/#47024) were deleted with the attacker
 account and cannot be live-ingested, so the three payloads the article quotes verbatim are reconstructed
-as change events. The DETERMINISTIC layer (scan_indicators + assemble) must catch all three OFFLINE — no
+as change events. The DETERMINISTIC layer (scan_indicators + assemble) must catch all three OFFLINE: no
 model, no loop, no network.
 
 Each event is assembled under a NEUTRAL benign verdict, so `signal` is driven purely by the MF3 evidence
@@ -35,7 +35,7 @@ def _hits(event):
 
 def _assemble(event, *, verdict_label="benign"):
     """Assemble under a chosen verdict with only the host-side baseline in the trace, so the signal
-    derives from the deterministic evidence floor — exactly the MF3 backstop the crash path relies on."""
+    derives from the deterministic evidence floor: exactly the MF3 backstop the crash path relies on."""
     baseline = [h.model_dump() for h in _hits(event)]
     events = [{"type": "run_start",
                "payload": {"meta": {"baseline_indicators": baseline, "emit_on": list(_EMIT_ON)}}}]
@@ -62,7 +62,7 @@ def test_golden_rule_set_matches(entry):
 @pytest.mark.parametrize("entry", _ENTRIES, ids=[e["name"] for e in _ENTRIES])
 def test_incident_signals_even_under_a_benign_verdict(entry):
     """Every incident payload reaches the signal floor AND fires its declared key rule under a NEUTRAL
-    benign verdict — so a false-benign self-report could not have suppressed the evidence (MF3)."""
+    benign verdict, so a false-benign self-report could not have suppressed the evidence (MF3)."""
     assembled = _assemble(entry["event"])
     assert assembled.signal is entry["expected_signal"] is True, entry["name"]
     floor_ok = severity_rank(assembled.max_indicator_severity) >= severity_rank(SIGNAL_SEVERITY_FLOOR)
@@ -72,7 +72,7 @@ def test_incident_signals_even_under_a_benign_verdict(entry):
 
 def test_ci_pr_payload_deobfuscates_to_the_published_ioc():
     """The datadog-iac-scanner PR fixture: the ${IFS}/base64 filename must DECODE to the published
-    `curl … | bash` IOC. This is the deobfuscation the detector performs statically — it reads the
+    `curl … | bash` IOC. This is the deobfuscation the detector performs statically: it reads the
     payload, it never fetches or runs it."""
     entry = next(e for e in _ENTRIES if e["name"] == "iac_scanner_pr_ifs_b64_curl_bash_filename")
     obf = [h for h in _hits(entry["event"]) if h.rule == "obfuscated-payload"]
@@ -83,7 +83,7 @@ def test_ci_pr_payload_deobfuscates_to_the_published_ioc():
 
 def test_codeowners_issue_signals_on_two_independent_grounds():
     """The datadog-agent CODEOWNERS injection fires BOTH prompt-injection (the `system prompt` phrase)
-    and codeowners-tamper (it names .github/CODEOWNERS) — belt-and-suspenders, exactly the hackerbot-claw
+    and codeowners-tamper (it names .github/CODEOWNERS), belt-and-suspenders, exactly the hackerbot-claw
     governance-takeover move."""
     entry = next(e for e in _ENTRIES if e["name"] == "datadog_agent_issue_codeowners_injection")
     rules = _fired_rules(entry["event"])

@@ -2,7 +2,7 @@
 
 diff-sentry is the ROLLOUT source (rollout → reward → training), NOT the trainer. This module emits raw
 materials only: the trajectory splits (sft_turns / classifier / orchestrator), per-run intrinsic LABELS
-(verdict / signal / indicator counts — facts, never a reward), and per-run objective METRICS. No reward
+(verdict / signal / indicator counts; facts, never a reward), and per-run objective METRICS. No reward
 scalar is attached (`reward=None` to rlm-harness's exporters); reward/credit-assignment/GRPO live elsewhere.
 
 Usage: python -m diff_sentry.rl_export "traces/*.jsonl" dataset.json
@@ -72,11 +72,11 @@ def load_runs(*trace_paths: str) -> dict[str, list[dict]]:
 
 
 def run_labels(events: list[dict]) -> dict:
-    """Intrinsic OUTCOME labels for one run — facts, NOT a reward. Derived from the ASSEMBLED verdict so
+    """Intrinsic OUTCOME labels for one run: facts, NOT a reward. Derived from the ASSEMBLED verdict so
     `signal` reads the deterministic union (never the planner's self-report).
 
     `inconclusive` is a reward-free NEGATIVE OUTCOME fact: True when
-    the finalized run reached the sanctioned insufficient-evidence outcome — the planner submitted
+    the finalized run reached the sanctioned insufficient-evidence outcome: the planner submitted
     `inconclusive`, or the normalized change carried no groundable content (the response backstop). It is
     a FACT for a downstream trainer to weigh, never a score."""
     from .assemble import verdict_from_events
@@ -104,7 +104,7 @@ def run_labels(events: list[dict]) -> dict:
 
 
 def run_metrics(events: list[dict]) -> dict:
-    """Objective EFFORT metrics — the raw material a trainer shapes into a reward. Facts, never a score."""
+    """Objective EFFORT metrics: the raw material a trainer shapes into a reward. Facts, never a score."""
     def _tool(name: str) -> list[dict]:
         return [e for e in events if e["type"] == "tool_call" and e["payload"].get("tool") == name]
 
@@ -128,11 +128,11 @@ def run_metrics(events: list[dict]) -> dict:
 
 
 def rubric_signal(events: list[dict]) -> dict:
-    """The ATLAS rubric surface for one run — the fixed rubric + its deterministic per-criterion FACTS.
+    """The ATLAS rubric surface for one run: the fixed rubric + its deterministic per-criterion FACTS.
     All LABELS: a downstream trainer computes dᵢ∈[0,1] and aggregates; this service never does.
 
-    The reported `rubric` is the EFFECTIVE one — the run_start-meta rubric, or the constant
-    `default_rubric()` for a trace that carries none — so it always names the SAME criteria
+    The reported `rubric` is the EFFECTIVE one: the run_start-meta rubric, or the constant
+    `default_rubric()` for a trace that carries none, so it always names the SAME criteria
     `criteria_facts` was computed against (no orphan facts). The `rubric` import is LAZY so it can't form
     a load-time cycle (rubric.trace_facts calls back into THIS module, also lazily)."""
     from .rubric import criteria_facts, default_rubric, rubric_from_meta
@@ -146,12 +146,12 @@ def rubric_signal(events: list[dict]) -> dict:
 
 def export_dataset(runs: dict[str, list[dict]]) -> dict:
     """Build the REWARD-FREE trajectory bundle. Two things map to a SEPARATE model: the `classifier`
-    (SINGLE-TURN findings→verdict records) and the ORCHESTRATOR (the RLM root, ONE multi-turn policy —
+    (SINGLE-TURN findings→verdict records) and the ORCHESTRATOR (the RLM root, ONE multi-turn policy:
     `sft_turns` for SFT, `actions`/`export_rl` for RL). Records carry `reward=None`.
 
-    `labels` (intrinsic outcome — verdict/signal/…), `metrics` (objective effort), and `rubric_signal`
+    `labels` (intrinsic outcome: verdict/signal/…), `metrics` (objective effort), and `rubric_signal`
     (the ATLAS 4-category decomposition + deterministic per-criterion facts, a re-lens over labels/metrics)
-    are the three per-run LABEL surfaces — all reward-free."""
+    are the three per-run LABEL surfaces, all reward-free."""
     actions = export_actions(runs, reward=None)
     tool_acts = [a for a in actions if a["kind"] == "tool"]
     classifier = [a for a in tool_acts
@@ -163,7 +163,7 @@ def export_dataset(runs: dict[str, list[dict]]) -> dict:
         "planner": [a for a in actions if a["kind"] == "planner"],
         "sft_turns": export_sft_turns(runs),
         # The three per-run LABEL surfaces ride via rlm-harness's shared run_label_bundle (the canonical
-        # {surface: {run_id: fn(events)}} seam) — one bundle shape across consumers, and `reward` is a
+        # {surface: {run_id: fn(events)}} seam): one bundle shape across consumers, and `reward` is a
         # refused surface name (it raises), so the reward-free invariant is structural at the transport.
         **run_label_bundle(runs, labels=run_labels, metrics=run_metrics, rubric_signal=rubric_signal),
     }

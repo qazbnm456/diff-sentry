@@ -1,6 +1,6 @@
 name: CI
 
-# Offline suite only: no live LLM, no network calls in tests, no Deno sandbox — dspy-bearing paths use
+# Offline suite only: no live LLM, no network calls in tests, no Deno sandbox: dspy-bearing paths use
 # DummyLM / rlm-harness's ScriptedInterpreter, transports are injected fakes, and the corpus pins the
 # indicator suite's hit/miss behavior (see AGENTS.md "Verify"). `uv sync` resolves rlm-harness from PyPI
 # at the exact version pinned in pyproject.toml / uv.lock.
@@ -9,7 +9,7 @@ on:
     branches: [main]
   pull_request:
 
-# Least privilege: this workflow only checks out code and runs tests/lint — it never writes. Specifying
+# Least privilege: this workflow only checks out code and runs tests/lint; it never writes. Specifying
 # `permissions:` also drops every unlisted scope to `none`, so a compromised dep/action on an untrusted
 # fork PR can't use the token to push, tag, or open issues.
 permissions:
@@ -62,7 +62,7 @@ jobs:
           for f in studio/tests/*.test.js; do echo "▸ $f"; node "$f"; done
 
   # Dogfood: this repo's own CI runs the ACTION this repo publishes (`uses: ./`), not a copy of it.
-  # So every PR here is also an integration test of the thing users install — a drifted action.yml
+  # So every PR here is also an integration test of the thing users install: a drifted action.yml
   # fails our own build before it reaches anyone's Marketplace install.
   #
   # DELIBERATELY the deterministic scan and not the full `classify` pipeline. `classify` needs DS_*

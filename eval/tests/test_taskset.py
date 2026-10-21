@@ -1,4 +1,4 @@
-"""Taskset loading — the change payload vs judge-only reference split, and dup-id rejection."""
+"""Taskset loading: the change payload vs judge-only reference split, and dup-id rejection."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ def test_demo_taskset_is_well_formed():
     assert len({t.id for t in tasks}) == len(tasks)             # unique ids
     for t in tasks:
         assert t.id and t.change and t.reference                # both the planner-visible change + the reference
-    # the demo covers both poles — a malicious and a benign change
+    # the demo covers both poles: a malicious and a benign change
     assert any("malicious" in t.reference.lower() for t in tasks)
     assert any("benign" in t.reference.lower() for t in tasks)
 

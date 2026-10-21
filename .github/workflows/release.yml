@@ -1,6 +1,6 @@
 name: Release
 
-# Publish to PyPI via Trusted Publishing (OIDC) — NO API token. INERT until a GitHub Release is
+# Publish to PyPI via Trusted Publishing (OIDC), with NO API token. INERT until a GitHub Release is
 # published, and needs one-time setup before the first release:
 #   1. On PyPI, add a Trusted Publisher for project `diff-sentry`:
 #        owner = qazbnm456, repo = diff-sentry, workflow = release.yml, environment = pypi
@@ -11,7 +11,7 @@ name: Release
 # consumers pin in `uses: qazbnm456/diff-sentry@vX`. So cutting a release ships the package AND the
 # Action; keep the README's quickstart ref in step with the tag you publish.
 #
-# Supply-chain: the two third-party actions are SHA-pinned — setup-uv, and (highest blast radius, it
+# Supply-chain: the two third-party actions are SHA-pinned: setup-uv, and (highest blast radius, it
 # uploads to PyPI) pypi-publish. Bump a SHA and its trailing version comment together. GitHub-owned
 # checkout/*-artifact stay on major tags.
 
@@ -34,7 +34,7 @@ jobs:
       - name: Build sdist + wheel
         run: uv build
 
-      # Verify the ARTIFACT, not the checkout — a wheel can build cleanly and still be unusable. Without
+      # Verify the ARTIFACT, not the checkout: a wheel can build cleanly and still be unusable. Without
       # a `[project.scripts]` entry point, for example, `uvx diff-sentry` (the exact command the GitHub
       # Action runs) cannot work, and nothing in the source tree says so. Installing the built wheel into
       # a clean environment and running it is what catches that.
@@ -87,7 +87,7 @@ jobs:
     # would fire this job and ask PyPI to publish `diff-sentry` over OIDC. The Trusted Publisher binding
     # (owner+repo+workflow+environment) would reject it, but that is a rejected publish attempt against
     # OUR project, plus a probe surface and a confusing red run in someone else's repo. `build` above is
-    # deliberately NOT guarded — it only builds and tests an artifact, and a fork verifying its own
+    # deliberately NOT guarded: it only builds and tests an artifact, and a fork verifying its own
     # build is fine.
     if: github.repository == 'qazbnm456/diff-sentry'
     environment: pypi

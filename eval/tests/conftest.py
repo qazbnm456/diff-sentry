@@ -1,4 +1,4 @@
-"""Shared fixtures for diff-sentry-eval tests — SYNTHETIC in-code traces (the diff_sentry test style),
+"""Shared fixtures for diff-sentry-eval tests: SYNTHETIC in-code traces (the diff_sentry test style),
 never gitignored `output/traces/` artifacts, so the suite runs on a fresh clone / in CI with zero creds.
 
 The verdict + evidence are driven through a real `scan_indicators` baseline + the result event's judgement,

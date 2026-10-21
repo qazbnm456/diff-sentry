@@ -1,4 +1,4 @@
-"""Build the API-shaped `DetectionResponse` from an assembled verdict + the trace — a read-time
+"""Build the API-shaped `DetectionResponse` from an assembled verdict + the trace, a read-time
 presentation carrying no new judgement. `build_failed_response` is the crash path (no verdict →
 an informative refusal that still carries whatever deterministic indicators were gathered).
 
@@ -73,7 +73,7 @@ def _process(events: list[dict]) -> ProcessInfo:
 
 def _rubric(events: list[dict]) -> RubricReport:
     """The run's ATLAS TF/TA/TG/PA rubric as a reward-free presentation: join each deterministic
-    `CriterionFact` (from `criteria_facts`) with its skeleton `description`. Pure serialization — adds NO
+    `CriterionFact` (from `criteria_facts`) with its skeleton `description`. Pure serialization: adds NO
     judgement and NO score (mirrors `rl_export.rubric_signal`). Works on a partial/empty trace too, so it
     is attached on every status (a failed run still has a trajectory worth labelling)."""
     skel = {c.name: c for c in (rubric_from_meta(events).criteria or default_rubric().criteria)}
@@ -91,7 +91,7 @@ def _rubric(events: list[dict]) -> RubricReport:
 
 
 def _has_groundable_content(events: list[dict]) -> bool:
-    """Whether the run's normalized change carried real untrusted content — read from the `event` string
+    """Whether the run's normalized change carried real untrusted content, read from the `event` string
     in run_start meta. Absent/unparseable → True, so a normal run is never mis-downgraded."""
     ev = _meta(events).get("event")
     return has_groundable_content(ev) if isinstance(ev, str) else True
@@ -100,7 +100,7 @@ def _has_groundable_content(events: list[dict]) -> bool:
 def _resolve_outcome(assembled: AssembledVerdict, events: list[dict]) -> tuple[str, str, str]:
     """The response status for a FINALIZED run + the refusal (reason, detail) when it is not `classified`.
     A finalized run is `classified` UNLESS the planner submitted an empty verdict, submitted the
-    sanctioned `inconclusive` outcome, OR the normalized change carried NO groundable content — in which
+    sanctioned `inconclusive` outcome, OR the normalized change carried NO groundable content, in which
     case a confident verdict is DOWNGRADED to inconclusive (defense-in-depth: an ungroundable input must
     never ship a confident verdict)."""
     verdict = (assembled.verdict or "").strip().lower()
@@ -175,7 +175,7 @@ def build_screened_response(run_id: str, events: list[dict]) -> DetectionRespons
 
 def build_failed_response(run_id: str, events: list[dict], detail: str, *, reason: str = "run_failed"
                           ) -> DetectionResponse:
-    """The crash path (or a trace with no result event) — no verdict, but still carries the deterministic indicators gathered and
+    """The crash path (or a trace with no result event): no verdict, but still carries the deterministic indicators gathered and
     the derived signal (a run that crashed AFTER a critical indicator fired must STILL be able to alert)."""
     hits, top, floor, signal = _floor_signal(events)
     return DetectionResponse(

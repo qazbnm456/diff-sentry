@@ -1,15 +1,15 @@
-"""L5a — the injection-resistance GUARANTEES, offline and structural (no model needed).
+"""L5a: the injection-resistance GUARANTEES, offline and structural (no model needed).
 
 Two properties the README promises are STRUCTURAL, so they can be pinned without a live LLM:
 
   1. Evidence-suppression is structurally prevented (MF3): a prompt-injection payload in ANY untrusted
      channel (title / body / issue text / file patch) fires `prompt-injection`/high in the deterministic
-     baseline, and `assemble_verdict` ORs that evidence floor over the verdict — so even a scripted
+     baseline, and `assemble_verdict` ORs that evidence floor over the verdict, so even a scripted
      BENIGN self-report cannot stop the signal from reaching the SIEM.
 
   2. The normalizer sandwich (MF1) survives a FORGED metadata footer in the attacker body: the REAL
      derived header+footer still bracket the untrusted block, and the derived `content_sha256` is a
-     sha256 of the raw content we computed — the attacker cannot displace or fake the trustworthy edges.
+     sha256 of the raw content we computed; the attacker cannot displace or fake the trustworthy edges.
      (Residual, not claimed away: a body embedding the literal END marker can fake an early block end;
      normalize does not escape markers. This test pins the derived-metadata integrity, not marker safety.)
 """
@@ -49,7 +49,7 @@ _CHANNELS = {
 @pytest.mark.parametrize("channel", list(_CHANNELS), ids=list(_CHANNELS))
 def test_evidence_union_survives_benign_self_report(channel):
     """For every injection channel: the baseline fires prompt-injection/high, and even a BENIGN verdict
-    self-report cannot suppress the signal — the evidence floor forces it. Pins MF3 across the family."""
+    self-report cannot suppress the signal: the evidence floor forces it. Pins MF3 across the family."""
     event = _CHANNELS[channel]
     hits = scan_indicators(raw_content(event))
     injection = [h for h in hits if h.rule == "prompt-injection"]
@@ -86,7 +86,7 @@ def test_normalizer_sandwich_survives_forged_footer():
     assert footer_obj["_diff_sentry_metadata_footer"] == meta
     assert meta["repo"] == "acme/widgets"
 
-    # content_sha256 is a sha256 of the raw content WE derived — a forged hash string can't collide it.
+    # content_sha256 is a sha256 of the raw content WE derived; a forged hash string can't collide it.
     assert meta["content_sha256"] == hashlib.sha256(
         raw_content(event).encode("utf-8", "replace")).hexdigest()
     assert meta["content_sha256"] != "0" * 64

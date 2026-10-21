@@ -17,7 +17,7 @@ def test_change_verdict_roundtrip():
 
 
 def test_from_payload_ignores_legacy_keys():
-    # a stray planner that tried to author indicators must not break coercion — the extra key is dropped
+    # a stray planner that tried to author indicators must not break coercion; the extra key is dropped
     payload = {**MALICIOUS_VERDICT, "indicators": [{"id": "x"}], "signal": True}
     v = ChangeVerdict.from_payload(payload)
     assert v.verdict == "malicious"

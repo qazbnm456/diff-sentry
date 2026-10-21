@@ -1,7 +1,7 @@
-/* diff-sentry-studio frontend — the detection console. Zero-build vanilla JS. Reads window.ReplayCore,
+/* diff-sentry-studio frontend: the detection console. Zero-build vanilla JS. Reads window.ReplayCore,
    window.RunCore, window.Trajectory (loaded before this). See DESIGN.md for the visual contract. The
    load-bearing rule (§2): the card frame is keyed to the DERIVED state (signal + evidence severity), NOT
-   the planner's verdict — a verdict can be skewed by an injection; the evidence cannot. */
+   the planner's verdict; a verdict can be skewed by an injection; the evidence cannot. */
 (function () {
   "use strict";
   const $ = (s) => document.querySelector(s);
@@ -10,7 +10,7 @@
   const sevRank = (s) => { const i = SEV.indexOf(String(s || "").toLowerCase()); return i < 0 ? -1 : i; };
   const fmtBytes = (n) => n == null ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
   const formatElapsed = (s) => { if (s == null) return ""; s = Math.round(s); const m = Math.floor(s / 60), r = s % 60; return m ? `${m}m ${String(r).padStart(2, "0")}s` : `${r}s`; };
-  const tint = (s) => esc(s);   // diff-sentry REPL code is Python/JSON — escape only (no YAML highlighter)
+  const tint = (s) => esc(s);   // diff-sentry REPL code is Python/JSON: escape only (no YAML highlighter)
   const _linkify = (s) => /^https?:\/\//.test(s) ? `<a href="${esc(s)}" target="_blank" rel="noopener">${esc(s)} ↗</a>` : esc(s);
 
   const ICONS = {
@@ -53,7 +53,7 @@
 
   // ── live feed rows ──────────────────────────────────────────────────────
   // The feed shows ACTIONS only, in BOTH live and replay. `detection.plan.step` (planner reasoning) and
-  // `detection.result.done` are deliberately absent — reasoning lives in the Trajectory drawer, and an
+  // `detection.result.done` are deliberately absent: reasoning lives in the Trajectory drawer, and an
   // unmapped event falls through `FEED[event] || (() => null)` to no row (never a stuck skeleton).
   const FEED = {
     "detection.scan": (d) => ({ icon: "scan", fam: `sev-${d.worst || "info"}`, label: "Scan", meta: `${d.n || 0} hit${d.n === 1 ? "" : "s"}${d.worst ? " · " + d.worst : ""}` }),
@@ -83,7 +83,7 @@
     if (atBottom) feedEl.scrollTop = feedEl.scrollHeight;
   }
 
-  // ── derived state (§2 — the frame alloy is keyed to EVIDENCE, not the verdict) ──
+  // ── derived state (§2: the frame alloy is keyed to EVIDENCE, not the verdict) ──
   function deriveState(r) {
     const status = r.status || "";
     if (status === "failed" || status === "inconclusive" || !r.verdict) return { key: "iron", head: status === "failed" ? "REFUSAL" : "INCONCLUSIVE" };
@@ -91,7 +91,7 @@
     if (r.signal && hardEvidence) return { key: "alert", head: "ALERT" };
     if (r.signal) return { key: "amber", head: "FLAGGED" };
     // No signal, but the planner did NOT clear it (e.g. a narrowed DS_EMIT_ON leaves a `suspicious`
-    // verdict sub-threshold). Green CLEAR would contradict the verdict chip — amber "NOTED", no signal.
+    // verdict sub-threshold). Green CLEAR would contradict the verdict chip; amber "NOTED", no signal.
     if (r.verdict !== "benign") return { key: "amber", head: "NOTED" };
     return { key: "clear", head: "CLEAR" };   // §2: clear only when !signal AND verdict benign
   }
@@ -111,7 +111,7 @@
     const isRefusal = st.key === "iron";
     const hasChange = !!(r.source && (r.source.repo || r.source.number)) || (CURRENT._change);
     // ONE page-height alloy card (frame = derived state, MF3), three views behind the top-right
-    // switch, in triage order: VERDICT → INDICATORS (always reachable, even on a refusal — the
+    // switch, in triage order: VERDICT → INDICATORS (always reachable, even on a refusal: the
     // evidence outlives the self-report) → CHANGE (when the run carries one; never on a refusal).
     const views = [["verdict", "Verdict"], ["indicators", "Indicators"]];
     if (!isRefusal && hasChange) views.push(["change", "Change"]);
@@ -163,7 +163,7 @@
     } else if (plan.kind === "body") {
       diff = `<div class="diff-well"><span class="diff-line ctx">${esc(change.body)}</span></div>`;
     } else if (plan.kind === "trace") {
-      // A pr/issue (or replayed) run — the diff never reaches the client. This is the run's OWN
+      // A pr/issue (or replayed) run: the diff never reaches the client. This is the run's OWN
       // `run_start` event from /iterations: the exact normalized untrusted content the planner saw.
       diff = `<div class="diff-well"><span class="diff-line ctx">${esc(CURRENT._traceChange)}</span></div>`;
     } else if (plan.kind === "loading") {
@@ -177,7 +177,7 @@
     return `<div class="change-src">${srcLine}</div>${diff}`;
   }
   async function fetchTraceChange(r) {
-    r._traceChange = null;   // in flight — planChangeView won't refire while pending
+    r._traceChange = null;   // in flight; planChangeView won't refire while pending
     try {
       const resp = await fetch(`/v1/runs/${encodeURIComponent(r.id || currentRunId)}/iterations`);
       if (resp.ok) {
@@ -215,7 +215,7 @@
   function renderModules(r) {
     const p = r.process || {};
 
-    // Show the run's OWN step count unclamped — clamping to CONFIG.max_iterations (today's env) would
+    // Show the run's OWN step count unclamped; clamping to CONFIG.max_iterations (today's env) would
     // falsify a replayed run recorded under a different cap. Cap-hit is authoritative from `process`.
     const steps = p.steps != null ? String(p.steps) : "—";
     const analyst = RunCore.analystStat(p);
@@ -235,7 +235,7 @@
         `<div class="emit-note">The studio does not POST — this is the payload the host-side emitter would send.</div>`
       : `<div class="siem-off">no signal — below the emit threshold and the evidence floor</div>`;
 
-    // Telemetry first — the run's signature sits top-right, the family convention across the consoles.
+    // Telemetry first: the run's signature sits top-right, the family convention across the consoles.
     metaEl.innerHTML =
       module("Run telemetry", `<div class="headline">${esc(formatElapsed(p.elapsed_s) || "—")}</div><div class="stat-grid">${stats}</div>` +
         (p.hit_iteration_cap ? `<span class="flag-chip">hit iteration cap</span>` : "") +
@@ -251,7 +251,7 @@
     return `<div class="module"><div class="module-cap"></div><div class="module-head">${esc(label)}</div><div class="module-body">${body}</div></div>`;
   }
 
-  // The ATLAS rubric module — the run's reward-free TF/TA/TG/PA LABELS. Each criterion shows the
+  // The ATLAS rubric module: the run's reward-free TF/TA/TG/PA LABELS. Each criterion shows the
   // deterministic FACTS re-lensed from the trace (never a score/verdict; the trainer scores dᵢ). Guarded:
   // a legacy response with no `rubric` field renders nothing.
   function fmtFact(v) {
@@ -271,7 +271,7 @@
             `<span class="rub-fact"><span class="rk">${esc(k)}</span><span class="rv">${esc(fmtFact(v))}</span></span>`).join("")}</div>`
         : `<div class="rub-facts empty">no facts observed</div>`;
       // the category class sits on `.rub-crit` so its `--rc` accent inherits to BOTH the left rule
-      // (`.rub-crit` border) and the badge child — CSS custom props inherit downward only.
+      // (`.rub-crit` border) and the badge child; CSS custom props inherit downward only.
       return `<div class="rub-crit cat-${catCls}"><div class="rub-crit-head">` +
         `<span class="cat-badge">${esc(c.category)}</span>` +
         `<span class="rub-name">${esc(c.criterion)}</span></div>` +
@@ -283,7 +283,7 @@
       `<div class="module-body"><div class="rub-list">${rubric.criteria.map(crit).join("")}</div></div></div>`;
   }
   function siemPayload(r) {
-    // Mirror emit.signal_payload field-for-field — the console claims this is what the host-side emitter
+    // Mirror emit.signal_payload field-for-field: the console claims this is what the host-side emitter
     // would POST, so it must not drop fields the real payload carries.
     const grounded = (h) => h.grounded !== false;          // a hit without the field reads as grounded
     const hits = (r.indicators || []).slice()
@@ -345,13 +345,13 @@
     } catch (e) { err = e; }
     setBusy(false);
     const plan = RunCore.planTerminal(err, finalStatus);
-    if (plan.stage === "existing") {   // 409 — a finalized run owns this id
+    if (plan.stage === "existing") {   // 409: a finalized run owns this id
       if (confirm(`A finalized run already exists for this change. Replace it?`)) return classify(true);
       showEmpty(); return;
     }
     if (plan.stage === "failed") { feedError(err); renderResult({ status: "failed", refusal: { reason: "stream_error", detail: err && (err.detail || err.message) } }); return; }
     // clean end: the completed event carried the raw response; re-GET for the trace-derived
-    // cited_unknown_ids augmentation (the fabrication tell the envelope omits — see /v1/runs/{id}).
+    // cited_unknown_ids augmentation (the fabrication tell the envelope omits; see /v1/runs/{id}).
     if (finalResp) {
       let full = finalResp;
       try { const g = await fetch(`/v1/runs/${encodeURIComponent(currentRunId)}`); if (g.ok) full = await g.json(); } catch (_) {}

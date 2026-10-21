@@ -1,4 +1,4 @@
-"""Configuration for diff-sentry — model ROLES, never hardcoded model names.
+"""Configuration for diff-sentry: model ROLES, never hardcoded model names.
 
 Three ROLES (the rlm-harness-consumer convention): the RLM PLANNER (root LM) drives the triage loop and
 holds the diff in the REPL; the ANALYST (sub LM, reached via `llm_query`) is an expensive brain for a
@@ -103,7 +103,7 @@ def _classifier_lm_kwargs() -> dict | None:
 
 @dataclass(frozen=True)
 class DetectConfig:
-    # Planner (main) + analyst (sub), sharing one OpenAI-compatible proxy. No model name is assumed —
+    # Planner (main) + analyst (sub), sharing one OpenAI-compatible proxy. No model name is assumed:
     # `from_env` requires them. Empty defaults are only for direct construction in tests.
     main_model: str = ""   # planner: a cheap, injection-resistant orchestrator driving the REPL loop
     sub_model: str = ""    # analyst: an expensive brain for a subtle case (reached via llm_query)
@@ -135,14 +135,14 @@ class DetectConfig:
     # reasoning planner from thinking through the whole `planner_max_tokens` and answering nothing.
     planner_lm_kwargs: dict | None = None
     analyst_lm_kwargs: dict | None = None
-    # HARD ceiling on the single RLM episode. No outer multi-run loop (max_retries=1) — one change =
+    # HARD ceiling on the single RLM episode. No outer multi-run loop (max_retries=1): one change =
     # one trajectory, so the trace stays valid training data. A failed run is INFRA, not a schema bug:
     # a non-retryable LM error escapes as the raw dspy.LMError, the rest as RLMTaskError.
     max_iterations: int = 25
     max_llm_calls: int = 8          # caps ONLY analyst (llm_query) escalations
     max_output_chars: int = 10_000  # head+tail char cap dspy.RLM applies to each REPL output
 
-    # ── Enrichment fetch (opt-in, GitHub-allowlisted — MF2) ──────────────────────────────────────
+    # ── Enrichment fetch (opt-in, GitHub-allowlisted, MF2) ──────────────────────────────────────
     enable_fetch: bool = False      # OFF by default: fetch on attacker input is an exfil surface
     fetch_timeout: float = 20.0
     fetch_max_bytes: int = 400_000
@@ -157,7 +157,7 @@ class DetectConfig:
     siem_webhook_url: str = ""
     siem_token: str = ""
     # Verdicts (or a deterministic high/critical indicator) that emit a signal. A benign self-report
-    # cannot suppress a hard indicator — see assemble.assemble_verdict.
+    # cannot suppress a hard indicator; see assemble.assemble_verdict.
     emit_on: tuple[str, ...] = ("suspicious", "malicious")
 
     @property
@@ -170,7 +170,7 @@ class DetectConfig:
 
     @classmethod
     def screen_from_env(cls) -> DetectConfig:
-        """A config with NO model roles — only the SIEM emitter and `emit_on`. For the deterministic screen
+        """A config with NO model roles, only the SIEM emitter and `emit_on`. For the deterministic screen
         (`watch --screen-only`), which never runs the model and so must not require `DS_ROOT_LM`."""
         return cls(
             siem_webhook_url=os.getenv("DS_SIEM_WEBHOOK_URL", ""),

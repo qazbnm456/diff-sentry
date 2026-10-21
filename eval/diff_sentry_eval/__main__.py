@@ -1,4 +1,4 @@
-"""`python -m diff_sentry_eval` — the same entry as the `diff-sentry-eval` script."""
+"""`python -m diff_sentry_eval`: the same entry as the `diff-sentry-eval` script."""
 
 from .cli import main
 

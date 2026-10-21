@@ -65,7 +65,7 @@ def test_stub_flag_forces_offline_judge_even_with_env(tmp_path, monkeypatch):
 
 def test_run_drives_diff_sentry_lazily_then_scores(tmp_path, monkeypatch):
     """`run` wiring, offline: `diff_sentry.cli.run` is monkeypatched (the in-function lazy import resolves
-    the patched attribute at call time) to replay a recorded trace per task — run_id = task id, one run per
+    the patched attribute at call time) to replay a recorded trace per task: run_id = task id, one run per
     demo task."""
     monkeypatch.delenv("DSEVAL_MODEL", raising=False)
     import diff_sentry.cli as ds_cli

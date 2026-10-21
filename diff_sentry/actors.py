@@ -1,4 +1,4 @@
-"""Host-side actor store — who is behind a change, and what else they did.
+"""Host-side actor store: who is behind a change, and what else they did.
 
 A per-change classifier sees one PR. The campaigns worth catching span many: hackerbot-claw hit seven
 repositories in ten days from one account, with one payload host. The defender of each repository saw one

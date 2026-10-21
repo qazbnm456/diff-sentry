@@ -1,4 +1,4 @@
-"""The trace-event → SSE mapping (the public event surface), verified per event type. Pure — no server."""
+"""The trace-event → SSE mapping (the public event surface), verified per event type. Pure, no server."""
 
 from diff_sentry_studio.mapper import _worst_severity, to_event
 
@@ -25,7 +25,7 @@ def test_run_start_surfaces_the_atlas_rubric_hint():
 
 
 def test_run_start_rubric_hint_empty_when_absent():
-    # a legacy trace with no rubric in meta must not crash — empty hint
+    # a legacy trace with no rubric in meta must not crash: empty hint
     created = to_event({"type": "run_start", "payload": {"meta": {}}})
     assert created["data"]["rubric"] == {"categories": [], "criteria": 0}
 
@@ -36,7 +36,7 @@ def test_main_step_is_a_plan_step():
 
 
 def test_sub_call_is_an_analyst_escalation_with_input_processed_keys():
-    # rlm-harness's sub-LM records input / processed / raw — NOT question/answer.
+    # rlm-harness's sub-LM records input / processed / raw, NOT question/answer.
     ev = to_event({"type": "sub_call", "payload": {"input": "does this reach a sink?", "processed": "yes"}})
     assert ev["event"] == "detection.analyst.escalation"
     assert ev["data"] == {"question": "does this reach a sink?", "answer": "yes"}
@@ -73,7 +73,7 @@ def test_deep_classify_circuit_break_variant():
 
 
 def test_deep_classify_endpoint_error_variant_has_no_ok_key():
-    # the endpoint-error shape records ONLY `error` — no `ok` key. `ok` must default to False, and the
+    # the endpoint-error shape records ONLY `error`; no `ok` key. `ok` must default to False, and the
     # error must surface (regression guard on the mapper's payload tolerance).
     ev = to_event({"type": "tool_call", "payload": {
         "tool": "deep_classify", "args": {"findings": "…"}, "error": "ConnectTimeout"}})
@@ -107,7 +107,7 @@ def test_unknown_event_type_is_skipped():
 
 
 def test_unrecognized_tool_is_surfaced_with_its_scalar_fields():
-    # a rare/future tool must NOT be dropped from the feed — it surfaces as a generic `detection.tool`
+    # a rare/future tool must NOT be dropped from the feed; it surfaces as a generic `detection.tool`
     # event carrying its short scalar fields (bulky raw/preview/spec/hits dropped).
     ev = to_event({"type": "tool_call", "payload": {
         "tool": "mystery_tool", "ok": True, "count": 3, "note": "did a thing",

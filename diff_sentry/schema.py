@@ -1,13 +1,13 @@
 """Output models for diff-sentry (the RLMTask's validated output + the assembled result + the API shape).
 
 The load-bearing convention (inherited from the rlm-harness consumers): the planner SUBMITs JUDGEMENT only.
-The authoritative EVIDENCE — the deterministic indicator hits a signal is built on — is NEVER the
+The authoritative EVIDENCE (the deterministic indicator hits a signal is built on) is NEVER the
 planner's to write. `scan_indicators` records its structured hits into the trace (and a host-side
 BASELINE scan lands in the run_start meta), and the SYSTEM re-sources the FULL UNION of those hits on
 read (`assemble.assemble_verdict`). The planner may only CITE hit ids (`indicator_ids`); it cannot
 suppress evidence by omitting it, and it cannot invent it (a cited id with no matching hit is flagged).
 
-Pure pydantic; no dspy — trivially unit-testable.
+Pure pydantic; no dspy; trivially unit-testable.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-# reward-free rubric TYPES — rlm-harness's shared, taxonomy-agnostic primitives, re-exported so
+# reward-free rubric TYPES: rlm-harness's shared, taxonomy-agnostic primitives, re-exported so
 # `from .schema import Criterion, ...` resolves here.
 from rlm_harness.rubric import Criterion, CriterionFact, RubricCriteria  # noqa: F401 (re-export)
 
@@ -34,7 +34,7 @@ CRITERION_CATEGORIES = ("TF", "TA", "TG", "PA")
 # The allowed verdict labels + the ranked severities, kept as plain data so deterministic code
 # (assemble/response) can compare them without importing an enum machinery the model must satisfy.
 VERDICTS = ("benign", "suspicious", "malicious")
-# The SANCTIONED "cannot ground a confident call" outcome — a principled negative OUTCOME, NOT a reward.
+# The SANCTIONED "cannot ground a confident call" outcome: a principled negative OUTCOME, NOT a reward.
 # A content-free / unfetchable / not-actually-a-change input lands here instead of a confident verdict;
 # `response` maps it to `status="inconclusive"` + `RefusalInfo(reason="insufficient_evidence")`. It is
 # NOT in the default `emit_on`, so it never forces a SIEM signal (hard indicator evidence still can).
@@ -62,7 +62,7 @@ def at_signal_floor(sev: str) -> bool:
 
 
 def max_severity(sevs) -> str:
-    """The highest severity in `sevs`, or "info" when empty/unknown — a deterministic reduction."""
+    """The highest severity in `sevs`, or "info" when empty/unknown: a deterministic reduction."""
     best, best_rank = "info", -1
     for s in sevs:
         r = severity_rank(s)
@@ -80,7 +80,7 @@ def floor_severity(hits) -> str:
 # ── the deterministic evidence layer (produced by indicators.scan_indicators, NEVER the planner) ──
 
 class IndicatorHit(BaseModel):
-    """One deterministic detector hit — a FACT the scanner recorded, not a model opinion.
+    """One deterministic detector hit: a FACT the scanner recorded, not a model opinion.
 
     `id` is deterministic (a stable hash of rule + evidence, see indicators.mint_id) so the same hit
     minted host-side (baseline) and in a scan_indicators tool call de-duplicates to ONE union member,
@@ -155,7 +155,7 @@ class ChangeVerdict(BaseModel):
     def from_payload(cls, out: dict) -> ChangeVerdict:
         """Coerce a stored result-event `output` into a ChangeVerdict, healing legacy/loose shapes.
         Extra keys a stray planner emitted (e.g. an `indicators` list it tried to author) are ignored
-        by pydantic — `assemble_verdict` re-sources the real hits from the trace."""
+        by pydantic; `assemble_verdict` re-sources the real hits from the trace."""
         return cls(**out)
 
 
@@ -235,7 +235,7 @@ class AssembledVerdict(BaseModel):
 # ── API response shape (OpenAI-Responses-flavored serialization of a run) ──────────────────────────
 
 class RefusalInfo(BaseModel):
-    """Populated INSTEAD of a verdict when the run could not classify — an INFORMATIVE failure."""
+    """Populated INSTEAD of a verdict when the run could not classify: an INFORMATIVE failure."""
 
     reason: str = Field(..., description="Machine-readable category: run_failed / inconclusive / insufficient_evidence / not_escalated.")
     detail: str
@@ -259,7 +259,7 @@ class ProcessInfo(BaseModel):
 
 class RubricCriterionView(BaseModel):
     """One ATLAS criterion as PRESENTED in the response: its identity plus the deterministic FACTS
-    observed for it this run. A reward-free LABEL — `observed` is never a score/met/unmet verdict
+    observed for it this run. A reward-free LABEL: `observed` is never a score/met/unmet verdict
     (it is copied verbatim from `CriterionFact.observed`; see rubric.py)."""
 
     criterion: str
@@ -273,7 +273,7 @@ class RubricCriterionView(BaseModel):
 
 class RubricReport(BaseModel):
     """The run's ATLAS TF/TA/TG/PA rubric, presented as reward-free LABELS (see rubric.py). Presentation
-    only — scoring (dᵢ∈[0,1]) is the downstream TRAINER's job; nothing here is a score. Surfacing this in
+    only; scoring (dᵢ∈[0,1]) is the downstream TRAINER's job; nothing here is a score. Surfacing this in
     the response/UI does NOT add information to the trajectory (the facts already ride
     `rl_export.rubric_signal`); it makes the existing labels visible."""
 
@@ -285,7 +285,7 @@ class RubricReport(BaseModel):
 
 
 class DetectionResponse(BaseModel):
-    """The API-shaped result of one run — an OpenAI-Responses-flavored envelope over the assembled
+    """The API-shaped result of one run: an OpenAI-Responses-flavored envelope over the assembled
     verdict. A read-time presentation; carries NO new judgement.
 
     `status`: `classified` (a verdict landed) · `inconclusive` (finalized without a usable verdict, with the

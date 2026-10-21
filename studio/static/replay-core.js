@@ -1,4 +1,4 @@
-/* Pure replay logic for the Trajectory drawer — NO DOM, NO module state. Everything the replay state
+/* Pure replay logic for the Trajectory drawer: NO DOM, NO module state. Everything the replay state
    machine decides (how long to dwell, how to accrue elapsed time, which stops exist, where to start,
    what's next) lives here as pure functions of explicit inputs, so it's unit-testable in isolation
    (the DOM + timer orchestration stays in app.js and calls these). UMD: a browser global + node require. */
@@ -19,7 +19,7 @@
     return NOMINAL_REAL_MS;
   }
 
-  // replay-ms to dwell on the REMAINING of a stop at `speed` — faithful: (real − elapsed) ÷ speed,
+  // replay-ms to dwell on the REMAINING of a stop at `speed`, faithful: (real − elapsed) ÷ speed,
   // floored. Never negative (an over-consumed stop → the floor).
   function dwellMs(realMs, elapsed, speed) {
     return Math.max(DWELL_FLOOR_MS, Math.max(0, realMs - elapsed) / Math.max(1e-9, speed));
@@ -37,7 +37,7 @@
       (iterations || []).map(function (it) { return { kind: "turn", index: it.index }; }));
   }
 
-  // index of `sel` in `stops`, or -1 — e.g. a tool selection is not a walkable stop.
+  // index of `sel` in `stops`, or -1 (e.g. a tool selection is not a walkable stop).
   function stopIndex(stops, sel) {
     return stops.findIndex(function (s) { return sel && s.kind === sel.kind && s.index === sel.index; });
   }

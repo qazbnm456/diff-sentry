@@ -1,4 +1,4 @@
-/* diff-sentry-studio — the detection console. Zero-build vanilla CSS; DESIGN.md is the contract.
+/* diff-sentry-studio: the detection console. Zero-build vanilla CSS; DESIGN.md is the contract.
    Mono-forward, signal-cyan on slate, verdict-alloy frames keyed to the DERIVED state (evidence ≠ verdict). */
 
 @font-face {
@@ -79,7 +79,7 @@ button { font-family:var(--mono); cursor:pointer; }
   display:grid; grid-template-columns:340px minmax(0,1fr) 340px; gap:16px;
   max-width:1720px; margin:0 auto; padding:20px 24px;
   /* The grid IS the viewport (56px sticky header above): the page never scrolls; each column is its
-     own independent scroll track (rail feed / stage card / meta modules) — the family pattern. */
+     own independent scroll track (rail feed / stage card / meta modules), the family pattern. */
   height:calc(100vh - 56px);
 }
 .layout.no-meta { grid-template-columns:340px minmax(0,1fr); }
@@ -162,7 +162,7 @@ button { font-family:var(--mono); cursor:pointer; }
 .empty-stage, .skeleton-card {
   border:1px dashed var(--border); border-radius:var(--card-radius); padding:56px 24px; text-align:center;
   color:var(--text-faint); background:var(--surface-1);
-  /* centered, filling the same viewport-height column as the result card — no jump between states */
+  /* centered, filling the same viewport-height column as the result card, so no jump between states */
   flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
 }
 .empty-stage .es-glyph { font-size:2.4rem; color:var(--border-strong); display:block; margin-bottom:12px; }
@@ -178,7 +178,7 @@ button { font-family:var(--mono); cursor:pointer; }
    long indicator list scrolls INSIDE the card, never the page. */
 .stage-col .card { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
 .stage-col .card-inner { flex:1; min-height:0; overflow-y:auto; }
-/* Keep the state headline + view switch reachable while the card body scrolls. Only the FIRST head —
+/* Keep the state headline + view switch reachable while the card body scrolls. Only the FIRST head:
    the badges row inside the verdict view is also a direct .card-head child and must scroll away. */
 .stage-col .card-inner > .card-head:first-child {
   position:sticky; top:-16px; z-index:2; background:var(--surface-1);
@@ -253,7 +253,7 @@ button { font-family:var(--mono); cursor:pointer; }
 
 /* ── right modules ──────────────────────────────────────────────────────── */
 .meta-col { display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; overflow-y:auto; }
-/* .module carries overflow:hidden (corner clipping), which flips its flex automatic min-size to 0 —
+/* .module carries overflow:hidden (corner clipping), which flips its flex automatic min-size to 0:
    inside this fixed-height column the modules would COMPRESS to fit (content crushed, nothing left to
    scroll) instead of overflowing. Pin them at content height; the COLUMN is the scroller. */
 .meta-col .module { flex-shrink:0; }
@@ -300,13 +300,13 @@ button { font-family:var(--mono); cursor:pointer; }
   font-size:.68rem; color:var(--text-dim); }
 .tchip.fab { color:var(--bad); border-color:var(--bad); }
 /* rationale/summary prose and chips carry attacker-influenced strings (URLs, paths, base64): an
-   unbreakable long token must WRAP — .module{overflow:hidden} would otherwise clip it invisible. */
+   unbreakable long token must WRAP; .module{overflow:hidden} would otherwise clip it invisible. */
 .prose { font-family:var(--sans); color:var(--text-dim); line-height:1.55; font-size:.82rem; word-break:break-word; }
 .siem-payload { background:var(--surface-3); border-radius:var(--radius); padding:8px 10px; overflow-x:auto;
   font-size:.72rem; color:var(--text-dim); margin-top:8px; white-space:pre; }
 .siem-on { color:var(--alert-1); font-weight:700; } .siem-off { color:var(--text-faint); }
 
-/* ATLAS rubric module: reward-free TF/TA/TG/PA labels — a category badge + the run's deterministic facts.
+/* ATLAS rubric module: reward-free TF/TA/TG/PA labels: a category badge + the run's deterministic facts.
    Category accent (--rc) tints both the badge and the criterion's left rule; tokens are theme-aware. */
 .rub-tag { font-size:.6rem; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint);
   border:1px solid var(--border); border-radius:var(--radius); padding:2px 6px; margin-left:8px; font-weight:400; }

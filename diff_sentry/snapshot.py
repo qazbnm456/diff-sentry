@@ -1,4 +1,4 @@
-"""Append-only, content-addressed archive of what the ingest saw — the forensic record.
+"""Append-only, content-addressed archive of what the ingest saw: the forensic record.
 
 An attacker can delete the PR, edit the issue body, force-push the branch, or delete the account, and the
 GitHub API then answers 404 or shows the cleaned-up version (the hackerbot-claw artifacts were 404 within

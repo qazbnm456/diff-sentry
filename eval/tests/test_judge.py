@@ -1,4 +1,4 @@
-"""The judge validator + the offline stub — strict 0-10 parsing, deterministic stub, no creds."""
+"""The judge validator + the offline stub: strict 0-10 parsing, deterministic stub, no creds."""
 
 from __future__ import annotations
 

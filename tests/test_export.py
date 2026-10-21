@@ -1,4 +1,4 @@
-"""Reward-free dataset export over a real trace — labels read the ASSEMBLED (deterministic) facts."""
+"""Reward-free dataset export over a real trace: labels read the ASSEMBLED (deterministic) facts."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ def test_export_is_reward_free_and_reads_assembled_labels(make_trace, tmp_path):
     runs = load_runs(path)
     bundle = export_dataset(runs)
 
-    # every exported action carries reward=None (the stage boundary — scoring is a separate project)
+    # every exported action carries reward=None (the stage boundary: scoring is a separate project)
     assert all(a.get("reward") is None for a in bundle["actions"])
 
     labels = bundle["labels"]["pr-7"]
@@ -35,7 +35,7 @@ def test_labels_none_when_no_result(make_trace):
 
 
 def test_inconclusive_label_is_a_reward_free_fact(make_trace):
-    """The `inconclusive` OUTCOME label — True when a content-free change reached the insufficient-evidence
+    """The `inconclusive` OUTCOME label: True when a content-free change reached the insufficient-evidence
     outcome (mirrors the response backstop), False on a normal malicious run. A reward-free FACT."""
     from diff_sentry.ingest import event_from_payload
 
@@ -49,7 +49,7 @@ def test_inconclusive_label_is_a_reward_free_fact(make_trace):
 
 
 def test_export_carries_the_reward_free_rubric_signal(make_trace):
-    """The ATLAS rubric surface rides beside the trajectory as LABELS — the fixed 4-category skeleton +
+    """The ATLAS rubric surface rides beside the trajectory as LABELS: the fixed 4-category skeleton +
     deterministic per-criterion facts, never a score."""
     bundle = export_dataset(load_runs(make_trace(run_id="pr-7")))
     sig = bundle["rubric_signal"]["pr-7"]
@@ -60,7 +60,7 @@ def test_export_carries_the_reward_free_rubric_signal(make_trace):
 
 
 def test_run_metrics_carries_effort_fields(make_trace):
-    """The reward-free effort metrics a trainer shapes into a reward — the fields must be present and the
+    """The reward-free effort metrics a trainer shapes into a reward: the fields must be present and the
     deterministic ones correct (a 2-step trace is far below the 25-iteration cap, no circuit breaks)."""
     runs = load_runs(make_trace(run_id="pr-11"))
     metrics = export_dataset(runs)["metrics"]["pr-11"]

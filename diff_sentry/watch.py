@@ -1,4 +1,4 @@
-"""The watcher — continuous monitoring of a watchlist of repositories for the attacks that arrive as a PR
+"""The watcher: continuous monitoring of a watchlist of repositories for the attacks that arrive as a PR
 or an issue.
 
     python -m diff_sentry watch --repos owner/name other/name        # poll, screen, queue for the model
@@ -472,7 +472,7 @@ class _InstanceLock:
             import fcntl
         except ImportError:
             return
-        self._fh = open(self._path, "a")  # noqa: SIM115 — held for the life of the lock
+        self._fh = open(self._path, "a")  # noqa: SIM115 (held for the life of the lock)
         try:
             fcntl.flock(self._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
@@ -560,7 +560,7 @@ class Watcher:
 
     def poll_once(self) -> PollReport:
         """One pass: list each repository (cheap, ETag), examine what is new or updated, then the re-checks
-        that have come due. Never raises — a repository that fails is reported and the pass continues."""
+        that have come due. Never raises: a repository that fails is reported and the pass continues."""
         report = PollReport()
         now = self._clock()
         if self._rate_wait_until and now < self._rate_wait_until:
@@ -573,7 +573,7 @@ class Watcher:
             for kind in ("pull_request", "issue"):
                 try:
                     self._poll_list(repo, kind, report)
-                except Exception as exc:  # noqa: BLE001 — one repo's failure must not stop the others
+                except Exception as exc:  # noqa: BLE001 (one repo's failure must not stop the others)
                     if self._is_rate_limit(exc):
                         self._on_rate_limited(report)          # the list call itself was refused: wait, do not spin
                         return report
@@ -662,7 +662,7 @@ class Watcher:
                 break
             try:
                 self._examine(repo, kind, number, report, reason="listed")
-            except Exception as exc:  # noqa: BLE001 — one bad change must not block the ones behind it
+            except Exception as exc:  # noqa: BLE001 (one bad change must not block the ones behind it)
                 if self._is_rate_limit(exc):
                     self._on_rate_limited(report)          # GitHub said no: wait it out, do NOT count a failure
                     held = updated if held is None else min(held, updated)
@@ -728,7 +728,7 @@ class Watcher:
         try:
             data = (self._api or _default_api())("rate_limit")
             reset = datetime.fromtimestamp(int(data["resources"]["core"]["reset"]), UTC)
-        except Exception:  # noqa: BLE001,S110 — best-effort; fall back to a fixed wait
+        except Exception:  # noqa: BLE001,S110 (best-effort; fall back to a fixed wait)
             pass
         self._rate_wait_until = reset if reset and reset > self._clock() else self._clock() + timedelta(minutes=15)
         report.rate_limited = True
@@ -902,7 +902,7 @@ class Watcher:
             extra = {"baseline": baseline} if baseline is not None and _accepts(screener, "baseline") else {}
             return screener(event, run_id=run_id, outdir=self.config.out_dir, config=self.detect_config,
                             emit=emit, poster=self._poster, **extra)
-        except Exception as exc:  # noqa: BLE001 — the screen record is best-effort; the change is still queued
+        except Exception as exc:  # noqa: BLE001 (the screen record is best-effort; the change is still queued)
             log.warning("screen %s failed: %s", run_id, exc)
             return None
 
@@ -993,7 +993,7 @@ class Watcher:
             self.state.complete(run_id)
             try:
                 self.state.set_state_of_run(run_id, "done")
-            except Exception:  # noqa: BLE001,S110 — the store itself is failing; the log line above is the record
+            except Exception:  # noqa: BLE001,S110 (the store itself is failing; the log line above is the record)
                 pass
 
     # ── several runs at once: one process each ──
@@ -1018,7 +1018,7 @@ class Watcher:
             row, event = claimed
             try:
                 inflight[pool.submit(_run_model, event, *self._run_args(row["run_id"]))] = claimed
-            except Exception as exc:  # noqa: BLE001 — BrokenProcessPool, or a spawn that failed (ENOMEM, EMFILE)
+            except Exception as exc:  # noqa: BLE001 (BrokenProcessPool, or a spawn that failed: ENOMEM, EMFILE)
                 log.warning("could not start %s: %s", row["run_id"], exc)
                 self._settle(row, event, None)
                 return started, True                         # start over with a new pool, without waiting
@@ -1163,7 +1163,7 @@ def _run_model(event: dict, runner: Callable[..., Any] | None, run_id: str, out_
     try:
         extra = {"emit_failed": False} if _accepts(runner, "emit_failed") else {}
         return _outcome(runner(event, run_id=run_id, outdir=out_dir, config=config, emit=emit, poster=poster, **extra))
-    except Exception as exc:  # noqa: BLE001 — `cli.run` never raises; a custom runner might
+    except Exception as exc:  # noqa: BLE001 (`cli.run` never raises; a custom runner might)
         log.warning("run %s crashed: %s", run_id, exc)
         return None
 
@@ -1189,7 +1189,7 @@ def _result(fut: Future, run_id: str) -> tuple[tuple | None, bool]:
     except BrokenProcessPool:
         log.warning("the process running %s died", run_id)
         return None, True
-    except BaseException as exc:  # noqa: BLE001 — a child's KeyboardInterrupt or SystemExit is its run failing
+    except BaseException as exc:  # noqa: BLE001 (a child's KeyboardInterrupt or SystemExit is its run failing)
         log.warning("run %s crashed: %r", run_id, exc)
         return None, False
 

@@ -1,13 +1,13 @@
 """Map a diff-sentry trace event → a public SSE event (the single source of truth for the streamed
-event surface). Pure function, no web deps — unit-tested independently of the server.
+event surface). Pure function, no web deps, unit-tested independently of the server.
 
 A trace event is `{type, step_id, ts, payload}` (rlm-harness's trace, v1 or v2). We surface only the events
 a UI needs and rename them to a stable `detection.<noun>.<verb>` vocabulary (OpenAI-Responses-flavored).
-Unknown / internal events return None (skipped). The full structured result is NOT streamed — the client
+Unknown / internal events return None (skipped). The full structured result is NOT streamed; the client
 GETs `/v1/runs/{run_id}` after `detection.run.completed`.
 
-Payload tolerance is deliberate (the tools emit shape variants — see `diff_sentry.deep_classify`):
-`deep_classify` records THREE shapes — validated (`ok`/`verdict`/`confidence`), circuit-break
+Payload tolerance is deliberate (the tools emit shape variants; see `diff_sentry.deep_classify`):
+`deep_classify` records THREE shapes: validated (`ok`/`verdict`/`confidence`), circuit-break
 (`ok=False, circuit_broken=True`), and endpoint-error (ONLY `error`, no `ok` key). We normalize all
 three. `sub_call` carries `input`/`processed`/`raw` (rlm-harness's sub-LM), not question/answer.
 """
@@ -20,14 +20,14 @@ _ROLES = ("planner", "analyst", "classifier")
 _SEV_ORDER = ("info", "low", "medium", "high", "critical")
 _MAX_SCALAR = 200   # a payload scalar longer than this is treated as bulky and dropped from `fields`
 
-# Payload keys a bespoke tool event already surfaces (or that are bulky) — dropped from the generic
+# Payload keys a bespoke tool event already surfaces (or that are bulky), dropped from the generic
 # unknown-tool event so it carries only SHORT scalar fields, never a raw blob.
 _SCALAR_DROP = frozenset({"tool", "ok", "raw", "preview", "spec", "hits", "args", "result",
                           "output", "findings", "content", "errors", "reasoning"})
 
 
 def _scalar_fields(p: dict) -> dict:
-    """The payload's SHORT scalar fields (str/int/float/bool) for a tool with no bespoke event — the
+    """The payload's SHORT scalar fields (str/int/float/bool) for a tool with no bespoke event; the
     already-surfaced tool/ok and every bulky key (raw/preview/spec/hits/args/…) are dropped, so an
     unrecognized tool_call streams a meaningful row instead of being silently DROPPED from the feed."""
     out: dict = {}
@@ -65,14 +65,14 @@ def to_event(trace_event: dict) -> dict[str, Any] | None:
             "models": {k: meta[k] for k in _ROLES if meta.get(k)},
             "source": meta.get("source"),          # the change under review (repo/kind/number/author/title)
             "baseline": len(meta.get("baseline_indicators") or []),   # host-side hits already in the trace
-            "rubric": {                     # ATLAS labels this run is scored on — a hint (full facts via GET)
+            "rubric": {                     # ATLAS labels this run is scored on: a hint (full facts via GET)
                 "categories": sorted({c.get("category") for c in rubric if c.get("category")}),
                 "criteria": len(rubric),
             },
         })
     if t == "main_step":
         # Surfaced for the REPLAY (causally sorted: ts, then step_id) stream. The LIVE sink drops main_step (it
-        # flushes post-hoc, so it would arrive as a trailing burst — see live.trace_event_sink).
+        # flushes post-hoc, so it would arrive as a trailing burst; see live.trace_event_sink).
         return _ev("detection.plan.step", {
             "turn": p.get("turn"),
             "reasoning": p.get("reasoning"),
@@ -84,13 +84,13 @@ def to_event(trace_event: dict) -> dict[str, Any] | None:
             data["error"] = p["error"]                   # an escalation the provider refused
         return _ev("detection.analyst.escalation", data)
     if t == "result":
-        return _ev("detection.result.done", {})          # signal — client GETs the full response
+        return _ev("detection.result.done", {})          # signal: client GETs the full response
     if t == "run_end":
         return _ev("detection.run.completed", {})        # the ONE terminal event
     if t == "final":
         # A real finished trace holds BOTH `final` (from rlm-harness's record_main_trajectory) and `run_end`
         # (from the recorder's __exit__). Mapping BOTH to the terminal event would emit
-        # `detection.run.completed` TWICE per replay — and the `final` copy lands BEFORE `result`, so a
+        # `detection.run.completed` TWICE per replay, and the `final` copy lands BEFORE `result`, so a
         # client acting on the first `completed` fires before `detection.result.done`. `run_end` is the
         # canonical terminal; a truncated trace with `final` but no `run_end` (SIGKILL before __exit__)
         # is covered by the replay endpoint's synthesized-terminal fallback. So skip `final`.
@@ -130,7 +130,7 @@ def to_event(trace_event: dict) -> dict[str, Any] | None:
         # fields (raw/preview/spec/hits/…) are dropped by _scalar_fields.
         return _ev("detection.tool", {"tool": tool, "ok": p.get("ok"), "fields": _scalar_fields(p)})
 
-    return None  # unknown event type — skip
+    return None  # unknown event type: skip
 
 
 def _ev(name: str, data: dict) -> dict[str, Any]:

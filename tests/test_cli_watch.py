@@ -1,4 +1,4 @@
-"""The deterministic screen, the early-alert stage, and the `watch` / `actor` / `archive` subcommands — all
+"""The deterministic screen, the early-alert stage, and the `watch` / `actor` / `archive` subcommands, all
 offline. The screen needs no model creds and no Deno; that is what lets a watcher run as a cheap first tier."""
 
 from __future__ import annotations

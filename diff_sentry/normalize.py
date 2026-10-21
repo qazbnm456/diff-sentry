@@ -4,7 +4,7 @@ MF1: dspy.RLM surfaces a ~1000-char PREVIEW (head + tail) of every input
 variable into the planner's prompt, and anything the model prints re-enters context. So we cannot claim
 untrusted text "never reaches the prompt". What we CAN do is control the preview WINDOW: this normalizer
 sandwiches the attacker-controlled body/patches BETWEEN a derived-metadata header and an identical
-footer, so the head/tail dspy previews show repo/counts/hashes/filenames — structure we computed — not
+footer, so the head/tail dspy previews show repo/counts/hashes/filenames (structure we computed), not
 the attacker's free text. The MISSION frame + an injection-resistant root model are the ACTUAL defense
 against the untrusted middle; this only denies the attacker the cheap real-estate of the preview edges.
 
@@ -47,7 +47,7 @@ def _files(event: dict) -> list[dict]:
 
 # Caps so attacker-authored strings (a long malicious filename, a crafted title) can't colonise the
 # MF1 preview window from INSIDE the metadata sandwich itself. The FULL title/filenames still reach the
-# planner in the marked untrusted body section below — this only bounds the head/tail preview real-estate.
+# planner in the marked untrusted body section below; this only bounds the head/tail preview real-estate.
 _MAX_META_FILES = 40
 _MAX_META_FILENAME = 120
 _MAX_META_TITLE = 120
@@ -77,7 +77,7 @@ _GH_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", 
 
 
 def _provenance_summary(provenance: Any) -> dict[str, Any]:
-    """A BOUNDED, host-derived subset of the ingest `provenance` block for the MF1 metadata sandwich —
+    """A BOUNDED, host-derived subset of the ingest `provenance` block for the MF1 metadata sandwich:
     only the keys present (so an offline/pasted event with no provenance carries none), and only
     GitHub-enum values for the string fields (so a forged provenance can't inject free text as trusted)."""
     if not isinstance(provenance, dict):
@@ -93,7 +93,7 @@ def _provenance_summary(provenance: Any) -> dict[str, Any]:
         val = provenance.get(key)
         if isinstance(val, int) and not isinstance(val, bool):
             out[key] = val
-    # a host-derived boolean (the author account does not resolve) — the display name is attacker-authored
+    # a host-derived boolean (the author account does not resolve); the display name is attacker-authored
     # free text and is deliberately NOT surfaced here.
     if provenance.get("author_not_found") is True or str(provenance.get("author_login") or "").strip().lower() == "ghost":
         out["author_unresolvable"] = True
@@ -143,7 +143,7 @@ def _scanned_comments(event: dict) -> list[dict]:
 
 
 def event_metadata(event: dict) -> dict[str, Any]:
-    """The DERIVED, trustworthy summary of a change — repo, kind, number, author, file stats, and a
+    """The DERIVED, trustworthy summary of a change: repo, kind, number, author, file stats, and a
     sha256 of the raw untrusted content. Computed by us, never taken from the model. Attacker-authored
     fields (title, filenames) are BOUNDED so they can't fill the MF1 preview window from inside metadata."""
     files = _files(event)
@@ -212,10 +212,10 @@ def normalize_event(event: dict) -> str:
 
 
 def has_groundable_content(event_str: str) -> bool:
-    """True when a normalized event carries REAL untrusted content between the content markers — i.e. NOT
+    """True when a normalized event carries REAL untrusted content between the content markers, i.e. NOT
     the empty-content sentinel. Host-side + deterministic: an empty `{}` payload or a body-less push
     normalizes to the sentinel, so a caller can PREFER the `inconclusive` outcome over a confident verdict
-    (defense-in-depth — an ungroundable input must never ship a confident call). Returns True when the
+    (defense-in-depth: an ungroundable input must never ship a confident call). Returns True when the
     markers are absent (a legacy/foreign string we can't parse) so a normal run is never mis-downgraded."""
     if not event_str:
         return False
@@ -247,7 +247,7 @@ def content_segments_ex(event: dict) -> list[tuple[str, str, str, str]]:
 
 
 def content_segments(event: dict) -> list[tuple[str, str]]:
-    """The untrusted content split the way the event already carries it: `(label, text)` per piece —
+    """The untrusted content split the way the event already carries it: `(label, text)` per piece:
     the title+author, then one segment per file, then the body, then the head branch name, then each
     scanned comment.
 
@@ -259,7 +259,7 @@ def content_segments(event: dict) -> list[tuple[str, str]]:
 
 
 def raw_content(event: dict) -> str:
-    """The concatenated untrusted content the host-side BASELINE scan runs on — TITLE + author +
+    """The concatenated untrusted content the host-side BASELINE scan runs on: TITLE + author +
     (filename + patch) per file + body. The title is included so a title-borne prompt injection is caught
     by the deterministic baseline even when the planner is skewed by the same payload (MF3): an issue/PR
     title is a canonical injection channel, and its hits must reach the signal regardless of the verdict."""

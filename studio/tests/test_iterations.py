@@ -1,4 +1,4 @@
-"""The trajectory breakdown + the re-derived fabrication tell — pure over the trace, no server."""
+"""The trajectory breakdown + the re-derived fabrication tell: pure over the trace, no server."""
 
 from diff_sentry_studio.iterations import build_iterations, cited_unknown_ids
 
@@ -44,7 +44,7 @@ def test_scan_hits_carry_evidence_and_decoded_for_the_indicators_view():
 
 def test_cited_unknown_ids_flags_only_uncorroborated_citations():
     # the planner cited ind-a (baseline), ind-b (a scan hit), and ind-ghost (no recorded hit). Only the
-    # ghost is a fabrication tell — re-derived from the trace because DetectionResponse omits it.
+    # ghost is a fabrication tell, re-derived from the trace because DetectionResponse omits it.
     assert cited_unknown_ids(_trace()) == ["ind-ghost"]
 
 

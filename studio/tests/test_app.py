@@ -1,4 +1,4 @@
-"""The FastAPI surface — verified with `run_live` STUBBED, so it needs no LLM, dspy, gh, or diff_sentry.
+"""The FastAPI surface: verified with `run_live` STUBBED, so it needs no LLM, dspy, gh, or diff_sentry.
 Exercises the live endpoint's worker-thread → async-queue → SSE glue and the replay endpoints' file
 handling, plus the path-traversal, no-cache, and cited-unknown-augmentation guards."""
 
@@ -107,7 +107,7 @@ def _write_trace(tmp_path, lines):
 def test_replay_streams_mapped_events(tmp_path, monkeypatch):
     # A REAL finished trace holds both `final` (record_main_trajectory) and `run_end` (recorder __exit__),
     # in that order, with `result` between them. The mapper must skip `final` so the terminal event fires
-    # exactly ONCE — and after `detection.result.done`, not before it.
+    # exactly ONCE, and after `detection.result.done`, not before it.
     _write_trace(tmp_path, [
         {"type": "run_start", "step_id": 0, "payload": {"meta": {"planner": "P"}}},
         {"type": "tool_call", "step_id": 1, "payload": {"tool": "scan_indicators", "hits": [{"severity": "high"}], "n": 1}},
@@ -144,7 +144,7 @@ def test_replay_orders_causally_by_ts_with_step_id_tiebreak(tmp_path, monkeypatc
 
 def test_replay_order_is_permutation_invariant_with_nan_or_inf_stamps_and_run_end_last(tmp_path, monkeypatch):
     # `json.loads` is non-strict (admits NaN/Infinity), `isinstance(nan, float)` is True, and every NaN
-    # comparison is False — so without the `isfinite` guard the replay order depends on INPUT ORDER (and
+    # comparison is False, so without the `isfinite` guard the replay order depends on INPUT ORDER (and
     # can put an event after run_end). A NaN/±inf stamp must join the ts-less tail (step_id order), the
     # result stay deterministic, and `run_end` stay terminal.
     ev = [{"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {"planner": "P"}}},

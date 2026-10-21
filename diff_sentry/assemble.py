@@ -1,17 +1,17 @@
-"""Assemble the canonical verdict from the trace — the read-time step that makes the EVIDENCE a fact.
+"""Assemble the canonical verdict from the trace: the read-time step that makes the EVIDENCE a fact.
 
 `assemble_verdict(verdict, events)` attaches the deterministic fields the SYSTEM owns to the planner's
 JUDGEMENT (`ChangeVerdict`, no hits): the UNION of ALL indicator hits from the trace (baseline ∪ every
-`scan_indicators` tool call — MF3), the derived max severity, whether to SIGNAL, and any indicator ids
+`scan_indicators` tool call; MF3), the derived max severity, whether to SIGNAL, and any indicator ids
 the planner cited that match no recorded hit (a fabrication tell).
 
 The `signal` decision is DETERMINISTIC and partly independent of the planner: it fires if the planner's
 verdict is in `emit_on` OR a high/critical deterministic indicator fired. So a false-benign self-report
-cannot suppress hard evidence from reaching the SIEM — the planner can skew the verdict, never hide the
+cannot suppress hard evidence from reaching the SIEM: the planner can skew the verdict, never hide the
 indicators. (This is deterministic reduction over facts, NOT a model judgement smuggled into the read
-path — the verdict tier stays the planner's; only the evidence-driven floor is ours.)
+path: the verdict tier stays the planner's; only the evidence-driven floor is ours.)
 
-This runs everywhere the result is consumed — the live path (cli), re-render, and rl_export — so labels
+This runs everywhere the result is consumed: the live path (cli), re-render, and rl_export, so labels
 read facts too. A trace missing a newer field still reads: pydantic ignores unknown keys, and hits
 re-source from the trace.
 

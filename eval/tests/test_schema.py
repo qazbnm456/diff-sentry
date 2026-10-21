@@ -1,4 +1,4 @@
-"""The report shapes carry measurements, never a reward — no composite/total field anywhere."""
+"""The report shapes carry measurements, never a reward: no composite/total field anywhere."""
 
 from __future__ import annotations
 

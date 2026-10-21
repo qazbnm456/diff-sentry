@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from diff_sentry import DetectConfig
-from tests.test_config import _DS_ENV  # the FULL scrub list — ambient DS_* env must not flip a test
+from tests.test_config import _DS_ENV  # the FULL scrub list: ambient DS_* env must not flip a test
 
 _SUBSCRIPTION_BASE = {
     "DS_ROOT_LM": "claude-agent-sdk/claude-sonnet-5",
@@ -79,7 +79,7 @@ def test_maybe_subscription_lm_missing_extra_is_actionable(monkeypatch):
     """Sentinel + missing claude-agent-sdk → an error that NAMES the fix, not a bare import crash.
 
     (The real-world path: `uv lock` records the extra but only `uv sync --extra subscription`
-    installs it — a sentinel-configured run in a never-synced env must say so.)
+    installs it; a sentinel-configured run in a never-synced env must say so.)
     """
     pytest.importorskip("dspy")  # importing detect pulls dspy+rlm_harness, present in the dev env
     import sys

@@ -1,10 +1,10 @@
-"""Deterministic indicator detectors — pure-Python, in-loop-safe, NO subprocess.
+"""Deterministic indicator detectors: pure-Python, in-loop-safe, NO subprocess.
 
 `scan_indicators(text)` runs a suite of pattern detectors over a change (or a decoded region) and
-returns structured `IndicatorHit`s — FACTS, never a model opinion. It is used TWO ways:
+returns structured `IndicatorHit`s: FACTS, never a model opinion. It is used TWO ways:
 
 1. **Host-side BASELINE** at ingest (`cli`/`normalize`), stashed in the run_start meta, so the
-   deterministic evidence is in the trace even if the planner never scans — the planner cannot suppress
+   deterministic evidence is in the trace even if the planner never scans; the planner cannot suppress
    a hit by omission (assemble unions baseline ∪ tool hits).
 2. **An RLM TOOL** (`make_indicator_tool`) the planner calls on a specific region it decoded or wants
    double-checked; each call records a `tool_call` carrying the FULL structured hits.
@@ -40,7 +40,7 @@ from .hosts import bare_command, installer_only, powershell_installer_only
 from .normalize import OUTSIDER_ASSOCIATIONS, is_scanned_comment
 from .schema import IndicatorHit, severity_rank
 
-_MAX_EVIDENCE = 240  # bounded snippet — never leak the whole diff into a hit
+_MAX_EVIDENCE = 240  # bounded snippet: never leak the whole diff into a hit
 _MAX_HITS_PER_RULE = 25  # per (rule, location): more matches of one rule in one place add size, not information
 _SHELL_MATCH_LIMIT = 4 * _MAX_HITS_PER_RULE      # matches of one download form turned into hits: the cap keeps 25 anyway
 
@@ -54,7 +54,7 @@ def _snip(text: str, start: int, end: int, *, pad: int = 40) -> str:
 
 
 def mint_id(rule: str, evidence: str, form: str = "") -> str:
-    """A DETERMINISTIC hit id — stable across the host-side baseline scan and an in-loop tool scan of
+    """A DETERMINISTIC hit id, stable across the host-side baseline scan and an in-loop tool scan of
     the same content, so the two de-duplicate to one union member. No Date/random (both unavailable and
     would break replay determinism). `form` tells apart two hits of one rule whose evidence windows overlap
     (a pipe and a command substitution on one short line): they are different findings, judged apart."""
@@ -215,10 +215,10 @@ _CHMOD_EXEC_RE = re.compile(r"chmod\s+\+x[^\n]{0,120}", re.IGNORECASE)
 _B64_RE = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 # Exfiltration: environment/secret READS and a secret NAME piped to a network sink. Deliberately NOT the
 # bare token name alone (a legit workflow uses `${{ secrets.GITHUB_TOKEN }}`) and NOT `export X=$Y`
-# (`export PATH=$PATH:…` is a normal idiom) — the secret must actually reach an exfil verb to fire.
+# (`export PATH=$PATH:…` is a normal idiom): the secret must actually reach an exfil verb to fire.
 # `/proc/<pid>/mem` (and maps) reading ANOTHER process is the runner-memory-dump technique from the
 # tj-actions supply-chain incident; the secret-name alternation covers the CI token families that class of
-# attack harvests. `self/maps` is deliberately EXCLUDED — parsing your own memory map is textbook legit
+# attack harvests. `self/maps` is deliberately EXCLUDED: parsing your own memory map is textbook legit
 # native tooling (crash reporters, profilers, sanitizers); the cross-process (`\d+`) reads are the tell.
 _EXFIL_RE = re.compile(
     r"printenv|(?<![\w.])env\s*\||/proc/(?:self/(?:environ|mem)|\d+/(?:environ|mem|maps))|~/\.aws/credentials|"
@@ -230,8 +230,8 @@ _CI_PATH_RE = re.compile(r"(?:^|[\s\"'/])(\.github/workflows/[^\s\"']+|CODEOWNER
 _RAW_IP_URL_RE = re.compile(r"https?://\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?/\S*")
 
 # Exfil sinks come in TWO precision tiers. The enrichment-fetch allowlist (MF2) owns "org-owned vs
-# external"; THIS is the detection side — a NAMED list, not "any external host".
-# Tier 1 — OAST / interaction / request-bin services whose ONLY purpose is receiving out-of-band callbacks
+# external"; THIS is the detection side: a NAMED list, not "any external host".
+# Tier 1: OAST / interaction / request-bin services whose ONLY purpose is receiving out-of-band callbacks
 # (the tj-actions gist/webhook-callback shape). A committed reference has NO legitimate use → `high`.
 _OAST_DOMAINS = (
     "webhook.site", "requestbin.com", "requestbin.net", "burpcollaborator.net",
@@ -239,9 +239,9 @@ _OAST_DOMAINS = (
     "interactsh.com", "dnslog.cn", "hookbin.com",
 )
 _OAST_DOMAIN_RE = re.compile(r"\b(?:" + "|".join(re.escape(d) for d in _OAST_DOMAINS) + r")\b", re.IGNORECASE)
-# Tier 2 — dev tunnels / API-mock services. Heavily ABUSED as exfil sinks, BUT with mainstream legitimate
+# Tier 2: dev tunnels / API-mock services. Heavily ABUSED as exfil sinks, BUT with mainstream legitimate
 # use (smee.io is GitHub's own Probot webhook proxy; ngrok/beeceptor appear in ordinary dev READMEs). So a
-# corroborating `medium` — BELOW the signal floor — never a standalone signal (the FP-safe tier).
+# corroborating `medium` (BELOW the signal floor), never a standalone signal (the FP-safe tier).
 _TUNNEL_DOMAINS = (
     "ngrok.io", "ngrok-free.app", "ngrok.app", "ngrok.dev", "smee.io",
     "beeceptor.com", "pipedream.net", "trycloudflare.com", "serveo.net",
@@ -249,14 +249,14 @@ _TUNNEL_DOMAINS = (
 _TUNNEL_DOMAIN_RE = re.compile(r"\b(?:" + "|".join(re.escape(d) for d in _TUNNEL_DOMAINS) + r")\b", re.IGNORECASE)
 
 # CI-bypass markers: a commit/PR that skips the CI checks a malicious change would otherwise trip. Legit
-# uses exist (a docs-only commit), so `medium` — BELOW the signal floor: a corroborating tell, never a
+# uses exist (a docs-only commit), so `medium`, BELOW the signal floor: a corroborating tell, never a
 # standalone smoking gun (mirrors `workflow-tamper`'s tuning; a real payload fires its own high rule).
 # GitHub honors [skip ci]/[ci skip]/[no ci]/[skip actions]/[actions skip] and the skip-checks trailer.
 _CI_BYPASS_RE = re.compile(
     r"\[\s*(?:skip[\s_-]*ci|ci[\s_-]*skip|no[\s_-]*ci|skip[\s_-]*actions|actions[\s_-]*skip)\s*\]"
     r"|skip-checks\s*:\s*true", re.IGNORECASE)
 
-# Workflow permission escalation: an over-broad `permissions: write-all` grant — the "permission model
+# Workflow permission escalation: an over-broad `permissions: write-all` grant, the "permission model
 # change" the malicious-PR research flags. Rare and high-signal, like a CODEOWNERS reassignment → `high`.
 # LINE-ANCHORED (MULTILINE) on the YAML shorthand and NOT on a diff `-` deletion line, so REMOVING a
 # write-all (the recommended hardening) and prose mentions do NOT fire.
@@ -269,7 +269,7 @@ _WRITE_ALL_RE = re.compile(r"^[+ ]?[ \t]*permissions[ \t]*:[ \t]*write-all\b", r
 # PR's workflow with the BASE repo's token and secrets; on their own that is a legitimate pattern (label
 # or comment bots that never touch the PR's code), so alone they are a sub-floor `medium`, consistent
 # with `workflow-tamper`'s tuning. The lethal pairing is that trigger PLUS an explicit checkout of the PR
-# HEAD — attacker-authored code executing inside the privileged context. That is the ROOT CAUSE of the
+# HEAD: attacker-authored code executing inside the privileged context. That is the ROOT CAUSE of the
 # AsyncAPI "Miasma" supply-chain compromise (a fork PR harvested the org-admin token out of the runner),
 # and it has no safe reading → `critical`.
 # Every spelling of the trigger key: the map form (`pull_request_target:`), the scalar (`on: pull_request_target`),
@@ -318,7 +318,7 @@ _PR_HEAD_CHECKOUT_RE = re.compile(
     r"|gh\s+pr\s+checkout[^\n]{0,300}\$\{\{[^{}]{0,120}\}\}",
     re.IGNORECASE | re.MULTILINE)
 
-# One hop of indirection — the same lethal shape written as two lines:
+# One hop of indirection: the same lethal shape written as two lines:
 #     HEAD: ${{ github.event.pull_request.head.sha }}   …   ref: ${{ env.HEAD }}
 # Matching only the direct form would leave that as a trivial bypass, so a name bound to the head
 # expression is tracked and a `ref:` that reads it counts as the checkout.
@@ -332,7 +332,7 @@ _REF_VALUE_RE = re.compile(r"^[+ ]?[ \t]{0,40}ref[ \t]{0,8}:[ \t]{0,8}([^\n]*)",
 # The third way to check out a fork PR head, and the only one that says so in words. actions/checkout
 # v5.1/v6.1/v7 REFUSE to check out a fork PR under `pull_request_target`/`workflow_run` unless the
 # workflow opts back in with `allow-unsafe-pr-checkout: true`. There is no ref to trace and no dataflow
-# to infer — the line is the intent, written out. Under `pull_request` it means nothing (no privileged
+# to infer: the line is the intent, written out. Under `pull_request` it means nothing (no privileged
 # context to protect), which is why it only counts inside `_scan_workflow_config`'s trigger guard.
 # Literal `true` only: an expression value is a parameterisation question, not evidence, and the
 # `^[+ ]?` anchor keeps a REMOVED opt-in (the hardening you want) from firing.
@@ -342,7 +342,7 @@ _UNSAFE_PR_CHECKOUT_RE = re.compile(
     re.IGNORECASE | re.MULTILINE)
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
-# Diff-PRESENTATION evasion — attacks aimed at the human reading the diff, not at the runtime. Miasma
+# Diff-PRESENTATION evasion: attacks aimed at the human reading the diff, not at the runtime. Miasma
 # prepended ~700 spaces to shove its payload off the right edge of a standard diff viewer. No source
 # formatter indents or aligns past ~60 columns, so a 200-space run before real content is unambiguous.
 # NOT anchored to the line start: a run that size mid-line hides the line's tail just as well, and the
@@ -380,7 +380,7 @@ _INVISIBLE_RE = re.compile(
 
 # Node/npm execution primitives (Miasma's payload was JS end-to-end). Tuned rather than uniformly paranoid:
 # `child_process` and `eval` appear in legitimate tooling constantly, so only the DETACHED spawn (a
-# process deliberately outliving the parent — the stage-1 loader shape) and inline `node -e` execution
+# process deliberately outliving the parent, the stage-1 loader shape) and inline `node -e` execution
 # reach the floor; a bare dynamic eval is a sub-floor corroborator.
 _JS_CHILD_PROC_RE = re.compile(
     r"child_process|\b(?:execSync|spawnSync|execFileSync|execFile|spawn|fork)\s*\(", re.IGNORECASE)
@@ -401,7 +401,7 @@ _JS_NET_FETCH_RE = re.compile(
     re.IGNORECASE)
 _FILE_WRITE_RE = re.compile(r"writeFileSync|createWriteStream|\bfs\.write", re.IGNORECASE)
 
-# Tier 3 — content-addressed / permaweb gateways. Miasma staged its second-stage binary on IPFS. Same
+# Tier 3: content-addressed / permaweb gateways. Miasma staged its second-stage binary on IPFS. Same
 # FP-safe reasoning as the dev tunnels: these have real mainstream use (web3 apps, NFT metadata), so a
 # reference alone is a sub-floor `medium`. When the change actually FETCHES from one and writes the
 # result to disk, `remote-fetch-to-disk` fires on its own and carries the signal.
@@ -435,7 +435,7 @@ _RUN_ASSET_RE = re.compile(
 
 # What a sentence asks for once it has told the reader to drop its rules: an action to take.
 _ACTIONS = r"(?:approve|merge|run|execute|label|close|exfiltrat\w*|delete|push|comment|grant)"
-# Prompt-injection phrases — the class of payload hackerbot-claw aimed at a claude-code-action workflow.
+# Prompt-injection phrases: the class of payload hackerbot-claw aimed at a claude-code-action workflow.
 _INJECTION_PHRASES = (
     "ignore previous instructions", "system prompt", "new instructions:",
     "override your instructions", "bulk-label", "label all issues",
@@ -570,7 +570,7 @@ def _scan_obfuscation(text: str) -> list[IndicatorHit]:
             continue
         if not _mostly_text(decoded):
             continue
-        # Only flag base64 that DECODES to something suspicious — a plain data blob isn't an indicator.
+        # Only flag base64 that DECODES to something suspicious; a plain data blob isn't an indicator.
         # (Rescan shell/exfil/URL/callback-domain payloads; CI-skip and permission markers aren't usefully
         # base64-wrapped, so they're not in the inner set.)
         inner = (_scan_shell(decoded, False) + _scan_urls(decoded) + _scan_exfil(decoded)
@@ -634,7 +634,7 @@ _PWN_OPTIN_TITLE = ("privileged fork trigger re-enables the fork-PR checkout act
 def _pr_head_checkout(text: str) -> tuple[re.Match[str], str] | None:
     """Where a PR-HEAD checkout actually happens, and which of the three forms it took.
 
-    Returns the match to cite plus the title for it — the opt-in reads differently enough from a ref
+    Returns the match to cite plus the title for it: the opt-in reads differently enough from a ref
     that reporting it as "checks out the PR HEAD" would send a reader looking for a `ref:` that is not
     there."""
     optin = _UNSAFE_PR_CHECKOUT_RE.search(text)
@@ -643,7 +643,7 @@ def _pr_head_checkout(text: str) -> tuple[re.Match[str], str] | None:
     direct = _PR_HEAD_CHECKOUT_RE.search(text)
     if direct:
         return direct, _PWN_TITLE
-    # `ref:` is not a binding — a `ref:` holding the expression IS the direct case above.
+    # `ref:` is not a binding; a `ref:` holding the expression IS the direct case above.
     bound = {m.group(1).lower() for m in _HEAD_BINDING_RE.finditer(text)} - {"ref"}
     if not bound:
         return None
@@ -668,7 +668,7 @@ def _scan_workflow_config(text: str) -> list[IndicatorHit]:
     head = _PR_HEAD_REF_RE.search(text)
     if head:
         # Reads the head ref without checking it out. That is the validating-publisher shape, which is
-        # the RECOMMENDED way to comment on a fork PR — so it stays sub-floor, but it is cited rather
+        # the RECOMMENDED way to comment on a fork PR, so it stays sub-floor, but it is cited rather
         # than the trigger line, because this is the spot a reviewer should look at.
         return [_hit("privileged-fork-trigger", "medium",
                      "`pull_request_target`/`workflow_run` reads the PR HEAD without checking it out — "
@@ -758,7 +758,7 @@ def _scan_js_exec(text: str, patch: bool = False) -> list[IndicatorHit]:
 
 
 def _scan_hex_identifiers(text: str) -> list[IndicatorHit]:
-    """javascript-obfuscator's `_0x…` mangling — obfuscation that base64 detection cannot see."""
+    """javascript-obfuscator's `_0x…` mangling: obfuscation that base64 detection cannot see."""
     found = _HEX_IDENT_RE.findall(text)
     if len(set(found)) >= 3 and len(found) >= 8:
         return [_hit("obfuscated-identifiers", "high",
@@ -831,16 +831,16 @@ def _sev_rank(sev: str) -> int:
 
 # ── diff SCOPING ──────────────────────────────────────────────────────────────────────────────────────
 # A change is many files, and `scan_indicators` reads whatever it is handed as ONE string. That is right
-# for the rules that fire on a single match, but two of them require a PAIR of signals — `pwn-request`
+# for the rules that fire on a single match, but two of them require a PAIR of signals: `pwn-request`
 # (privileged trigger + PR-HEAD checkout) and `detached-process-spawn` (detached spawn + child_process).
 # Read as one blob, those pair ACROSS FILES: a `workflow_run:` added to one workflow and a
-# `ref: ${{ github.event.pull_request.head.sha }}` sitting in an unrelated file — a doc example, a test
-# fixture, or the very workflow the change is DELETING — compose into a `critical` that no single file
+# `ref: ${{ github.event.pull_request.head.sha }}` sitting in an unrelated file (a doc example, a test
+# fixture, or the very workflow the change is DELETING) compose into a `critical` that no single file
 # contains. Scoping the scan per file removes that class outright and names the file in each hit's
 # `location`.
 #
 # The trade is explicit: a payload deliberately split across two files does not pair. That is the
-# right way round — a detector that invents a critical out of two unrelated files trains people to
+# right way round: a detector that invents a critical out of two unrelated files trains people to
 # disable it, and the single-signal rules (most of them) are unaffected.
 _DIFF_FILE_RE = re.compile(r"^diff --git a/(?P<a>.+?) b/(?P<b>.+?)$", re.MULTILINE)
 
@@ -849,7 +849,7 @@ def split_diff_by_file(text: str) -> list[tuple[str, str]]:
     """Split a unified diff into `(path, segment)` pairs; `[]` when `text` is not a diff.
 
     Anything BEFORE the first file header comes back first with an empty path. That chunk is not
-    padding — for `raw_content` it is the PR title and body, which is exactly where prompt injection
+    padding: for `raw_content` it is the PR title and body, which is exactly where prompt injection
     lives, so it has to keep being scanned rather than skipped as preamble."""
     marks = list(_DIFF_FILE_RE.finditer(text or ""))
     if not marks:
@@ -2886,7 +2886,7 @@ def _or_closed(call: Callable[[], list[IndicatorHit]], fallback: list[IndicatorH
     the rendered view read the text with the enclosure code, which is outside the detectors' guard: an input that crashes them must not crash the scan of the change."""
     try:
         return call()
-    except Exception as exc:  # noqa: BLE001 — fail CLOSED: the installer stays as strict as the detector found it
+    except Exception as exc:  # noqa: BLE001 (fail CLOSED): the installer stays as strict as the detector found it
         return [*fallback, _hit("scanner-error", "high", f"{name} raised on this input, so it was not softened or read as rendered", f"{name}: {type(exc).__name__}")]
 
 
@@ -2982,7 +2982,7 @@ def _unread_shape(text: str, diff: bool) -> bool:
         new = _new_file(text) if diff else text
         peeled = _peeled(new)
         return bool(_ADDED_LINE_RE.search(peeled) or _opens_an_array(peeled) or _YAML_OPEN_QUOTE_RE.search(peeled) or _PLACEHOLDER_RE.search(peeled) or _spells_a_quote_in_braces(peeled) or _holds_json_strings(peeled))
-    except Exception:  # noqa: BLE001 — fail CLOSED
+    except Exception:  # noqa: BLE001 (fail CLOSED)
         return True
 
 
@@ -3201,7 +3201,7 @@ def scan_content(event: dict) -> list[IndicatorHit]:
 
 
 def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
-    """`scan_indicators` with per-file scoping — a paired rule can only fire when ONE file carries both
+    """`scan_indicators` with per-file scoping: a paired rule can only fire when ONE file carries both
     halves. Non-diff input (a region the planner pulled out, a plain file) falls through to a single
     whole-text scan, so this is safe as the entry point for either shape. Both are read as a patch (a leading `+` is a diff marker):
     the host-side baseline reads every channel with its own flag, and the union keeps its stricter hit. Only the files of a
@@ -3224,7 +3224,7 @@ def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
             for path, segment in split_diff_by_file(letters) or [("", letters)]:
                 for h in _scope_to_file(_scan_shell(segment, True), path, segment) if path else _scan_shell(segment, True):
                     keep_worse(deduped, h.model_copy(update={"location": path or location}) if (path or location) and not h.location else h)
-        except Exception as exc:  # noqa: BLE001 — fail CLOSED, as `scan_indicators` does
+        except Exception as exc:  # noqa: BLE001 (fail CLOSED, as `scan_indicators` does)
             keep_worse(deduped, _hit("scanner-error", "high", "the shell rules raised on this input with each lone CR read as a letter, so it was not fully scanned",
                                      f"_scan_shell: {type(exc).__name__}"))
     return list(deduped.values())
@@ -3242,7 +3242,7 @@ def scan_indicators(text: str, *, location: str = "", diff: bool = True, patch: 
 
     `location` labels hits that don't carry their own (a filename/region tag). `patch` says the text is a file's patch
     (a file of a change, or of a `diff --git` diff), which `inline-code-exec` reads as its new file. Deterministic and
-    side-effect-free — safe to run host-side (baseline) and in-loop (tool)."""
+    side-effect-free: safe to run host-side (baseline) and in-loop (tool)."""
     raw = text or ""
     text = _lf(raw)
     # a lone CR is a line break to the file's own language but no line of the patch: a piece after it that starts with `-`
@@ -3254,7 +3254,7 @@ def scan_indicators(text: str, *, location: str = "", diff: bool = True, patch: 
         try:
             all_hits += (detector(text, diff) if detector is _scan_shell else detector(text, patch) if detector is _scan_js_exec
                          else detector(text))
-        except Exception as exc:  # noqa: BLE001 — fail CLOSED: a detector that crashed on this input is evidence
+        except Exception as exc:  # noqa: BLE001 (fail CLOSED): a detector that crashed on this input is evidence
             # An input that crashes a detector must not silently disable the rest, or the whole change goes
             # unscanned. Record it as a finding (stable evidence, so it dedupes) and keep scanning.
             all_hits.append(_hit("scanner-error", "high",
@@ -3265,7 +3265,7 @@ def scan_indicators(text: str, *, location: str = "", diff: bool = True, patch: 
         # (`curl URL<CR>| sh` runs, `\\<CR>` is an escaped CR): the shell rules read the text once more with each lone CR as a letter
         try:
             all_hits += _scan_shell(_lf(_LONE_CR_RE.sub("x", raw)), diff)
-        except Exception as exc:  # noqa: BLE001 — fail CLOSED
+        except Exception as exc:  # noqa: BLE001 (fail CLOSED)
             all_hits.append(_hit("scanner-error", "high", "the shell rules raised on this input with each lone CR read as a letter, so it was not fully scanned",
                                  f"_scan_shell: {type(exc).__name__}"))
     deduped: dict[str, IndicatorHit] = {}
@@ -3320,8 +3320,8 @@ def _ts(value: object):
 
 
 def scan_metadata(event: dict) -> list[IndicatorHit]:
-    """Deterministic signals from the structural channels of an event — the head branch name and the
-    comment thread — that a diff scan never sees. Deterministic and side-effect-free (safe in baseline)."""
+    """Deterministic signals from the structural channels of an event (the head branch name and the
+    comment thread) that a diff scan never sees. Deterministic and side-effect-free (safe in baseline)."""
     from .normalize import _comments
 
     hits: list[IndicatorHit] = []
@@ -3332,7 +3332,7 @@ def scan_metadata(event: dict) -> list[IndicatorHit]:
         soft = None if hard else _BRANCH_SOFT_RE.search(ref)
         if hard:
             # Rare in a branch a human named, but not impossible (`fix/handle_${HOME}_expansion`), so an owner,
-            # member or collaborator — someone who can already push here — gets the sub-floor reading.
+            # member or collaborator (someone who can already push here) gets the sub-floor reading.
             hits.append(_hit("branch-name-injection", "medium" if assoc in _TRUSTED_ASSOCIATIONS else "high",
                              "the PR head branch name carries shell syntax (command substitution / brace "
                              "expansion) — the injection a workflow that interpolates the ref would run",
@@ -3720,7 +3720,7 @@ def scan_files(event: dict) -> list[IndicatorHit]:
     for f in files:
         try:
             found = _file_structure_hits(f, added)
-        except Exception as exc:  # noqa: BLE001 — fail CLOSED, as `scan_indicators` does
+        except Exception as exc:  # noqa: BLE001 (fail CLOSED, as `scan_indicators` does)
             found = [_hit("scanner-error", "high", "a file-structure rule raised on this file, so it was not fully scanned",
                           f"_file_structure_hits: {type(exc).__name__}", location=f["filename"])]
         for h in found:
@@ -3740,7 +3740,7 @@ def scan_change(event: dict) -> list[IndicatorHit]:
 
 # ── provenance detectors: FACTS from host-side `gh api` ingest enrichment, NOT untrusted text ─────────
 # These take the structured `provenance` dict (author type/association, account age, commit signatures)
-# ingest.py attaches — the "source/provenance" signals from the malicious-PR research. Host-side ONLY: not
+# ingest.py attaches: the "source/provenance" signals from the malicious-PR research. Host-side ONLY: not
 # an RLM tool (there is nothing for the planner to decode), recorded into the run_start baseline so they
 # join the evidence union (MF3) and re-derive on read.
 
@@ -3749,7 +3749,7 @@ def scan_change(event: dict) -> list[IndicatorHit]:
 # in a username, so a `[bot]`-suffixed User login is STRUCTURALLY impossible for a real account → forged.
 # A bot-like NAME (exact `renovate`, or a lookalike `renovate-bot`/`dependabot-fix`) is ambiguous: a legit
 # HOSTED machine account (Mend's `renovate-bot`, `snyk-bot`) has one too, so it only rises to a signal when
-# the account is ALSO an outsider (new / first-time) — an established machine account never trips it.
+# the account is ALSO an outsider (new / first-time); an established machine account never trips it.
 _BOT_BASES = ("dependabot", "renovate", "github-actions", "mergify", "snyk", "greenkeeper",
               "depfu", "imgbot", "pre-commit-ci", "allcontributors")
 # author_association values that mean "not an established contributor to THIS repo".
@@ -3864,7 +3864,7 @@ def scan_provenance(provenance: dict) -> list[IndicatorHit]:
                          "a new/unestablished User account whose login mimics an automation bot",
                          f"login={login[:80]} type={atype[:20]} association={assoc[:40] or 'n/a'}"))
 
-    # Display-name spoof — a bot-like PROFILE NAME (not login) worn by a new/unestablished User. Same
+    # Display-name spoof: a bot-like PROFILE NAME (not login) worn by a new/unestablished User. Same
     # outsider gate as bot-like-author, so an established `renovate-bot` ("Renovate Bot") stays silent.
     display = str(prov.get("author_display_name") or "")
     if is_user and outsider and display and (_resembles_bot(display.lower())
@@ -3873,7 +3873,7 @@ def scan_provenance(provenance: dict) -> list[IndicatorHit]:
                          "a new/unestablished User whose DISPLAY NAME mimics an automation bot",
                          f"name={display[:80]} login={login[:80]}"))
 
-    # Author account does not resolve — a positively-confirmed 404, or GitHub's `ghost` deletion
+    # Author account does not resolve: a positively-confirmed 404, or GitHub's `ghost` deletion
     # attribution. A real post-incident tell, but benign deletions happen too → medium (sub-floor).
     if prov.get("author_not_found") is True or login_l == "ghost":
         hits.append(_hit("author-unresolvable", "medium",
@@ -3888,7 +3888,7 @@ def scan_provenance(provenance: dict) -> list[IndicatorHit]:
         hits.append(_hit("unsigned-commits", "low", "one or more commits are unsigned / unverified", ev))
 
     # A signature was attached but does NOT bind to the committer's GitHub identity (bad_email / unknown_key
-    # / no_user / unverified_email) — spoofing-shaped, distinct from plain unsigned. Low: misconfigured-but-
+    # / no_user / unverified_email): spoofing-shaped, distinct from plain unsigned. Low: misconfigured-but-
     # honest signers produce these constantly, so a corroborator, never a signal driver.
     mismatch = prov.get("commits_sig_identity_mismatch")
     if isinstance(mismatch, int) and not isinstance(mismatch, bool) and mismatch > 0:
@@ -3896,10 +3896,10 @@ def scan_provenance(provenance: dict) -> list[IndicatorHit]:
                          "a commit signature does not bind to the committer's GitHub identity",
                          f"identity_mismatch={mismatch}"))
 
-    # A forged bot-like git AUTHOR name on an UNVERIFIED commit (real API-created bot commits VERIFY) — the
+    # A forged bot-like git AUTHOR name on an UNVERIFIED commit (real API-created bot commits VERIFY), the
     # commit-level spoof shape. Same outsider gate as the login/display rules: an established machine account
     # (self-hosted Renovate without platformCommit, github-actions committing via git) legitimately produces
-    # unverified bot-named commits, and a Bot-type author authoring bot-named commits is normal — so this
+    # unverified bot-named commits, and a Bot-type author authoring bot-named commits is normal, so this
     # only rises to a corroborator for an OUTSIDER User, and a name matching the author's OWN login (a
     # self-consistent identity) is not a spoof. Medium; the git author string is pure attacker input.
     authors = prov.get("unverified_commit_authors")
@@ -4056,7 +4056,7 @@ class _Change:
 def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
     """Build the sync `scan_indicators` RLM tool. It scans a region the planner passes and RECORDS the
     full structured hits into the trace (so the evidence is a fact, re-sourced on read), then returns a
-    compact text summary + the hit ids the planner may cite. Sync — dspy.RLM invokes tools synchronously.
+    compact text summary + the hit ids the planner may cite. Sync: dspy.RLM invokes tools synchronously.
 
     Given the change (`event`), it also records whether the region is GROUNDED in it (`_Change.holds`): an
     ungrounded hit stays in the evidence but never reaches the signal floor. Without one (a direct caller, a
@@ -4066,7 +4066,7 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
     change = _Change(event) if event is not None else None
     try:
         windows = _maintainer_windows(event) if event is not None else frozenset()
-    except Exception:  # noqa: BLE001 — fail CLOSED: a planner scan keeps every `inline-code-exec` as found
+    except Exception:  # noqa: BLE001 (fail CLOSED): a planner scan keeps every `inline-code-exec` as found
         windows = frozenset()
 
     def scan_indicators_tool(region: str, decoded_from: str | None = None) -> str:
@@ -4116,7 +4116,7 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
             if not copied and any(h.rule == "invisible-unicode" and h.severity != "high" for h in hits):
                 hits = [h for h in hits if h.rule != "invisible-unicode"] + [
                     h for h in _scan_diff_evasion(_lf(text)) if h.rule == "invisible-unicode"]
-        except Exception as exc:  # noqa: BLE001 — fail CLOSED, as `scan_indicators` does for a detector
+        except Exception as exc:  # noqa: BLE001 (fail CLOSED, as `scan_indicators` does for a detector)
             hits = [*hits, _hit("scanner-error", "high", "the planner scan's second reading raised on this region",
                                 f"scan_indicators_tool: {type(exc).__name__}")]
         # a region holding a `diff --git` diff was also read as a patch, whose `node -e` no window of the maintainer's tells
@@ -4124,7 +4124,7 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
                 and any(h.rule == "inline-code-exec" and h.severity == "high" for h in hits)):
             try:
                 quoted = _written_by_maintainer(text, windows)
-            except Exception:  # noqa: BLE001 — fail CLOSED
+            except Exception:  # noqa: BLE001 (fail CLOSED)
                 quoted = False
             if quoted:      # what the baseline judged in the maintainer's text, read again
                 hits = [h.model_copy(update={"severity": "medium", "title": f"{h.title} — {_INLINE_EXEC_TRUSTED_WHY}"})
@@ -4156,7 +4156,7 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
 def hits_from_events(events: list[dict]) -> list[IndicatorHit]:
     """Re-source the UNION of every deterministic hit from a trace: the run_start meta BASELINE plus
     every `scan_indicators` tool_call's recorded hits, deduped by id. This is the evidence a signal is
-    built on — never the planner's self-report (MF3). An id seen on the change keeps its most severe GROUNDED
+    built on, never the planner's self-report (MF3). An id seen on the change keeps its most severe GROUNDED
     sighting: a more severe copy on text the planner wrote must not lift it (one match can be read at two
     severities, as prose softening does). An id seen only on planner text keeps its ungrounded copy."""
     grounded: dict[str, IndicatorHit] = {}

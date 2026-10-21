@@ -1,4 +1,4 @@
-"""Tests for the ATLAS rubric surface (`rubric.py`) — deterministic, reward-free, dspy-free.
+"""Tests for the ATLAS rubric surface (`rubric.py`): deterministic, reward-free, dspy-free.
 
 Fixtures are SYNTHETIC in-code event lists (the export-test pattern), never the gitignored `output/traces/`
 artifacts, so the suite runs on a fresh clone / in CI. The facts are driven through the ASSEMBLED verdict
@@ -178,7 +178,7 @@ def test_lens_differentiates_malicious_benign_and_thrash_runs():
     assert benign["TG"]["max_indicator_severity"] == "info" and benign["TG"]["indicator_count"] == 0
     assert strong["TG"]["cited_unknown"] == 0 and thrash["TG"]["cited_unknown"] == 1
 
-    # PA: well-formedness — the fabricated citation separates the thrash run from the clean ones
+    # PA: well-formedness: the fabricated citation separates the thrash run from the clean ones
     assert strong["PA"]["cited_unknown"] == 0 and thrash["PA"]["cited_unknown"] == 1
 
 

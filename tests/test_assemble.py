@@ -23,7 +23,7 @@ def test_unions_indicators_from_baseline_and_tool_calls(make_trace):
 
 def test_benign_self_report_cannot_suppress_hard_evidence(make_trace):
     """A (wrong) benign verdict over a malicious change: the deterministic high/critical indicator must
-    STILL force a signal — evidence is a fact, the verdict is only a judgement."""
+    STILL force a signal: evidence is a fact, the verdict is only a judgement."""
     events = load_events(make_trace(event=MALICIOUS_EVENT, verdict=BENIGN_SELF_REPORT))
     a = verdict_from_events(events)
     assert a is not None
@@ -51,7 +51,7 @@ def test_emit_on_is_read_from_meta():
 
 def test_offline_signal_matches_the_runs_emit_on(make_trace):
     """A 'suspicious' verdict on a change with no high indicators: the default threshold signals, a
-    'malicious'-only threshold recorded in meta does not — offline re-derivation honors the run's own emit_on."""
+    'malicious'-only threshold recorded in meta does not; offline re-derivation honors the run's own emit_on."""
     susp = {**BENIGN_SELF_REPORT, "verdict": "suspicious", "indicator_ids": []}
     default = verdict_from_events(load_events(make_trace(event=BENIGN_EVENT, verdict=susp, run_id="b1")))
     strict = verdict_from_events(load_events(

@@ -1,4 +1,4 @@
-"""Host-side ingestion — offline payload shaping + a GitHub fetch with an injected api transport."""
+"""Host-side ingestion: offline payload shaping + a GitHub fetch with an injected api transport."""
 
 from __future__ import annotations
 
