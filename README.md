@@ -24,13 +24,13 @@ jobs:
       - uses: qazbnm456/diff-sentry@v0.9.0
 ```
 
-That is the whole setup. The job fails when an indicator at or above `high` fires.
+That is the whole setup. The job fails when an indicator at or above `high` fires. Add `push` to `on:` to also scan commits pushed straight to a branch; a push that bypassed branch protection can also remove the scanning workflow, so `watch` and `release-watch` read from outside the repository.
 
 ## What it catches
 
 | Family | Examples |
 |---|---|
-| Workflow configuration | `pull_request_target` that checks out the PR head (the pwn-request that broke AsyncAPI) by `ref:`, by a hand-rolled `git fetch`, or by opting back in with `allow-unsafe-pr-checkout: true`; plus `permissions: write-all` and CODEOWNERS reassignment |
+| Workflow configuration | `pull_request_target` that checks out the PR head (the pwn-request that broke AsyncAPI) by `ref:`, by a hand-rolled `git fetch`, or by opting back in with `allow-unsafe-pr-checkout: true`; a workflow pointed at a lookalike of your own GitHub owner (the litellm release built from `Berri-AI/litellm`); plus `permissions: write-all` and CODEOWNERS reassignment |
 | Obfuscation | base64 that decodes to a shell payload, `_0x…` machine-mangled JavaScript, high-entropy blobs |
 | Execution | pipe-to-shell installs, `${IFS}` space-evasion, detached child processes, inline `node -e`, fetch-to-disk droppers, Python startup hooks (`.pth`, `sitecustomize.py`), packed or downloaded code run with `exec` |
 | Exfiltration | secrets reaching a network sink, cross-process `/proc/<pid>/mem` reads, OAST callback services, IPFS and permaweb gateways |

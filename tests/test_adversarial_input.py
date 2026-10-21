@@ -282,6 +282,9 @@ for mod in mods:
             # ONE literal followed by one long run: the shape that makes adjacent optional quantifiers cubic
             for run in (" ", "\t", "(", " (", "-", "|", "\"", "'", "*"):
                 cases.append(lit + run * SIZE)
+            # and after a key's colon or an assignment's `=`, where a value's lead (tags, anchors, quotes, blanks) begins
+            for sep in (":", "=", ": "):
+                cases.append(lit + sep + " " * SIZE + "!")
         # one short prefix and then a single long run of letters/digits: the shape of `-c…c1`, which a pattern with no
         # literal of three letters (and so no case above) can still be cubic on
         for prefix in ("x -", "x ", "-", "https://x/"):

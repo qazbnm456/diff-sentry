@@ -34,7 +34,7 @@ import zlib
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Iterator
 from functools import partial
-from itertools import islice
+from itertools import accumulate, islice
 
 from . import linewide, shelllex
 from .hosts import bare_command, installer_only, powershell_installer_only
@@ -3316,14 +3316,15 @@ def _diff_file(path: str, segment: str) -> dict:
             "additions": sum(1 for line in patch.split("\n") if line.startswith("+")), "deletions": 0, "patch": patch}
 
 
-def scan_diff(text: str, *, location: str = "", files: bool = False) -> list[IndicatorHit]:
+def scan_diff(text: str, *, location: str = "", files: bool = False, owner: str = "") -> list[IndicatorHit]:
     """`scan_indicators` with per-file scoping: a paired rule can only fire when ONE file carries both
     halves. Non-diff input (a region the planner pulled out, a plain file) falls through to a single
     whole-text scan, so this is safe as the entry point for either shape. Both are read as a patch (a leading `+` is a diff marker):
     the host-side baseline reads every channel with its own flag, and the union keeps its stricter hit. Only the files of a
     `diff --git` diff are a file's patch to `inline-code-exec` (`patch`); the fallthrough is read as it is. `files` also runs the
     file-structure rules on each file of the diff, as `scan_files` does on an event's file list: the Action's `scan` reads a
-    diff of the change, while a diff the planner finds quoted in a comment is no file of the change."""
+    diff of the change, while a diff the planner finds quoted in a comment is no file of the change. `owner` (the repository's GitHub owner, which
+    the Action knows) also judges the diff's GitHub references against it (`lookalike-owner`)."""
     raw = text or ""
     text = _lf(raw)
     segments = split_diff_by_file(text)
@@ -3339,7 +3340,7 @@ def scan_diff(text: str, *, location: str = "", files: bool = False) -> list[Ind
         for h in _or_closed(partial(_scope_to_file, found, path, segment), found, "_scope_to_file") if path else found:
             keep_worse(deduped, h)
     for f in entries:     # the file-structure rules an event's file list gets (`scan_files`), from the diff's own headers
-        for h in _file_hits(f, added):
+        for h in _file_hits(f, added, owner):
             keep_worse(deduped, h)
     if _LONE_CR_RE.search(raw):
         # `scan_indicators` reads a lone CR as a character of a word for a text it is handed as it is; the files of a diff were cut out of the text with the CR made a newline
@@ -3799,9 +3800,9 @@ def _autorun_hits(path: str, tokens: list[tuple[str, str, bool]]) -> tuple[list[
     return hits, present
 
 
-def _file_structure_hits(f: dict, added: frozenset[str]) -> list[IndicatorHit]:
+def _file_structure_hits(f: dict, added: frozenset[str], owner: str = "") -> list[IndicatorHit]:
     path, patch, low = f["filename"], f["patch"], f["filename"].lower()
-    hits: list[IndicatorHit] = []
+    hits: list[IndicatorHit] = _owner_hits(path, patch, owner) if owner else []
     if low.endswith(_BINARY_EXTS):
         side = [text for text, _ in _new_side(patch) if text and text != _HUNK]
         lfs = bool(side) and side[0].startswith("version ") and all(_LFS_LINE_RE.fullmatch(t) for t in side)
@@ -3838,6 +3839,114 @@ def _file_structure_hits(f: dict, added: frozenset[str]) -> list[IndicatorHit]:
     return hits
 
 
+# Where a change names a GitHub owner: a URL on a host whose first path segment is one (`github.com`, the API's
+# `repos/`, `raw.githubusercontent.com`, `ghcr.io`), a `uses:` action, `gh repo clone`, a `-R` / `--repo` flag, npm's
+# `github:` shorthand, and a YAML value under a key that holds a repository (`repository:`, any key naming a repo or a
+# source, an input's `default:`). Never a bare `x/y` token: a Docker Hub namespace drops the hyphen of the GitHub org
+# that publishes it (`nodered/node-red`), and a package directory often does too.
+_OWNER = r"[A-Za-z0-9][A-Za-z0-9-]{0,38}"
+# What may stand between a key and its value: tags (`!!str`) and anchors (`&src`) in either order, a block scalar's
+# indicator (`>-`), a comment, a quote, and up to three blank or comment lines before a value on a line of its own.
+# Each run of blanks follows a token that cannot be a blank, so no two of them meet: adjacent `[ \t]*` runs try every
+# split of a long blank run, and the pattern turns cubic.
+_YAML_VALUE_LEAD = (r"[ \t]*(?:(?:!![A-Za-z]{1,20}|&[A-Za-z0-9_-]{1,60})(?=[ \t\n])[ \t]*){0,2}"
+                    r"(?:[>|][-+0-9]{0,3}[ \t]*)?(?:#[^\n]{0,200})?(?:['\"][ \t]*)?"
+                    r"(?:\n[ \t]{0,200}(?:#[^\n]{0,200})?(?=\n)){0,3}(?:\n[ \t]{1,200}['\"]?)?")
+_GH_REF_RE = re.compile(
+    rf"(?i:github\.com|githubusercontent\.com|ghcr\.io)[/:](?:repos/)?(?P<url>{_OWNER})/[A-Za-z0-9._-]"
+    rf"|(?<![A-Za-z0-9._/-])repos/(?P<api>{_OWNER})/[A-Za-z0-9._-]"
+    rf"|\brepository:{_YAML_VALUE_LEAD}(?P<key>{_OWNER})/[A-Za-z0-9._-]"
+    rf"|\buses:[ \t]*['\"]?(?P<uses>{_OWNER})/[A-Za-z0-9._-]"
+    rf"|\brepo[ \t]+clone[ \t]+(?P<clone>{_OWNER})/[A-Za-z0-9._-]"
+    rf"|(?<![A-Za-z0-9-])(?:-R|--repo)[ \t=]+['\"]?(?P<flag>{_OWNER})/[A-Za-z0-9._-]"
+    rf"|\bgithub:(?P<npm>{_OWNER})/[A-Za-z0-9._-]"
+    rf"|(?<![A-Za-z0-9_-])(?P<keyname>(?i:[A-Za-z0-9_-]{{0,30}}(?:repo|source)[A-Za-z0-9_-]{{0,30}}|default))['\"]?"
+    rf"[ \t]*[:=]{_YAML_VALUE_LEAD}(?P<value>{_OWNER})/[A-Za-z0-9._-]")
+_WORKFLOW_FILE_RE = re.compile(r"(?:^|/)\.github/workflows/[^/]+\.ya?ml$|(?:^|/)action\.ya?ml$", re.IGNORECASE)
+_MAX_OWNER_HITS = 50       # per class: a hyphen lookalike is never crowded out by cheaper hits before it
+
+
+def _one_edit(a: str, b: str) -> bool:
+    """`a` and `b` differ by one inserted, deleted, replaced or swapped character."""
+    if abs(len(a) - len(b)) > 1 or a == b:
+        return False
+    if len(a) == len(b):
+        diff = [i for i in range(len(a)) if a[i] != b[i]]
+        return len(diff) == 1 or (len(diff) == 2 and diff[1] == diff[0] + 1
+                                   and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]])
+    short, long_ = (a, b) if len(a) < len(b) else (b, a)
+    i = next((k for k in range(len(short)) if short[k] != long_[k]), len(short))
+    return short[i:] == long_[i + 1:]
+
+
+def lookalike_owner(candidate: str, owner: str) -> str | None:
+    """How `candidate` imitates `owner`, or None: `hyphen` when they are one name but for hyphens (`Berri-AI` for
+    `BerriAI`), `edit` when, at six or more characters, one edit apart (`BerriAl`). GitHub owners ignore case, so
+    `berriai` IS `BerriAI`. Real sibling organisations sit one edit apart (`python` and `ipython`), so an edit is weaker
+    evidence than a hyphen."""
+    a, b = candidate.lower(), owner.lower()
+    if not a or not b or a == b:
+        return None
+    na, nb = a.replace("-", ""), b.replace("-", "")
+    if na == nb:
+        return "hyphen"
+    return "edit" if min(len(na), len(nb)) >= 6 and _one_edit(na, nb) else None
+
+
+def _owner_hits(path: str, patch: str, owner: str) -> list[IndicatorHit]:
+    """The GitHub owners a file's written lines name, judged against the repository's own. One that differs only by
+    hyphens is `critical` anywhere in a workflow (litellm 1.107.0's release workflow was pointed at `Berri-AI/litellm`
+    to build from), whatever the YAML around it: no reading of the structure decides it. Outside a workflow it is `high`
+    where only a GitHub owner can stand (a URL, an action, a clone, `-R`, `github:`) and `medium` as a key's value,
+    which in a chart or a config is an image or a path as often (`repository: nodered/node-red`). One a single edit away
+    is `medium`, and a workflow checking out another owner's repository is `medium`. Every reference is read; a name
+    keeps its strongest sighting, and hits are bounded per class."""
+    # the new side whole, so a value on the line after its key joins only the line truly after it; a hunk's edge is a
+    # NUL, which no lead skips as a blank or a comment line; a match counts only where the owner sits on a written line
+    side = _new_side(patch)
+    lines = ["\0" if t == _HUNK else t for t, _ in side]
+    text = "\n".join(lines)
+    starts = list(accumulate((len(t) + 1 for t in lines), initial=0))
+    workflow = bool(_WORKFLOW_FILE_RE.search(path))
+    hits: list[IndicatorHit] = []
+    held: dict[str, tuple[int, bool]] = {}      # a name: the index of its hit and whether that hit is strong
+    counts = {"strong": 0, "weak": 0}
+    for m in _GH_REF_RE.finditer(text):
+        kind = "value" if m.group("value") is not None else m.lastgroup or ""
+        if not side[bisect.bisect_right(starts, m.start(kind)) - 1][1]:
+            continue
+        name = m.group(kind)
+        low = name.lower()
+        if low in held and held[low][1]:
+            continue                                # already held at its strongest
+        how = lookalike_owner(name, owner)
+        if not how and not (workflow and kind == "key" and low != owner.lower()):
+            continue
+        strong = how == "hyphen" and (workflow or kind not in ("key", "value"))
+        if low in held and not strong:
+            continue                                # this name already has a sighting at least as strong
+        cls = "strong" if strong else "weak"
+        if counts[cls] >= _MAX_OWNER_HITS:
+            continue
+        if how:
+            severity = ("critical" if workflow else "high") if strong else "medium"
+            hit = _hit("lookalike-owner", severity,
+                       f"a GitHub owner that imitates this repository's (`{name[:39]}` for `{owner[:39]}`, {how})",
+                       _snip(text, m.start(), m.end()), location=path, form=f"{path}:{low}")
+        else:
+            hit = _hit("foreign-checkout", "medium", f"a workflow checks out another owner's repository (`{name[:39]}`)",
+                       _snip(text, m.start(), m.end()), location=path, form=f"{path}:{low}")
+        index = held[low][0] if low in held else -1
+        if index >= 0:
+            hits[index] = hit                       # a strong sighting replaces the weak one before it
+        else:
+            index = len(hits)
+            hits.append(hit)
+        counts[cls] += 1
+        held[low] = (index, strong)
+    return hits
+
+
 # The lines `site` executes in a `.pth` file of site-packages: those that start with `import` and a blank, at every start
 # of the interpreter (the rest of the file is a list of paths). It reads the file as `utf-8-sig` and splits it with
 # `str.splitlines` (3.13; earlier, text mode, which also ends a line at a lone CR), so a line of the patch can hold several.
@@ -3864,17 +3973,20 @@ def scan_files(event: dict) -> list[IndicatorHit]:
 
     files = _files(event)
     added = frozenset(posixpath.normpath(f["filename"]) for f in files if f["status"] == "added")
+    # the change's own GitHub owner, against which a lookalike is judged (a release's `pypi/<name>` has none)
+    repo = str(event.get("repo") or "")
+    owner = repo.split("/", 1)[0] if "/" in repo and event.get("kind") != "release" else ""
     deduped: dict[str, IndicatorHit] = {}
     for f in files:
-        for h in _file_hits(f, added):
+        for h in _file_hits(f, added, owner):
             keep_worse(deduped, h)
     return list(deduped.values())
 
 
-def _file_hits(f: dict, added: frozenset[str]) -> list[IndicatorHit]:
+def _file_hits(f: dict, added: frozenset[str], owner: str = "") -> list[IndicatorHit]:
     """`_file_structure_hits` of one file, or a `scanner-error` for it when a rule raises."""
     try:
-        return _file_structure_hits(f, added)
+        return _file_structure_hits(f, added, owner)
     except Exception as exc:  # noqa: BLE001 (fail CLOSED, as `scan_indicators` does)
         return [_hit("scanner-error", "high", "a file-structure rule raised on this file, so it was not fully scanned",
                      f"_file_structure_hits: {type(exc).__name__}", location=f["filename"])]

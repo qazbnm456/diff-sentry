@@ -339,7 +339,8 @@ def _cmd_scan(args) -> int:
             label = path
         if not args.include_deletions:
             text = drop_deleted_lines(text)
-        hits.extend(scan_diff(text, location=label, files=True))
+        owner = args.repo.split("/", 1)[0] if "/" in args.repo else ""
+        hits.extend(scan_diff(text, location=label, files=True, owner=owner))
 
     worst = max((severity_rank(h.severity) for h in hits), default=-1)
     failed = worst >= threshold
@@ -632,6 +633,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"exit 1 on a hit at/above this severity (default: {SIGNAL_SEVERITY_FLOOR}, "
                          "the SIEM signal floor)")
     sc.add_argument("--json", action="store_true", help="machine-readable output")
+    sc.add_argument("--repo", default=os.getenv("GITHUB_REPOSITORY", ""),
+                    help="owner/name of the repository the diff is of (GITHUB_REPOSITORY in Actions): a GitHub owner "
+                         "that imitates it is flagged")
     sc.add_argument("--include-deletions", action="store_true",
                     help="also scan a diff's `-` lines (default: skip them, so removing a payload "
                          "does not flag the change that removes it)")
