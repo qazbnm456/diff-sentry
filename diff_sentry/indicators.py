@@ -214,7 +214,8 @@ _SYNTAX_PIECE_RE = re.compile(r"[|;&'\"`$()<>\\](?:[^|;&'\"`$()<>\\]{0,64}(?![^|
 _REPEAT_RE = re.compile(r"(?<!\S)(\S{1,30}(?: \S{1,30}){0,7}?)(?: \1)+(?!\S)")
 _CHMOD_EXEC_RE = re.compile(r"chmod\s+\+x[^\n]{0,120}", re.IGNORECASE)
 _B64_RE = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
-# Exfiltration: environment/secret READS and a secret NAME piped to a network sink. Deliberately NOT the
+# Exfiltration: environment/secret READS and a secret NAME piped to a network sink. `env |` is the shell's dump of the
+# environment into a pipe; a closure parameter (`|env| self.getenv(env)` in Rust) is not one. Deliberately NOT the
 # bare token name alone (a legit workflow uses `${{ secrets.GITHUB_TOKEN }}`) and NOT `export X=$Y`
 # (`export PATH=$PATH:…` is a normal idiom): the secret must actually reach an exfil verb to fire.
 # `/proc/<pid>/mem` (and maps) reading ANOTHER process is the runner-memory-dump technique from the
@@ -222,7 +223,7 @@ _B64_RE = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 # attack harvests. `self/maps` is deliberately EXCLUDED: parsing your own memory map is textbook legit
 # native tooling (crash reporters, profilers, sanitizers); the cross-process (`\d+`) reads are the tell.
 _EXFIL_RE = re.compile(
-    r"printenv|(?<![\w.])env\s*\||/proc/(?:self/(?:environ|mem)|\d+/(?:environ|mem|maps))|~/\.aws/credentials|"
+    r"printenv|(?<![\w.|])env\s*\||/proc/(?:self/(?:environ|mem)|\d+/(?:environ|mem|maps))|~/\.aws/credentials|"
     r"(?:AWS_SECRET_ACCESS_KEY|GITHUB_TOKEN|NPM_TOKEN|NODE_AUTH_TOKEN|PYPI_TOKEN|ACTIONS_RUNTIME_TOKEN|"
     r"ACTIONS_ID_TOKEN_REQUEST_TOKEN|CARGO_REGISTRY_TOKEN|TWINE_PASSWORD|NUGET_API_KEY)\b"
     r"[^\n]{0,80}?(?:curl|wget|nc\b|https?://|\|\s*(?:ba)?sh)",
