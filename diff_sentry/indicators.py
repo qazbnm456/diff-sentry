@@ -3993,6 +3993,9 @@ class _Change:
         self.lines = frozenset(lines)
         self.text = "\n".join(lines)
         self.squeezed = "\n".join(_squeeze(t) for t in texts)
+        # each file's patch lines as written (a line's diff marker kept), to tell which file a region is a slice of
+        self.patches = [(label, frozenset(line.rstrip() for line in _lf(text).split("\n")))
+                        for label, text, kind, _ in content_segments_ex(event) if kind == "file"]
         self._entries: deque[tuple[str, str]] = deque()
         self._digests: set[bytes] = set()
         self.derived = ""            # decoded values grounded earlier in this run, squeezed and line by line
@@ -4018,6 +4021,20 @@ class _Change:
             if squeezed and (squeezed in self.squeezed or squeezed in self.derived):
                 return True
         return False
+
+    def patch_of(self, text: str) -> list[str]:
+        """The files of the change whose patch holds every non-blank line of `text` (a code fence aside) as a whole line,
+        diff marker and all: `text` is a slice of each of them, and its `+` and `-` lines are that patch's. An honest
+        slice may cut its first line short at the front and its last at the back."""
+        lines = [line for line in (raw.rstrip() for raw in _lf(text or "").split("\n"))
+                 if line.strip() and not _GROUND_WRAPPER_RE.fullmatch(line.strip())]
+        if not lines or len(lines) > _MAX_GROUND_LINES:
+            return []
+        first, last, inner = lines[0], lines[-1], lines[1:-1]
+        return [label for label, patch in self.patches
+                if all(line in patch for line in inner)
+                and (first in patch or any(p.endswith(first) for p in patch))
+                and (last in patch or any(p.startswith(last) for p in patch))]
 
     def decoded_before(self, text: str) -> bool:
         """`text` is, whole, a value an earlier call of this run grounded through `decoded_from`."""
@@ -4073,9 +4090,18 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
         header = _PATCH_RE.search(text) is not None
         added = _ADDED_LINE_RE.search(text) is not None
         # a region is a patch when it holds a hunk header or a file header, or added lines (a slice of a patch has no header); a `- ` bullet of a plain region is not a removed line,
-        # and a region with both added lines and `- ` lines and no header cannot be told apart from the other: it is not softened
-        hits = _segment_hits(text, "body", scan_diff, prose_file=False, diff=header or added,
-                             softened=header or not (added and re.search(r"^-[ \t]", text, re.MULTILINE)))
+        # and a region with both added lines and `- ` lines and no header cannot be told apart from the other: it is not softened, unless every
+        # line of it is a line of one documentation file's patch, which the region is then a slice of and is read as the baseline reads that file
+        hits = None
+        if not header and added and re.search(r"^-[ \t]", text, re.MULTILINE) and change is not None:
+            labels = change.patch_of(text)
+            if labels and all(label.lower().endswith(_PROSE_FILE_EXTS) for label in labels):
+                markdown = {not label.lower().endswith(_NOT_MARKDOWN_EXTS) for label in labels}
+                if len(markdown) == 1:
+                    hits = _segment_hits(text, "file", scan_diff, prose_file=True, diff=True, markdown=markdown.pop())
+        if hits is None:
+            hits = _segment_hits(text, "body", scan_diff, prose_file=False, diff=header or added,
+                                 softened=header or not (added and re.search(r"^-[ \t]", text, re.MULTILINE)))
         copied = change is None or change.holds(text)
         grounded = copied or (bool(decoded_from) and (change.holds(decoded_from) or change.decoded_before(decoded_from)))
         try:

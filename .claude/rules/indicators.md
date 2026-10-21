@@ -44,7 +44,7 @@ paths:
 
 ## `curl-pipe-shell`
 
-A download piped into a shell or an interpreter is `critical`. It has three forms that are judged separately: the pipe, the command substitution and PowerShell's. In prose (a `title`, `body` or `comment`, or a documentation file: `.md .mdx .markdown .rst .adoc .ipynb .html .htm`) a documented installer is `medium`. Code files (`.sh`, `.go`, `.yml`, a Dockerfile, `requirements.txt`) and branches are never softened. The segment kind decides, never a label. The planner's `scan_indicators` applies the same softening to the region it is given.
+A download piped into a shell or an interpreter is `critical`. It has three forms that are judged separately: the pipe, the command substitution and PowerShell's. In prose (a `title`, `body` or `comment`, or a documentation file: `.md .mdx .markdown .rst .adoc .ipynb .html .htm`) a documented installer is `medium`. Code files (`.sh`, `.go`, `.yml`, a Dockerfile, `requirements.txt`) and branches are never softened. The segment kind decides, never a label. The planner's `scan_indicators` applies the same softening to the region it is given. A region with added lines and a `- ` line but no hunk or file header could be a patch slice or a list, so it is not softened, unless every line of it is a whole line, diff marker and all, of a documentation file's patch (`_Change.patch_of`): it is then read as the baseline reads that file.
 
 ### What it matches
 

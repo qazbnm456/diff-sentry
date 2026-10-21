@@ -293,3 +293,37 @@ def test_a_layer_cannot_be_evicted_by_a_large_decoded_value(recorded):
     scan(blob, decoded_from="H4sIAAAA")             # decoded from a span the change holds: grounded, huge
     scan(_PAYLOAD, decoded_from=hexed)
     assert [c["grounded"] for c in recorded] == [True, True, True]
+
+
+_INSTALLER = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+_README_PATCH = f"@@ -1,5 +1,5 @@\n ## Install\n+{_INSTALLER}\n-  old install notes\n-- Usage notes\n+- See the docs\n"
+
+
+def _installer_severity(recorded):
+    return [h["severity"] for h in recorded[-1]["hits"] if h["rule"] == "curl-pipe-shell"]
+
+
+@pytest.mark.parametrize("region", [f"+{_INSTALLER}\n-  old install notes", _README_PATCH.split("\n", 1)[1],
+                                    f"Install\n+{_INSTALLER}\n-  old install notes\n-- Usage"])
+def test_a_slice_of_a_documentation_patch_is_softened_as_the_baseline_softens_it(recorded, region):
+    # A removed indented line reads `- ` like a bullet; every line being one of the README's patch says it is a removed line.
+    event = {**EVENT, "files": [{"filename": "README.md", "status": "modified", "additions": 2, "deletions": 2,
+                                 "patch": _README_PATCH}]}
+    _tool(event)(region)
+    assert recorded[-1]["grounded"] is True
+    assert _installer_severity(recorded) == ["medium"]
+
+
+def test_a_slice_of_a_code_patch_is_not_softened(recorded):
+    event = {**EVENT, "files": [{"filename": "install.sh", "status": "modified", "additions": 2, "deletions": 2,
+                                 "patch": _README_PATCH}]}
+    _tool(event)(f"+{_INSTALLER}\n-  old install notes")
+    assert _installer_severity(recorded) == ["critical"]
+
+
+def test_a_region_whose_bullet_is_no_line_of_the_patch_is_not_softened(recorded):
+    # `-  ssh evil.example '` is no removed line of the README: the region cannot be told from a body that opens a quote.
+    event = {**EVENT, "body": "-  ssh evil.example '", "files": [
+        {"filename": "README.md", "status": "modified", "additions": 2, "deletions": 2, "patch": _README_PATCH}]}
+    _tool(event)(f"-  ssh evil.example '\n+{_INSTALLER}")
+    assert _installer_severity(recorded) == ["critical"]
