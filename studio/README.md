@@ -127,7 +127,7 @@ card, but nothing runs.
 `diff-sentry` pins **rlm-harness to an exact PyPI version**, so `uv sync` needs no sibling checkout. To
 co-develop rlm-harness locally, overlay it editable (`uv pip install -e ../rlm-harness`).
 
-Do the root env setup first (`cp .env.example .env` and fill it in, see the root `README.md`). The studio
+Do the root env setup first (`cp .env.example .env` and fill it in, see the root `.env.example`). The studio
 reads `os.environ` directly and does **not** auto-load `.env`, so source it into your shell:
 
 ```bash

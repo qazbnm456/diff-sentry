@@ -125,7 +125,7 @@ class DetectConfig:
     classifier_circuit_break: int = 4
 
     # ── RLM runtime knobs ────────────────────────────────────────────────────────────────────────
-    interpreter: str = "pyodide"    # read-not-execute: the classifier NEVER runs the change (see README)
+    interpreter: str = "pyodide"    # read-not-execute: the classifier NEVER runs the change (see docs/how-it-works.md)
     observe: bool = False
     adapter: str = "json"
     # Generous, NOT None: a reasoning planner truncated before its answer returns empty content.

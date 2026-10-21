@@ -1,6 +1,6 @@
 # diff-sentry: agent guide
 
-A BewAIre-style malicious-change detector built on `rlm-harness`. It classifies ONE GitHub change (PR / issue / push) for malicious intent: the change is UNTRUSTED DATA held in a sandboxed REPL, the planner SUBMITs a judgement-only verdict, and the deterministic indicator EVIDENCE is unioned on read into a SIEM signal. `README.md` has the pipeline table and the honest caveats; rlm-harness's "Building a consumer" is the extension contract this project lives within.
+A BewAIre-style malicious-change detector built on `rlm-harness`. It classifies ONE GitHub change (PR / issue / push) for malicious intent: the change is UNTRUSTED DATA held in a sandboxed REPL, the planner SUBMITs a judgement-only verdict, and the deterministic indicator EVIDENCE is unioned on read into a SIEM signal. `README.md` is the user-facing overview and `docs/` holds the pipeline and the honest limits; rlm-harness's "Building a consumer" is the extension contract this project lives within.
 
 rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, locked in `uv.lock`). Overlay `uv pip install -e ../rlm-harness` only while co-developing the kit, and bump the pin once the fix ships.
 
