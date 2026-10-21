@@ -20,8 +20,9 @@ check it by hand.
 
 ## Steps
 
-1. Freeze the boundary: `git log v<last>..HEAD`. Every `feat:` / `fix:` / `deps:` commit inside it is a
-   CHANGELOG candidate.
+1. Freeze the boundary: `git fetch --tags`, then `git log v<last>..HEAD` (the tag is made on GitHub when the
+   release is published, so a clone has it only after a fetch). Every `feat:` / `fix:` / `deps:` commit inside
+   it is a CHANGELOG candidate.
 2. Write the `CHANGELOG.md` entry in the file's existing style: one sentence per user-visible outcome,
    breaking changes and required actions explicit, no debugging story.
 3. Bump sites 1 to 4, run `uv lock`, then verify: `uv run pytest`, the eval suite
@@ -36,4 +37,6 @@ check it by hand.
 6. After `release.yml` succeeds and PyPI's simple index lists the version (`curl -s -H "Accept:
    application/vnd.pypi.simple.v1+json" https://pypi.org/simple/diff-sentry/`; the index lags the upload by
    minutes, and a rerun before it lists the version fails to resolve), re-run the failed consumer-install job
-   (`gh run rerun <ci run id> --failed`); green proves the published package installs and scans.
+   (`gh run rerun <ci run id> --failed`); green proves the published package installs and scans. The runner
+   reads PyPI through another CDN edge, which can lag the index you checked by several minutes: a rerun that
+   still cannot resolve the version is run again a few minutes later, not debugged.
