@@ -13,30 +13,13 @@ A release moves FIVE version sites together, plus a `CHANGELOG.md` entry:
 4. `README.md` quickstart `uses: qazbnm456/diff-sentry@vX.Y.Z`
 5. `uv.lock`, via `uv lock`
 
-`release.yml` fails the build unless the tag, the built wheel's version, the installed `__version__`, and
-the `action.yml` default all agree, and it checks that the installed console script flags a known-malicious
-diff. Nothing gates the README `uses:` line: a stale one sends new adopters to the previous release, so
-check it by hand.
+`release.yml` fails the build unless the tag, the built wheel's version, the installed `__version__`, and the `action.yml` default all agree, and it checks that the installed console script flags a known-malicious diff. Nothing gates the README `uses:` line: a stale one sends new adopters to the previous release, so check it by hand.
 
 ## Steps
 
-1. Freeze the boundary: `git fetch --tags`, then `git log v<last>..HEAD` (the tag is made on GitHub when the
-   release is published, so a clone has it only after a fetch). Every `feat:` / `fix:` / `deps:` commit inside
-   it is a CHANGELOG candidate.
-2. Write the `CHANGELOG.md` entry in the file's existing style: one sentence per user-visible outcome,
-   breaking changes and required actions explicit, no debugging story.
-3. Bump sites 1 to 4, run `uv lock`, then verify: `uv run pytest`, the eval suite
-   (`uv run --package diff-sentry-eval --extra dev python -m pytest eval/tests`), `uvx ruff check .`.
-4. Commit (`chore: release X.Y.Z`) and push to `main` once the user approves. CI's `consumer install
-   path (PyPI)` job then goes RED on this commit, by design: it installs `action.yml`'s default version
-   from PyPI, which does not exist until step 5. Every other job must be green before you continue.
-5. Create a DRAFT release (`gh release create vX.Y.Z --draft --target <release sha> --title … --notes-file
-   …`, notes = the CHANGELOG section). The user publishes it in the web UI with "Publish this Action to
-   the GitHub Marketplace" ticked (the CLI cannot tick it). Publishing is what builds, verifies, and
-   uploads to PyPI via Trusted Publishing, and the upload is irreversible.
-6. After `release.yml` succeeds and PyPI's simple index lists the version (`curl -s -H "Accept:
-   application/vnd.pypi.simple.v1+json" https://pypi.org/simple/diff-sentry/`; the index lags the upload by
-   minutes, and a rerun before it lists the version fails to resolve), re-run the failed consumer-install job
-   (`gh run rerun <ci run id> --failed`); green proves the published package installs and scans. The runner
-   reads PyPI through another CDN edge, which can lag the index you checked by several minutes: a rerun that
-   still cannot resolve the version is run again a few minutes later, not debugged.
+1. Freeze the boundary: `git fetch --tags`, then `git log v<last>..HEAD` (the tag is made on GitHub when the release is published, so a clone has it only after a fetch). Every `feat:` / `fix:` / `deps:` commit inside it is a CHANGELOG candidate.
+2. Write the `CHANGELOG.md` entry in the file's existing style: one sentence per user-visible outcome, breaking changes and required actions explicit, no debugging story. Put it through `/write` (release-notes mode) and the punctuation gate before step 4; it is the release notes, so it is outward copy.
+3. Bump sites 1 to 4, run `uv lock`, then verify: `uv run pytest`, the eval suite (`uv run --package diff-sentry-eval --extra dev python -m pytest eval/tests`), `uvx ruff check .`.
+4. Commit (`chore: release X.Y.Z`) and push to `main` once the user approves. CI's `consumer install path (PyPI)` job then goes RED on this commit, by design: it installs `action.yml`'s default version from PyPI, which does not exist until step 5. Every other job must be green before you continue.
+5. Create a DRAFT release (`gh release create vX.Y.Z --draft --target <release sha> --title … --notes-file …`, notes = the CHANGELOG section). The user publishes it in the web UI with "Publish this Action to the GitHub Marketplace" ticked (the CLI cannot tick it). Publishing is what builds, verifies, and uploads to PyPI via Trusted Publishing, and the upload is irreversible.
+6. After `release.yml` succeeds and PyPI's simple index lists the version (`curl -s -H "Accept: application/vnd.pypi.simple.v1+json" https://pypi.org/simple/diff-sentry/`; the index lags the upload by minutes, and a rerun before it lists the version fails to resolve), re-run the failed consumer-install job (`gh run rerun <ci run id> --failed`); green proves the published package installs and scans. The runner reads PyPI through another CDN edge, which can lag the index you checked by several minutes: a rerun that still cannot resolve the version is run again a few minutes later, not debugged.

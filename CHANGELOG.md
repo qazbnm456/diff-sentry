@@ -7,8 +7,8 @@ All notable changes to diff-sentry, a BewAIre-style detector that classifies one
 Upgrade from 0.8.0: a new `release-watch` command, and one rule that fires less on Rust code. The GitHub Action's scan is otherwise unchanged, nothing needs configuring, and `rlm-harness==1.22.0` is unchanged. `packaging` is a new dependency.
 
 ### Added
-- **`diff-sentry release-watch` watches PyPI releases.** A compromised release need not pass through a pull request: litellm 1.107.0 was built from a lookalike fork, and its wheels held a `.pth` startup hook and a packed stealer the previous release did not. `release-watch` polls the packages you name, compares every new file with the release before it, and screens what changed with the same rules as a pull request, alerting the SIEM and archiving the comparison. Artifacts are read as data and never installed. See [Watching releases](docs/release-watch.md).
-- **What a release does not let it read alerts on its own**: a changed file that runs but could not be read as text (compiled bytecode, a new native module, a file too large to read), two files that install to the same path, a download that fails or does not match its checksum, and attestations the previous release had and this one lacks.
+- **`diff-sentry release-watch` watches PyPI releases.** A compromised release need not pass through a pull request: litellm 1.107.0 was built from an attacker's repository, and its wheels held a `.pth` startup hook and a packed stealer the previous release did not. `release-watch` polls the packages you name, compares every new file with the release before it, and screens what changed with the same rules as a pull request, alerting the SIEM and archiving the comparison. Artifacts are read as data and never installed. See [Watching releases](docs/release-watch.md).
+- **Anything it cannot read in a release alerts on its own**: a changed file that runs but could not be read as text (compiled bytecode, a new native module, a file too large to read), two files that install to the same path, and a download that fails or does not match its checksum. So does a release without the attestations the previous one had.
 
 ### Fixed
 - **`data-exfiltration` no longer reads a Rust closure named `env`** (`|env| self.getenv(env)`) as a shell dumping its environment into a pipe.
@@ -26,7 +26,7 @@ Upgrade from 0.7.1: the GitHub Action now runs the file-structure rules and catc
 - **A packed payload is inflated before it is read**: a base64 blob holding a zlib or gzip stream is decompressed, within a size budget, and scanned for a payload.
 
 ### Fixed
-- **The Action's scan runs the file-structure rules**: a VS Code task that runs on folder open, an npm lifecycle hook or task that runs a file the change adds, a script under an image or font name, obfuscated code in a developer tool's config, and the new startup hooks. Before, only the model pipeline and `watch` ran them.
+- **The Action's scan runs the file-structure rules**: a VS Code task that runs on folder open, an npm lifecycle hook or task that runs a file the change adds, a script under an image or font name, obfuscated code in a developer tool's config, and the new startup hooks. Only the model pipeline and `watch` ran them in 0.7.1.
 - **A path git quotes in a diff header** (a byte outside printable ASCII) is read as its file instead of folding into the file before it.
 
 ## 0.7.1

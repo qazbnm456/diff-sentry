@@ -24,7 +24,7 @@ jobs:
       - uses: qazbnm456/diff-sentry@v0.9.0
 ```
 
-That is the whole setup. The job fails when an indicator at or above `high` fires. Add `push` to `on:` to also scan commits pushed straight to a branch; a push that bypassed branch protection can also remove the scanning workflow, so `watch` and `release-watch` read from outside the repository.
+That is the whole setup. The job fails when an indicator at or above `high` fires. Add `push` to `on:` to also scan commits pushed straight to a branch. A push that bypasses branch protection can also delete this workflow, so `watch` and `release-watch` read the repository and its releases from outside.
 
 ## What it catches
 
