@@ -501,7 +501,7 @@ wheels = [
 
 [[package]]
 name = "diff-sentry"
-version = "0.8.0"
+version = "0.9.0"
 source = { editable = "." }
 default-groups = ["dev", "subscription-sdk"]
 dependencies = [

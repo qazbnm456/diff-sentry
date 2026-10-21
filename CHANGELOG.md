@@ -2,6 +2,17 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.9.0
+
+Upgrade from 0.8.0: a new `release-watch` command, and one rule that fires less on Rust code. The GitHub Action's scan is otherwise unchanged, nothing needs configuring, and `rlm-harness==1.22.0` is unchanged. `packaging` is a new dependency.
+
+### Added
+- **`diff-sentry release-watch` watches PyPI releases.** A compromised release need not pass through a pull request: litellm 1.107.0 was built from a lookalike fork, and its wheels held a `.pth` startup hook and a packed stealer the previous release did not. `release-watch` polls the packages you name, compares every new file with the release before it, and screens what changed with the same rules as a pull request, alerting the SIEM and archiving the comparison. Artifacts are read as data and never installed. See [Watching releases](docs/release-watch.md).
+- **What a release does not let it read alerts on its own**: a changed file that runs but could not be read as text (compiled bytecode, a new native module, a file too large to read), two files that install to the same path, a download that fails or does not match its checksum, and attestations the previous release had and this one lacks.
+
+### Fixed
+- **`data-exfiltration` no longer reads a Rust closure named `env`** (`|env| self.getenv(env)`) as a shell dumping its environment into a pipe.
+
 ## 0.8.0
 
 Upgrade from 0.7.1: the GitHub Action now runs the file-structure rules and catches Python loaders, so a pull request it passed before can fail it now (see **Added** and **Fixed**). Nothing needs configuring, and `rlm-harness==1.22.0` is unchanged.
