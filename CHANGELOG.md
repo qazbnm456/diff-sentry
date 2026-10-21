@@ -2,6 +2,22 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.8.0
+
+Upgrade from 0.7.1: the GitHub Action now runs the file-structure rules and catches Python loaders, so a pull request it passed before can fail it now (see **Added** and **Fixed**). Nothing needs configuring, and `rlm-harness==1.22.0` is unchanged.
+
+### Added
+- **Rules for the litellm 1.107.0 loader shape** ([BerriAI/litellm#47826](https://github.com/BerriAI/litellm/issues/47826)), all `high`:
+  - `python-startup-hook`: a `.pth` line that Python runs at every start, and a `sitecustomize` or `usercustomize` module or package;
+  - `packed-code-exec`: `exec` or `eval` over a decoding call such as `zlib.decompress(base64.b64decode(...))`, and JavaScript's `eval` or `new Function` over `atob` or `Buffer.from`;
+  - `remote-code-exec`: a Python HTTP client and `exec` or `eval` in the same file;
+  - `detached-process-spawn` also covers Python's `os.fork` with `os.setsid`.
+- **A packed payload is inflated before it is read**: a base64 blob holding a zlib or gzip stream is decompressed, within a size budget, and scanned for a payload.
+
+### Fixed
+- **The Action's scan runs the file-structure rules**: a VS Code task that runs on folder open, an npm lifecycle hook or task that runs a file the change adds, a script under an image or font name, obfuscated code in a developer tool's config, and the new startup hooks. Before, only the model pipeline and `watch` ran them.
+- **A path git quotes in a diff header** (a byte outside printable ASCII) is read as its file instead of folding into the file before it.
+
 ## 0.7.1
 
 Upgrade from 0.7.0: `rlm-harness==1.22.0`. The GitHub Action's scan is unchanged; the model pipeline (`pr`, `issue`, `classify`, `watch`) raises fewer false signals on documentation changes and stops calling a misconfigured classifier sooner. Nothing needs configuring.
