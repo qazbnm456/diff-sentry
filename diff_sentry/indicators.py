@@ -2462,7 +2462,7 @@ def _soften_prose(hits: list[IndicatorHit], text: str, kind: str, *, prose_file:
     runs, and the rules stay as strict there."""
     if not hits or not (kind in ("title", "body", "comment") or prose_file):
         return hits
-    with_nul = text.replace("\r\n", "\n").replace("\r", "\n") if "\0" in text else None       # the earlier rule read a NUL as an ordinary character, a shell deletes it: the floor reads both
+    with_nul = text.replace("\r\n", "\n").replace("\r", "\n") if "\0" in text else None       # the line-wide rule reads a NUL as an ordinary character, a shell deletes it: the floor reads both
     text = _lf(text)
     merged: list[tuple[int, int]] = []
     appended: list[int] = []
@@ -3951,8 +3951,8 @@ def scan_provenance(provenance: dict) -> list[IndicatorHit]:
 
 
 # ── grounding: did a planner's scan read the change, or text the planner wrote? ────────────────────
-# The planner may scan anything, and every hit it records joins the evidence (MF3). A region it composed to test
-# the scanner (`$(id) \`whoami\``) once raised a benign change to a signal. A region counts toward the signal floor
+# The planner may scan anything, and every hit it records joins the evidence (MF3), so a region it composes to test
+# the scanner (`$(id) \`whoami\``) would raise a benign change to a signal. A region counts toward the signal floor
 # only when it is taken from the change, or was decoded from a span the change holds (`decoded_from`). Nothing asks
 # the span to LOOK encoded: the author of the change picks the encoding (ROT13, a reversed string, `chr()` sums,
 # a split string), and a test on its shape would let them keep the planner's decoded evidence below the floor. The
@@ -4043,7 +4043,7 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
 
     Given the change (`event`), it also records whether the region is GROUNDED in it (`_Change.holds`): an
     ungrounded hit stays in the evidence but never reaches the signal floor. Without one (a direct caller, a
-    test), every region counts, as before."""
+    test), every region counts as grounded."""
     from rlm_harness.trace import record_tool_call
 
     change = _Change(event) if event is not None else None

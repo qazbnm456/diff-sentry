@@ -285,11 +285,17 @@
   function siemPayload(r) {
     // Mirror emit.signal_payload field-for-field — the console claims this is what the host-side emitter
     // would POST, so it must not drop fields the real payload carries.
+    const grounded = (h) => h.grounded !== false;          // a hit without the field reads as grounded
+    const hits = (r.indicators || []).slice()
+      .sort((a, b) => (grounded(b) - grounded(a)) || (sevRank(b.severity) - sevRank(a.severity)))
+      .slice(0, 100);                                        // emit._MAX_SIGNAL_INDICATORS
     return {
-      run_id: r.id, source: r.source || {}, verdict: r.verdict, confidence: r.confidence,
+      run_id: r.id, stage: "final", source: r.source || {}, verdict: r.verdict, confidence: r.confidence,
       recommended_action: r.recommended_action, max_indicator_severity: r.max_indicator_severity,
+      floor_indicator_severity: r.floor_indicator_severity || r.max_indicator_severity,
       techniques: r.techniques, suspect_files: r.suspect_files, summary: r.summary,
-      indicators: (r.indicators || []).map((h) => ({ id: h.id, rule: h.rule, severity: h.severity, title: h.title, location: h.location })),
+      indicators: hits.map((h) => ({ id: h.id, rule: h.rule, severity: h.severity, title: h.title, location: h.location, grounded: grounded(h) })),
+      indicator_count: (r.indicators || []).length,
     };
   }
 

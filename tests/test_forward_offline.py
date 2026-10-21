@@ -133,8 +133,8 @@ def _main_outputs(events):
 
 
 def test_an_inconclusive_submit_on_a_real_change_is_refused_in_the_trajectory(tmp_path):
-    """A live run SUBMITted `inconclusive` on an 85-file PR: the loop hands the refusal back as the step's output and
-    the planner decides in the same trajectory."""
+    """An `inconclusive` SUBMIT on a change with content to read is refused: the loop hands the refusal back as the
+    step's output and the planner decides in the same trajectory."""
     verdict, events = _run_scripted(
         tmp_path, MALICIOUS_EVENT, hand_over=True,
         steps=[submit({"verdict": _INCONCLUSIVE}), submit({"verdict": MALICIOUS_VERDICT})],

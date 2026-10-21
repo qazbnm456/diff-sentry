@@ -1,145 +1,45 @@
 # diff-sentry: agent guide
 
-A BewAIre-style malicious-change detector built on `rlm-harness`. It classifies ONE GitHub change
-(PR / issue / push) for malicious intent: the change is UNTRUSTED DATA held in a sandboxed REPL, the
-planner SUBMITs a judgement-only verdict, and the deterministic indicator EVIDENCE is unioned on read into
-a SIEM signal. `README.md` has the pipeline table and the honest caveats; rlm-harness's "Building a
-consumer" is the extension contract this project lives within.
+A BewAIre-style malicious-change detector built on `rlm-harness`. It classifies ONE GitHub change (PR / issue / push) for malicious intent: the change is UNTRUSTED DATA held in a sandboxed REPL, the planner SUBMITs a judgement-only verdict, and the deterministic indicator EVIDENCE is unioned on read into a SIEM signal. `README.md` has the pipeline table and the honest caveats; rlm-harness's "Building a consumer" is the extension contract this project lives within.
 
-rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, locked in `uv.lock`). Overlay
-`uv pip install -e ../rlm-harness` only while co-developing the kit, and bump the pin once the fix ships.
+rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, locked in `uv.lock`). Overlay `uv pip install -e ../rlm-harness` only while co-developing the kit, and bump the pin once the fix ships.
 
 ## Verify
 
-- `uv run pytest`: the full offline suite (`uv sync --group dev` first). No live LLM, network, or Deno:
-  dspy paths use DummyLM / rlm-harness's `ScriptedInterpreter`, transports are injected fakes, and
-  `tests/corpus/` pins the indicator suite's hit/miss behavior.
-- `uv run --package diff-sentry-eval --extra dev python -m pytest eval/tests`: the eval member's own suite
-  (the `--package` is required; a root `uv run` does not install the member). Run it when you touch
-  `assemble.py`, `rl_export.py`, `rubric.py`, `schema.py`, or the trace payloads it scores.
-- `DS_ORACLE=1 uv run pytest tests/test_oracle.py`: the shell oracle (opt-in; needs Docker and the `python:3.11-slim`
-  image): candidate download-and-execute texts are run under a real `bash` and `dash` in a no-network, cap-dropped
-  container with a stub `curl`, and the rules are held to what actually ran (`DS_ORACLE_N` / `DS_ORACLE_SEED` scale
-  it). Run it when you touch the `curl-pipe-shell` patterns, the prose softening in `indicators.py` (`_soften_prose`
-  and the helpers it calls, the shape gate, the rendered view), `hosts.py`, `linewide.py`, or `shelllex.py` (the
-  lexer behind the enclosure check, held to what `bash -n` and `dash -n` say about generated fragments).
-- `uvx ruff check .`: lint (line-length 110). CI runs it as its own job, next to both suites and the
-  node tests (`.github/workflows/ci.yml`).
-- A live run needs role creds (`DS_*`, see `.env.example`), Deno (`brew install deno`), and `gh` for
-  `pr`/`issue` ingest. `render`/`export` are offline; `classify` ingests offline but classifies live.
+- `uv run pytest`: the full offline suite (`uv sync --group dev` first). No live LLM, network, or Deno: dspy paths use DummyLM / rlm-harness's `ScriptedInterpreter`, transports are injected fakes, and `tests/corpus/` pins the indicator suite's hit/miss behavior.
+- `uv run --package diff-sentry-eval --extra dev python -m pytest eval/tests`: the eval member's own suite (the `--package` is required; a root `uv run` does not install the member). Run it when you touch `assemble.py`, `rl_export.py`, `rubric.py`, `schema.py`, or the trace payloads it scores.
+- `DS_ORACLE=1 uv run pytest tests/test_oracle.py`: the shell oracle (opt-in; needs Docker and the `python:3.11-slim` image): candidate download-and-execute texts are run under a real `bash` and `dash` in a no-network, cap-dropped container with a stub `curl`, and the rules are held to what actually ran (`DS_ORACLE_N` / `DS_ORACLE_SEED` scale it). Run it when you touch the `curl-pipe-shell` patterns, the prose softening in `indicators.py` (`_soften_prose` and the helpers it calls, the shape gate, the rendered view), `hosts.py`, `linewide.py`, or `shelllex.py` (the lexer behind the enclosure check, held to what `bash -n` and `dash -n` say about generated fragments).
+- `uvx ruff check .`: lint (line-length 110). CI runs it as its own job, next to both suites and the node tests (`.github/workflows/ci.yml`).
+- A live run needs role creds (`DS_*`, see `.env.example`), Deno (`brew install deno`), and `gh` for `pr`/`issue` ingest. `render`/`export` are offline; `classify` ingests offline but classifies live.
 
 ## Running: always through the CLI
 
-- Run via `cli` (`pr` / `issue` / `classify`), never an ad-hoc script. `cli.run(event, …)` is the
-  programmatic entry: it records `<out>/traces/{run_id}.jsonl` (dropping a stale one first, since
-  TraceRecorder appends), writes `<out>/responses/{run_id}.json`, and emits the SIEM signal host-side
-  after the run. It never raises: a crash still writes a `status=failed` response that can signal off the
-  evidence floor. Extend `cli.py` rather than driving `detect_from_event` / `build_response` directly.
-- Offline: `python -m diff_sentry render <trace> <run_id>` re-renders a response;
-  `python -m diff_sentry export "output/traces/*.jsonl" ds.json` exports the reward-free dataset;
-  `actor <login>` prints an account's dossier and `archive verify` re-hashes the snapshot archive.
-- Continuous collection goes through `watch`, which calls `cli.run` (model) or `cli.screen`
-  (deterministic, no creds) and never `detect_from_event` directly. `--screen-only` needs no model roles.
+- Run via `cli` (`pr` / `issue` / `classify`), never an ad-hoc script. `cli.run(event, …)` is the programmatic entry: it records `<out>/traces/{run_id}.jsonl` (dropping a stale one first, since TraceRecorder appends), writes `<out>/responses/{run_id}.json`, and emits the SIEM signal host-side after the run. It never raises: a crash still writes a `status=failed` response that can signal off the evidence floor. Extend `cli.py` rather than driving `detect_from_event` / `build_response` directly.
+- Offline: `python -m diff_sentry render <trace> <run_id>` re-renders a response; `python -m diff_sentry export "output/traces/*.jsonl" ds.json` exports the reward-free dataset; `actor <login>` prints an account's dossier and `archive verify` re-hashes the snapshot archive.
+- Continuous collection goes through `watch`, which calls `cli.run` (model) or `cli.screen` (deterministic, no creds) and never `detect_from_event` directly. `--screen-only` needs no model roles.
 
 ## Hard invariants: do not break
 
-- **The change is DATA: read, never execute.** It is a REPL variable under the default `pyodide`
-  interpreter; nothing in it is run, built, or fetched-and-run. An embedded instruction is a
-  `prompt-injection` signal, never a command. Never route the interpreter to `local`.
-- **Judgement-only SUBMIT; evidence is unioned on read (MF3).** `ChangeVerdict` has no hits field; the
-  planner may only CITE ids (`indicator_ids`). `assemble.assemble_verdict` unions every hit in the trace
-  (run_start `baseline_indicators` ∪ each `scan_indicators` tool_call) and derives
-  `signal = verdict ∈ emit_on OR max severity ≥ SIGNAL_SEVERITY_FLOOR`. A false-benign verdict cannot
-  suppress evidence; a cited id with no recorded hit lands in `cited_unknown_ids`. The floor reads GROUNDED
-  hits only (`floor_indicator_severity`; `max_indicator_severity` keeps meaning every hit): the baseline always
-  is, and a planner scan is when its region is copied from the change or decoded from a span the change holds
-  (`decoded_from`) or from a value an earlier call of the run decoded (each layer of a multi-layer encoding;
-  only decoded values are remembered: by digest for the whole run, and as text newest-first for a layer cut from
-  a slice), decided in the tool, which holds the change, and recorded on
-  the call. Nothing asks that span to look encoded: the change's author picks the encoding. A hit on text the planner wrote stays in the
-  evidence, marked `grounded: false`, and never lifts a grounded sighting of the same id; a trace without the
-  field reads as grounded. The same assembly runs
-  on every read path (live, re-render, `rl_export`). Never add a hits/severity/signal field to the SUBMIT
-  type or a second signal derivation.
-- **An ungroundable input yields `inconclusive`, never a confident verdict.** `inconclusive` is a
-  sanctioned 4th SUBMIT value (`schema.INCONCLUSIVE_VERDICT`) mapped to `status="inconclusive"` +
-  `RefusalInfo(reason="insufficient_evidence")`. The host-side backstop `normalize.has_groundable_content`
-  downgrades even a confident verdict when no groundable content exists. It is a reward-free negative
-  outcome, not an escape hatch for a hard-but-real change, and not in `emit_on`, so hard indicator
-  evidence still signals on its own. The converse is enforced in the loop: on a change with groundable
-  content and nothing GitHub withheld (a patch, or files past its list cap), `ClassifyChange` swaps in
-  `schema.decisive_verdict_model`, which refuses an `inconclusive` SUBMIT twice with a message naming the
-  content; dspy hands the refusal back as the step's output, so the planner decides in the same trajectory
-  (no retry), and the third stands. dspy's extract fallback at the iteration cap runs under
-  `schema.no_refusal` (`detect._FinalExtract`): no turn is left there to answer one.
-- **MF1: the metadata sandwich in `normalize_event`.** dspy previews ~1000 chars of head+tail, so an
-  identical derived-metadata header and footer deny the attacker those edges, and attacker-authored
-  metadata fields are capped (`_MAX_META_*`). The title/author ride in `raw_content` so the host-side
-  baseline catches a title-borne injection that skews the planner. Don't flatten the sandwich or lift
-  the caps.
-- **MF2: enrichment fetch is GitHub-allowlisted and off by default** (`enable_fetch=False`). An injected
-  instruction could steer a fetcher to `https://attacker.tld/?leak=…`: the kit's SSRF guard blocks
-  internal targets, and the `github_hosts` allowlist blocks external ones, re-checked on every redirect
-  hop. Never add a general-purpose fetch or fetch a URL the change names. `fetch_allow_cidrs` only
-  relaxes the resolved-IP layer (fake-IP proxy / split DNS); the syntactic guard still refuses
-  localhost/metadata.
-- **Indicators are deterministic, pure Python, and in-loop safe.** Rule-level invariants (severity
-  tuning, per-file pairing, `pwn-request`, the tool name) live in `.claude/rules/indicators.md`.
-- **A documented installer is enclosed when the shell lexer OR the line-wide floor says so.** `linewide.py` is
-  the line-wide rule that preceded the lexer (a line with an odd number of apostrophes or double quotes, or a `<<`,
-  and a word that could run what follows, opens the sixty lines after it), kept unchanged. The lexer
-  (`shelllex.py`) reads quoting exactly in the raw text, but cannot see a quote that a YAML scalar, a string literal,
-  a `printf`, a variable or Markdown rendering turns into the one a shell is handed. The union makes the line-wide rule's
-  `critical` a lower bound, except for the removed lines, hunk headers (not their section heading) and `\ No newline` notes of a patch in
-  its rendered view (which is of the new file) and a NUL (the text is read without it, as the shells read it). Never drop or narrow the floor, never relax
-  the lexer's answer on top of it, and test the lexer's relaxations through quote-free openers
-  (`ssh evil.example $(`). See `.claude/rules/indicators.md`.
-- **Models are ROLES configured by env**: `DS_ROOT_LM` planner, `DS_SUB_LM` analyst, `DS_CLASSIFIER_LM`
-  classifier (defaults to the analyst). Refer to them by role; no hardcoded model name.
-- **The budget is hard: `max_retries=1`, no whole-RLM retry inside a run.** One change = one trajectory, so the
-  trace stays valid training data. (`watch` may run a change again, but only when the previous attempt produced
-  no result at all, an infrastructure failure; `cli.run` resets that run id's trace first, so exactly one
-  trajectory per run id survives.) A failed run is infra before it is a schema bug; see
-  `.claude/rules/detect-setup.md` for how the failure names itself.
-- **A second model-judgement is a TOOL, never the sub-LM.** `deep_classify` (on rlm-harness's
-  `make_model_tool`) is the swappable second-stage seam the planner chooses to call, so the decision is a
-  `tool_call` in the trajectory. The analyst intercept (`intercept_sub_lm`) is tracing-only, zero
-  transforms. Swapping the backend touches only `classify_backend` / `_selfclassify_chat`. The planner
-  passes distilled findings, never the whole diff.
-- **Sandboxed code builds no sub-agents.** From dspy 3.4.1 the sandbox can construct dspy programs that run on
-  the host, call the analyst, can drive the task's tools, and record as one `sub_call` with no inner turns. The
-  kit's default allows it, so `setup` passes `sandbox_sub_agents=False` explicitly, and production never injects
-  an interpreter (which would bypass it); `test_program_offers_no_sub_agents` holds the behaviour.
-- **GitHub ingest, monitoring, and SIEM emission are host-side plumbing, never planner tools.** `ingest.py`
-  shells out to `gh` host-side (transport injectable); `emit.emit_signal` POSTs and never raises; `watch`,
-  `actors` and `snapshot` poll, remember, and archive outside the trajectory. Only choices the policy makes
-  are tools; delivering a finished result is plumbing. What the store learns reaches the signal only as
-  provenance facts through `scan_provenance`, never as a second derivation (see
-  `.claude/rules/monitoring.md`).
-- **This is a ROLLOUT source: trajectories, not reward.** `rl_export` passes `reward=None`; labels read
-  the assembled verdict and metrics are objective effort counters. `deep_classify` tool_calls train the
-  classifier; every other action is the planner's. A metric keeps ONE meaning across rlm-harness
-  versions (the corpus mixes them; `run_start.payload.rlm_harness` names the writer): a quantity a newer
-  kit makes observable gets a NEW key that is None where the trace cannot say (e.g. `analyst_failures`).
-  The ATLAS rubric and the eval member stay reward-free too; see `.claude/rules/rubric-and-eval.md`.
-- **Attack knowledge lives in `diff_sentry/skills/`, not the prompt.** The skill catalog is injected
-  (`load_skills_as_tools(discovery="inject")`) and `read_skill(name)` pulls a body on demand. Fix a wrong
-  convention by editing or adding a skill; `detect.INSTRUCTIONS` holds only identity, the MISSION frame,
-  the tool cost model, the triage loop, and output-gating rules. Skills ship via
-  `packages = ["diff_sentry"]`; a force-include duplicates them and breaks the build.
-- **Keep the dspy-free modules dspy-free.** `config`, `schema`, `normalize`, `indicators`, `shelllex`, `linewide`, `assemble`,
-  `response`, `emit`, `ingest`, `hosts`, `dbutil`, `actors`, `snapshot`, `watch`, `rl_export`, and `rubric`
-  must not import dspy at module top, and `import diff_sentry` must not import dspy (`ClassifyChange` / `setup` /
-  `run` / `screen` / `detect_from_event` are lazy PEP 562 re-exports).
-- **The trace self-describes the run.** `run_start` meta carries the normalized event, instructions,
-  source echo, `baseline_indicators`, `emit_on`, role→model names, budgets, and the rubric skeleton, so
-  an offline re-render/export re-derives the same `signal` (reading `emit_on` from meta, never current
-  config). Any new per-run config that affects read-time derivation must ride in meta.
+- **The change is DATA: read, never execute.** It is a REPL variable under the default `pyodide` interpreter; nothing in it is run, built, or fetched-and-run. An embedded instruction is a `prompt-injection` signal, never a command. Never route the interpreter to `local`.
+- **Judgement-only SUBMIT; evidence is unioned on read (MF3).** `ChangeVerdict` has no hits field; the planner may only CITE ids (`indicator_ids`). `assemble.assemble_verdict` unions every hit in the trace (run_start `baseline_indicators` ∪ each `scan_indicators` tool_call) and derives `signal = verdict ∈ emit_on OR max severity ≥ SIGNAL_SEVERITY_FLOOR`. A false-benign verdict cannot suppress evidence; a cited id with no recorded hit lands in `cited_unknown_ids`. The floor reads GROUNDED hits only (`floor_indicator_severity`; `max_indicator_severity` reads every hit). The baseline is always grounded. A planner scan is grounded when its region is copied from the change, decoded from a span the change holds (`decoded_from`), or decoded from a value an earlier call of the run decoded (each layer of a multi-layer encoding; the run remembers only decoded values, by digest for the whole run and as text newest-first for a layer cut from a slice). The tool decides this, because it holds the change, and records it on the call. Nothing requires that span to look encoded: the change's author picks the encoding. A hit on text the planner wrote stays in the evidence, marked `grounded: false`, and never lifts a grounded sighting of the same id; a trace without the field reads as grounded. The same assembly runs on every read path (live, re-render, `rl_export`). Never add a hits/severity/signal field to the SUBMIT type or a second signal derivation.
+- **An ungroundable input yields `inconclusive`, never a confident verdict.** `inconclusive` is a sanctioned 4th SUBMIT value (`schema.INCONCLUSIVE_VERDICT`) mapped to `status="inconclusive"` + `RefusalInfo(reason="insufficient_evidence")`. The host-side backstop `normalize.has_groundable_content` downgrades even a confident verdict when no groundable content exists. It is a reward-free negative outcome, not an escape hatch for a hard-but-real change, and not in `emit_on`, so hard indicator evidence still signals on its own. The converse is enforced in the loop: on a change with groundable content and nothing GitHub withheld (a patch, or files past its list cap), `ClassifyChange` swaps in `schema.decisive_verdict_model`, which refuses an `inconclusive` SUBMIT twice with a message naming the content; dspy hands the refusal back as the step's output, so the planner decides in the same trajectory (no retry), and the third stands. dspy's extract fallback at the iteration cap runs under `schema.no_refusal` (`detect._FinalExtract`): no turn is left there to answer one.
+- **MF1: the metadata sandwich in `normalize_event`.** dspy previews ~1000 chars of head+tail, so an identical derived-metadata header and footer deny the attacker those edges, and attacker-authored metadata fields are capped (`_MAX_META_*`). The title/author ride in `raw_content` so the host-side baseline catches a title-borne injection that skews the planner. Don't flatten the sandwich or lift the caps.
+- **MF2: enrichment fetch is GitHub-allowlisted and off by default** (`enable_fetch=False`). An injected instruction could steer a fetcher to `https://attacker.tld/?leak=…`: the kit's SSRF guard blocks internal targets, and the `github_hosts` allowlist blocks external ones, re-checked on every redirect hop. Never add a general-purpose fetch or fetch a URL the change names. `fetch_allow_cidrs` only relaxes the resolved-IP layer (fake-IP proxy / split DNS); the syntactic guard still refuses localhost/metadata.
+- **Indicators are deterministic, pure Python, and in-loop safe.** Rule-level invariants (severity tuning, per-file pairing, `pwn-request`, the tool name) live in `.claude/rules/indicators.md`.
+- **A documented installer is enclosed when the shell lexer OR the line-wide floor says so.** `linewide.py` is the line-wide rule: a line with an odd number of apostrophes or double quotes, or a `<<`, and a word that could run what follows, opens the sixty lines after it. The lexer (`shelllex.py`) reads quoting exactly in the raw text, but cannot see a quote that a YAML scalar, a string literal, a `printf`, a variable or Markdown rendering turns into the one a shell is handed. The union makes the line-wide rule's `critical` a lower bound, except for the removed lines, hunk headers (not their section heading) and `\ No newline` notes of a patch in its rendered view (which is of the new file) and a NUL (the text is read without it, as the shells read it). Never drop or narrow the floor, never relax the lexer's answer on top of it, and test the lexer's relaxations through quote-free openers (`ssh evil.example $(`). See `.claude/rules/indicators.md`.
+- **Models are ROLES configured by env**: `DS_ROOT_LM` planner, `DS_SUB_LM` analyst, `DS_CLASSIFIER_LM` classifier (defaults to the analyst). Refer to them by role; no hardcoded model name.
+- **The budget is hard: `max_retries=1`, no whole-RLM retry inside a run.** One change = one trajectory, so the trace stays valid training data. (`watch` may run a change again, but only when the previous attempt produced no result at all, an infrastructure failure; `cli.run` resets that run id's trace first, so exactly one trajectory per run id survives.) A failed run is infra before it is a schema bug; see `.claude/rules/detect-setup.md` for how the failure names itself.
+- **A second model-judgement is a TOOL, never the sub-LM.** `deep_classify` (on rlm-harness's `make_model_tool`) is the swappable second-stage seam the planner chooses to call, so the decision is a `tool_call` in the trajectory. The analyst intercept (`intercept_sub_lm`) is tracing-only, zero transforms. Swapping the backend touches only `classify_backend` / `_selfclassify_chat`. The planner passes distilled findings, never the whole diff.
+- **Sandboxed code builds no sub-agents.** In dspy 3.4.1 and later, sandboxed code can construct dspy programs that run on the host, call the analyst, can drive the task's tools, and record as one `sub_call` with no inner turns. The kit's default allows it, so `setup` passes `sandbox_sub_agents=False` explicitly, and production never injects an interpreter (which would bypass it); `test_program_offers_no_sub_agents` holds the behaviour.
+- **GitHub ingest, monitoring, and SIEM emission are host-side plumbing, never planner tools.** `ingest.py` shells out to `gh` host-side (transport injectable); `emit.emit_signal` POSTs and never raises; `watch`, `actors` and `snapshot` poll, remember, and archive outside the trajectory. Only choices the policy makes are tools; delivering a finished result is plumbing. What the store learns reaches the signal only as provenance facts through `scan_provenance`, never as a second derivation (see `.claude/rules/monitoring.md`).
+- **This is a ROLLOUT source: trajectories, not reward.** `rl_export` passes `reward=None`; labels read the assembled verdict and metrics are objective effort counters. `deep_classify` tool_calls train the classifier; every other action is the planner's. A metric keeps ONE meaning across rlm-harness versions (the corpus mixes them; `run_start.payload.rlm_harness` names the writer): a quantity a newer kit makes observable gets a NEW key that is None where the trace cannot say (e.g. `analyst_failures`). The ATLAS rubric and the eval member stay reward-free too; see `.claude/rules/rubric-and-eval.md`.
+- **Attack knowledge lives in `diff_sentry/skills/`, not the prompt.** The skill catalog is injected (`load_skills_as_tools(discovery="inject")`) and `read_skill(name)` pulls a body on demand. Fix a wrong convention by editing or adding a skill; `detect.INSTRUCTIONS` holds only identity, the MISSION frame, the tool cost model, the triage loop, and output-gating rules. Skills ship via `packages = ["diff_sentry"]`; a force-include duplicates them and breaks the build.
+- **Keep the dspy-free modules dspy-free.** `config`, `schema`, `normalize`, `indicators`, `shelllex`, `linewide`, `assemble`, `response`, `emit`, `ingest`, `hosts`, `dbutil`, `actors`, `snapshot`, `watch`, `rl_export`, and `rubric` must not import dspy at module top, and `import diff_sentry` must not import dspy (`ClassifyChange` / `setup` / `run` / `screen` / `detect_from_event` are lazy PEP 562 re-exports).
+- **The trace self-describes the run.** `run_start` meta carries the normalized event, instructions, source echo, `baseline_indicators`, `emit_on`, role→model names, budgets, and the rubric skeleton, so an offline re-render/export re-derives the same `signal` (reading `emit_on` from meta, never current config). Any new per-run config that affects read-time derivation must ride in meta.
 
 ## Topic guides
 
-Claude Code loads each rule automatically when you touch a matching file; other agents should read the
-file before working in that area.
+Claude Code loads each rule automatically when you touch a matching file; other agents should read the file before working in that area.
 
 | Area | File |
 |---|---|
@@ -152,17 +52,7 @@ file before working in that area.
 
 ## Layout
 
-- rlm-harness owns the generic cores: `make_model_tool` (chat → retry → validate → circuit-break) under
-  `deep_classify`, and the SSRF primitives (`is_safe_url`, `resolved_host_is_safe`, `parse_cidrs`) under
-  `fetch_tool`, which adds the GitHub allowlist, the httpx provider, and tracing.
-- When this consumer needs a workaround, fix the reusable gap in rlm-harness generically; never
-  special-case diff-sentry there. Consumer values (`DS_*` roles, the verdict schema, indicator rules, the
-  SIEM payload shape) stay here.
-- The deterministic tier ships as `cli.screen` and `watch` (host-side, in front of `cli.run`). Next
-  increments: an optional small single-shot model call inside that tier; a GH Archive backfill for account
-  history older than the Events API's 30 days; per-repository workflow awareness (which repos run
-  `issue_comment` or `pull_request_target` workflows) to weight the slash-command rule.
-- Two workspace members, never in the `diff_sentry` wheel: `studio/` (`diff-sentry-studio`, the detection
-  console, behind its `live` extra) and `eval/` (`diff-sentry-eval`, the reward-free scorecard). Both read
-  the trace / `DetectionResponse` contract through the public surface only. Keep the root wheel at
-  `packages = ["diff_sentry"]` so `uv build` never sweeps them in.
+- rlm-harness owns the generic cores: `make_model_tool` (chat → retry → validate → circuit-break) under `deep_classify`, and the SSRF primitives (`is_safe_url`, `resolved_host_is_safe`, `parse_cidrs`) under `fetch_tool`, which adds the GitHub allowlist, the httpx provider, and tracing.
+- When this consumer needs a workaround, fix the reusable gap in rlm-harness generically; never special-case diff-sentry there. Consumer values (`DS_*` roles, the verdict schema, indicator rules, the SIEM payload shape) stay here.
+- The deterministic tier ships as `cli.screen` and `watch` (host-side, in front of `cli.run`). Next increments: an optional small single-shot model call inside that tier; a GH Archive backfill for account history older than the Events API's 30 days; per-repository workflow awareness (which repos run `issue_comment` or `pull_request_target` workflows) to weight the slash-command rule.
+- Two workspace members, never in the `diff_sentry` wheel: `studio/` (`diff-sentry-studio`, the detection console, behind its `live` extra) and `eval/` (`diff-sentry-eval`, the reward-free scorecard). Both read the trace / `DetectionResponse` contract through the public surface only. Keep the root wheel at `packages = ["diff_sentry"]` so `uv build` never sweeps them in.

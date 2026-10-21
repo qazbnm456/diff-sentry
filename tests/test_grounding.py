@@ -1,8 +1,6 @@
 """Grounding of the planner's scans: a region taken from the change (or decoded from an encoded span of it) is
-evidence; text the planner wrote itself is kept but never reaches the signal floor.
-
-A live run raised a benign change to a signal because the planner scanned a test string it composed
-(`$(id) \\`whoami\\` ${IFS}`) and that hit joined the evidence union."""
+evidence; text the planner wrote itself is kept but never reaches the signal floor, or a test string it composes
+(`$(id) \\`whoami\\` ${IFS}`) would raise a benign change to a signal through the evidence union."""
 
 from __future__ import annotations
 
@@ -161,9 +159,9 @@ _REBUILT_EVENT = {**EVENT, "files": [{
 
 
 def test_a_file_rebuilt_without_its_diff_markers_is_grounded(recorded):
-    # A live run rebuilt each file's new side as the skills say, and every indented line (most code) kept its `+` in
-    # the comparison, so files past the partial-line limit read as the planner's own text. The 80 list items rebuilt
-    # keep their own `-`, which the change holds behind its `+`: past that limit too.
+    # A planner rebuilds each file's new side as the skills say. Every indented line (most code) must lose its `+` in
+    # the comparison, or files past the partial-line limit read as the planner's own text; the 80 list items rebuilt
+    # keep their own `-`, which the change holds behind its `+`, and are past that limit too.
     patch = _REBUILT_EVENT["files"][0]["patch"].split("\n")[1:]
     added = "\n".join(line[1:] for line in patch if line.startswith("+"))
     new_side = "\n".join(line[1:] for line in patch if line[:1] in "+ ")

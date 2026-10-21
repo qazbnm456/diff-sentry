@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a diff-sentry release — bump the five version sites together, write the CHANGELOG entry, and publish the GitHub Release that ships PyPI + the Marketplace Action. Use when asked to release, bump the version, or tag vX.Y.Z.
+description: "Cut a diff-sentry release: bump the five version sites together, write the CHANGELOG entry, and publish the GitHub Release that ships PyPI + the Marketplace Action. Use when asked to release, bump the version, or tag vX.Y.Z."
 ---
 
 # Cut a diff-sentry release
@@ -24,7 +24,7 @@ check it by hand.
    CHANGELOG candidate.
 2. Write the `CHANGELOG.md` entry in the file's existing style: one sentence per user-visible outcome,
    breaking changes and required actions explicit, no debugging story.
-3. Bump sites 1–4, run `uv lock`, then verify: `uv run pytest`, the eval suite
+3. Bump sites 1 to 4, run `uv lock`, then verify: `uv run pytest`, the eval suite
    (`uv run --package diff-sentry-eval --extra dev python -m pytest eval/tests`), `uvx ruff check .`.
 4. Commit (`chore: release X.Y.Z`) and push to `main` once the user approves. CI's `consumer install
    path (PyPI)` job then goes RED on this commit, by design: it installs `action.yml`'s default version

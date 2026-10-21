@@ -193,7 +193,7 @@ def test_hit_ids_are_stable():
     assert [h.id for h in scan_files(ev)] == [h.id for h in scan_files(ev)]
 
 
-# ── what the first review found: each spelling the rules must read ─────────────────────────────────
+# ── each spelling the rules must read ─────────────────────────────────────────────────────────────────
 
 def test_a_forged_lfs_line_does_not_exempt_a_script():
     patch = ("@@ -0,0 +1,3 @@\n+require('child_process');/*\n+version https://git-lfs.github.com/spec/v1\n+*/")
@@ -283,7 +283,7 @@ def test_the_same_setting_in_two_files_is_two_hits():
                                               ("vscode-autorun", "high", ".vscode/tasks.json")]
 
 
-# ── what the second review found ──────────────────────────────────────────────────────────────────
+# ── image pipelines, LFS updates, `args` and `command` in any order, hunks, the live shape ────────────
 
 @pytest.mark.parametrize(("name", "patch"), [
     ("package.json", '@@ -1 +1 @@\n+    "build": "node scripts/build.js && cp logo.png dist/",'),
@@ -343,8 +343,8 @@ def test_the_live_shape_still_reads():
 
 
 def test_no_module_level_name_is_bound_twice():
-    # A rule's constant named like an existing one silently rebinds it for every rule above (it happened twice:
-    # `_WRAPPERS` and `_SEGMENT_SPLIT_RE` of the shell rules were overwritten by this module's run-entry reader).
+    # A rule's constant named like an existing one silently rebinds it for every rule above: the shell rules and the
+    # run-entry reader both want names such as `_WRAPPERS` and `_SEGMENT_SPLIT_RE`.
     import ast
     import collections
     from pathlib import Path
@@ -361,7 +361,7 @@ def test_no_module_level_name_is_bound_twice():
     assert not [n for n, c in names.items() if c > 1]
 
 
-# ── what the third review found ───────────────────────────────────────────────────────────────────
+# ── a runtime behind a runtime, and case ──────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("task", [
     '{"command": "cmd", "args": ["/c", "node", "public/fonts/fa.ttf"]}',
@@ -378,7 +378,7 @@ def test_a_capitalised_word_is_not_a_runtime():
     assert not _rules(scan_files(_event(("package.json", "modified", patch))), "asset-run-as-code")
 
 
-# ── what the live watchlist showed: refactoring an existing script is not the payload shape ────────
+# ── refactoring an existing script is not the payload shape ───────────────────────────────────────────
 
 @pytest.mark.parametrize(("old", "new"), [
     ('"build-fast": "node build/build-fast.js"', '"build-fast": "node build/next/build-fast.ts"'),            # repointed

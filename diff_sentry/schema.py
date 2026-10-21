@@ -179,8 +179,9 @@ def no_refusal() -> Iterator[None]:
 
 def decisive_verdict_model(facts: str, refusals: int = _INCONCLUSIVE_REFUSALS) -> type[ChangeVerdict]:
     """`ChangeVerdict` for a change that has content to read: an `inconclusive` verdict is refused `refusals` times
-    with a message naming that content (`facts`), except under `no_refusal`. A live run SUBMITted `inconclusive` on an 85-file PR after a
-    long print of its own came back cut, reading the cut as a truncated change. Same name, fields and schema."""
+    with a message naming that content (`facts`), except under `no_refusal`. Same name, fields and schema.
+    A planner whose own long print comes back cut can read the cut as a truncated change and SUBMIT `inconclusive`
+    on a large PR."""
     left = [refusals]
 
     class ChangeVerdict(_SubmittedVerdict):  # the name dspy's signature resolves
@@ -308,7 +309,7 @@ class DetectionResponse(BaseModel):
     recommended_action: str | None = None
     indicators: list[IndicatorHit] = Field(default_factory=list)
     max_indicator_severity: str = "info"
-    # None in a response stored before grounding existed, where every hit counted: read it as the max then.
+    # None in a stored response that predates the field, where every hit counted: read it as the max there.
     floor_indicator_severity: str | None = None
     source: dict | None = Field(default=None, description="Echoed change metadata (repo/kind/number).")
     refusal: RefusalInfo | None = None

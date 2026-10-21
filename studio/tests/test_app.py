@@ -279,3 +279,20 @@ def test_frontend_shell_and_assets_are_served_and_revalidate():
         resp = client.get(f"/static/{asset}")
         assert resp.status_code == 200 and resp.headers.get("cache-control") == "no-cache"
     assert client.get("/v1/runs/does-not-exist").status_code == 404   # static mount did not shadow the API
+
+
+def test_the_consoles_siem_payload_names_every_field_the_emitter_sends():
+    # the console shows "the payload the host-side emitter would send": its mirror must not drop a field
+    import pathlib
+    import re
+
+    from diff_sentry.emit import signal_payload
+    from diff_sentry.response import DetectionResponse
+    from diff_sentry.schema import IndicatorHit
+
+    hit = IndicatorHit(id="ind-x-1", rule="x", severity="high", title="t", evidence="e")
+    sent = signal_payload(DetectionResponse(id="r", status="classified", signal=True, indicators=[hit]))
+    js = pathlib.Path(appmod.__file__).parent.parent.joinpath("static", "app.js").read_text()
+    mirror = js[js.index("function siemPayload"):js.index("// ── skeleton")]
+    for key in [*sent, *sent["indicators"][0]]:
+        assert re.search(rf"\b{key}\s*:", mirror), key

@@ -334,7 +334,7 @@ def _scan_body(body):
 
 
 def test_a_word_a_dollar_cuts_into_tokens_never_makes_a_scan_raise():
-    """The candidates of a hypothesis are asked of the lexer in ascending order; `a$/sh` is cut by the `$` and is also a whole word (found: a KeyError out of `scan_change`)."""
+    """The candidates of a hypothesis are asked of the lexer in ascending order; `a$/sh` is cut by the `$` and is also a whole word, and neither reading raises out of `scan_change`."""
     hits = _scan_body("e a$/sh` u$/podman\n" + _INSTALLER)
     assert not [h for h in hits if h.rule == "scanner-error"] and [h.rule for h in hits if h.rule == "curl-pipe-shell"]
 
