@@ -336,7 +336,7 @@ def _cmd_scan(args) -> int:
             label = path
         if not args.include_deletions:
             text = drop_deleted_lines(text)
-        hits.extend(scan_diff(text, location=label))
+        hits.extend(scan_diff(text, location=label, files=True))
 
     worst = max((severity_rank(h.severity) for h in hits), default=-1)
     failed = worst >= threshold

@@ -49,8 +49,10 @@ None of this is required to use the Action, and none of it sends your code anywh
 
 ## Grounded in real incidents
 
-Two incidents are reconstructed offline and pinned by tests, so a rule change that breaks coverage fails the build.
+Three incidents are reconstructed offline and pinned by tests, so a rule change that breaks coverage fails the build.
 
 **`hackerbot-claw`** (Datadog's [BewAIre writeup](https://www.datadoghq.com/blog/engineering/stopping-hackerbot-claw-with-bewaire/)). The original artifacts are gone and the attacker account was deleted, so `tests/corpus/hackerbot_claw_incident.json` reconstructs all three events: a `${IFS}`/base64 payload hidden in a *filename* under `documentation/rules/` that de-obfuscates to a published pipe-to-shell IOC, a prompt injection telling a triage LLM to bulk-label and exfiltrate, and a prompt injection appending a fake owner to CODEOWNERS. Each is asserted under a neutral benign verdict, so the alert is evidence-driven: a false-benign self-report could not have suppressed any of them.
 
 **AsyncAPI "Miasma"**. The attack was Node end to end, and `tests/test_indicators.py` reconstructs its stages: the `pull_request_target` workflow that checks out the PR head, the payload pushed off the diff viewport by a whitespace run, the IPFS fetch-to-disk dropper, and the `_0x` obfuscation injected into a source file. Each rule ships with its negative case, so the tuning is pinned as tightly as the detection.
+
+**litellm 1.107.0** ([BerriAI/litellm#47826](https://github.com/BerriAI/litellm/issues/47826)). The wheels carried a `.pth` file that imports a zlib+base64-packed credential stealer at every Python start, and a `sitecustomize.py` that forks a daemon to fetch code and run it. The commits came from a lookalike fork straight into the release build, so no pull request held them. `tests/test_python_loader.py` holds that the same files, sent as a pull request, fail the Action's scan.

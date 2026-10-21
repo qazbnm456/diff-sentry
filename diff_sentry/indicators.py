@@ -30,6 +30,7 @@ import posixpath
 import re
 import unicodedata
 import warnings
+import zlib
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Iterator
 from functools import partial
@@ -401,6 +402,31 @@ _JS_NET_FETCH_RE = re.compile(
     re.IGNORECASE)
 _FILE_WRITE_RE = re.compile(r"writeFileSync|createWriteStream|\bfs\.write", re.IGNORECASE)
 
+# Python's side of a loader (the litellm 1.107.0 wheels): code run straight out of a decoding call, code fetched and run,
+# and a daemon that leaves its session. `exec(` / `eval(` are the builtins: a method (`.exec(`) or a longer name
+# (`literal_eval(`) is not one. The decoding call may sit behind a module alias (`import zlib as _a; exec(_a.decompress(`).
+# The decoding calls: the base64 family, hex, compression, and `marshal.loads` (compiled code). A bare name imported with
+# `from base64 import b64decode` and a module loaded with `__import__('zlib')` count as well as `zlib.` and an alias.
+_DECODE_CALL = (r"(?:(?:[\w.]{0,80}\.|__import__\s{0,20}\(\s{0,20}['\"]\w{1,20}['\"]\s{0,20}\)\s{0,20}\.)?(?:urlsafe_|standard_)?"
+                r"(?:decompress|b64decode|b32decode|b16decode|b85decode|a85decode|decodebytes|unhexlify|fromhex)"
+                r"|marshal\s{0,20}\.\s{0,20}loads)\s{0,20}\(")
+# The builtins `exec` / `eval`, also reached through `builtins.` or `getattr(__builtins__, 'exec')`; not a method (`.exec(`) or
+# a longer name (`literal_eval(`).
+_PY_EXEC = (r"(?:(?<![\w.$])(?:exec|eval)|(?<![\w.])(?:__builtins__|builtins)\s{0,20}\.\s{0,20}(?:exec|eval)"
+            r"|\bgetattr\s{0,20}\(\s{0,20}(?:__builtins__|builtins)\s{0,20},\s{0,20}['\"](?:exec|eval)['\"]\s{0,20}\))\s{0,20}\(")
+_PACKED_EXEC_RE = re.compile(
+    _PY_EXEC + r"\s{0,20}(?:compile\s{0,20}\(\s{0,20})?" + _DECODE_CALL
+    # decoded into a name on the same line, then that name run: `c = zlib.decompress(base64.b64decode(s)); exec(c)`
+    + r"|(?<![\w.])(?P<name>\w{1,40})\s{0,20}=\s{0,20}" + _DECODE_CALL + r"[^\n]{0,400}?;[ \t]{0,20}" + _PY_EXEC
+    + r"\s{0,20}(?:compile\s{0,20}\(\s{0,20})?(?P=name)\b"
+    + r"|(?<![\w.$])(?:eval|new[ \t]+Function)\s{0,20}\(\s{0,20}(?:window\.)?(?:atob|Buffer\s{0,20}\.\s{0,20}from)\s{0,20}\(")
+_PY_EXEC_RE = re.compile(_PY_EXEC)
+_PY_NET_FETCH_RE = re.compile(
+    r"\brequests\s{0,20}\.\s{0,20}(?:get|post|request|Session)\b|\burlopen\s{0,20}\(|\burlretrieve\s{0,20}\("
+    r"|\bhttpx\s{0,20}\.\s{0,20}(?:get|post|request|Client|AsyncClient)\b|\baiohttp\b|\burllib3\b")
+_PY_FORK_RE = re.compile(r"\bos\s{0,20}\.\s{0,20}fork\s{0,20}\(")
+_PY_SETSID_RE = re.compile(r"\bos\s{0,20}\.\s{0,20}setsid\s{0,20}\(")
+
 # Tier 3: content-addressed / permaweb gateways. Miasma staged its second-stage binary on IPFS. Same
 # FP-safe reasoning as the dev tunnels: these have real mainstream use (web3 apps, NFT metadata), so a
 # reference alone is a sub-floor `medium`. When the change actually FETCHES from one and writes the
@@ -555,26 +581,54 @@ def _mostly_text(decoded: str) -> bool:
     return odd <= max(1, len(decoded) // 10)
 
 
+# What the compressed blobs of one text may inflate to, in all, and one blob at most per byte of it: a small blob can
+# decompress huge, and every inflated byte is read by the rules again. A packer's source compresses about threefold.
+_INFLATE_BUDGET = 256 << 10
+_INFLATE_RATIO = 16
+
+
+def _compressed(raw: bytes) -> bool:
+    """A gzip member, or a zlib stream of any window size (its two header bytes are a multiple of 31, deflate method)."""
+    return raw[:2] == b"\x1f\x8b" or (len(raw) >= 2 and raw[0] & 0x0F == 8 and raw[0] >> 4 <= 7
+                                       and ((raw[0] << 8) | raw[1]) % 31 == 0)
+
+
+def _inflated(raw: bytes, limit: int) -> bytes:
+    """`raw` decompressed when it is a zlib or gzip stream (the packer's `zlib.compress` before `b64encode`), at most
+    `limit` bytes of it; any other bytes as they are."""
+    if limit <= 0 or not _compressed(raw):
+        return raw
+    try:
+        return zlib.decompressobj(wbits=47).decompress(raw, limit)
+    except zlib.error:
+        return raw
+
+
 def _scan_obfuscation(text: str) -> list[IndicatorHit]:
     """Decode base64 blobs and RE-SCAN the decoded bytes for shell/exfil payloads (de-obfuscation)."""
     hits: list[IndicatorHit] = []
     seen: set[str] = set()
+    budget = _INFLATE_BUDGET
     for m in _B64_RE.finditer(text):
         blob = m.group(0)
         if blob in seen:
             continue
         seen.add(blob)
         try:
-            decoded = base64.b64decode(blob + "=" * (-len(blob) % 4), validate=True).decode("utf-8", "replace")
+            raw = base64.b64decode(blob + "=" * (-len(blob) % 4), validate=True)
         except (binascii.Error, ValueError):
             continue
+        inflated = _inflated(raw, min(budget, _INFLATE_RATIO * len(raw)))
+        if inflated is not raw:
+            budget -= len(inflated)
+        decoded = inflated.decode("utf-8", "replace")
         if not _mostly_text(decoded):
             continue
         # Only flag base64 that DECODES to something suspicious; a plain data blob isn't an indicator.
         # (Rescan shell/exfil/URL/callback-domain payloads; CI-skip and permission markers aren't usefully
         # base64-wrapped, so they're not in the inner set.)
         inner = (_scan_shell(decoded, False) + _scan_urls(decoded) + _scan_exfil(decoded)
-                 + _scan_exfil_domains(decoded) + _scan_js_exec(decoded))
+                 + _scan_exfil_domains(decoded) + _scan_js_exec(decoded) + _scan_py_exec(decoded))
         if inner:
             worst = max((h.severity for h in inner), key=lambda s: _sev_rank(s))
             hits.append(_hit("obfuscated-payload", worst,
@@ -757,6 +811,27 @@ def _scan_js_exec(text: str, patch: bool = False) -> list[IndicatorHit]:
     return hits
 
 
+def _scan_py_exec(text: str) -> list[IndicatorHit]:
+    """Running code that arrives packed or over the network, and Python's daemon shape. Each has no ordinary reading:
+    a program that ships its own source runs it, it does not decode it first; a client that fetches data parses it."""
+    hits: list[IndicatorHit] = []
+    packed = _PACKED_EXEC_RE.search(text)
+    if packed:
+        hits.append(_hit("packed-code-exec", "high", "runs code straight out of a decoding call (packed payload)",
+                         _snip(text, packed.start(), packed.end())))
+    fetch = _PY_NET_FETCH_RE.search(text)
+    run = _PY_EXEC_RE.search(text) if fetch else None
+    if run:
+        hits.append(_hit("remote-code-exec", "high", "fetches over the network AND runs code with `exec` / `eval` (loader shape)",
+                         _snip(text, fetch.start(), fetch.end())))
+    fork = _PY_FORK_RE.search(text)
+    if fork and _PY_SETSID_RE.search(text):
+        hits.append(_hit("detached-process-spawn", "high",
+                         "forks a process that leaves its session (`os.fork` + `os.setsid`, a daemon outliving its parent)",
+                         _snip(text, fork.start(), fork.end())))
+    return hits
+
+
 def _scan_hex_identifiers(text: str) -> list[IndicatorHit]:
     """javascript-obfuscator's `_0x…` mangling: obfuscation that base64 detection cannot see."""
     found = _HEX_IDENT_RE.findall(text)
@@ -842,7 +917,32 @@ def _sev_rank(sev: str) -> int:
 # The trade is explicit: a payload deliberately split across two files does not pair. That is the
 # right way round: a detector that invents a critical out of two unrelated files trains people to
 # disable it, and the single-signal rules (most of them) are unaffected.
-_DIFF_FILE_RE = re.compile(r"^diff --git a/(?P<a>.+?) b/(?P<b>.+?)$", re.MULTILINE)
+# git quotes a path with a byte outside printable ASCII (`core.quotePath`, on by default), a quote, a backslash or a control
+# character: `diff --git "a/p\\303\\251/x.pth" "b/p\\303\\251/x.pth"`, each side on its own.
+_DIFF_FILE_RE = re.compile(r'^diff --git (?:"a/(?P<qa>(?:[^"\\\n]|\\.)+)"|a/(?P<a>.+?)) (?:"b/(?P<qb>(?:[^"\\\n]|\\.)+)"|b/(?P<b>.+?))$',
+                           re.MULTILINE)
+_GIT_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13}
+_GIT_OCTAL_RE = re.compile(r"\\([0-3][0-7]{2})|\\(.)", re.DOTALL)
+
+
+def _git_unquote(path: str) -> str:
+    """A path as git's quoting spells it, with its C escapes (`\\303\\251`, `\\t`, `\\"`) turned back into its bytes."""
+    out = bytearray()
+    last = 0
+    for m in _GIT_OCTAL_RE.finditer(path):
+        out += path[last:m.start()].encode("utf-8", "surrogatepass")
+        out.append(int(m.group(1), 8) if m.group(1) else _GIT_ESCAPES.get(m.group(2), ord(m.group(2)) if m.group(2) < "\x80" else 63))
+        last = m.end()
+    out += path[last:].encode("utf-8", "surrogatepass")
+    return out.decode("utf-8", "replace")
+
+
+def _diff_path(m: re.Match) -> str:
+    if m.group("qb") is not None:
+        return _git_unquote(m.group("qb"))
+    if m.group("b") is not None:
+        return m.group("b")
+    return _git_unquote(m.group("qa")) if m.group("qa") is not None else m.group("a")
 
 
 def split_diff_by_file(text: str) -> list[tuple[str, str]]:
@@ -860,7 +960,7 @@ def split_diff_by_file(text: str) -> list[tuple[str, str]]:
         out.append(("", head))
     for i, m in enumerate(marks):
         end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
-        out.append((m.group("b") or m.group("a"), text[m.start():end]))
+        out.append((_diff_path(m), text[m.start():end]))
     return out
 
 
@@ -3200,12 +3300,29 @@ def scan_content(event: dict) -> list[IndicatorHit]:
     return list(deduped.values())
 
 
-def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
+_DIFF_ADDED_RE = re.compile(r"^(?:new file mode |--- /dev/null\r?$)", re.MULTILINE)
+_DIFF_RENAMED_RE = re.compile(r"^rename to ", re.MULTILINE)
+_DIFF_HUNK_RE = re.compile(r"^@@", re.MULTILINE)
+
+
+def _diff_file(path: str, segment: str) -> dict:
+    """One file of a `diff --git` diff in the shape of an event's file entry: added when its header says so, its patch the
+    hunks (a binary file's `Binary files ... differ` has none), its additions counted."""
+    hunk = _DIFF_HUNK_RE.search(segment)
+    header, patch = (segment[:hunk.start()], segment[hunk.start():]) if hunk else (segment, "")
+    status = "added" if _DIFF_ADDED_RE.search(header) else "renamed" if _DIFF_RENAMED_RE.search(header) else "modified"
+    return {"filename": path, "status": status,
+            "additions": sum(1 for line in patch.split("\n") if line.startswith("+")), "deletions": 0, "patch": patch}
+
+
+def scan_diff(text: str, *, location: str = "", files: bool = False) -> list[IndicatorHit]:
     """`scan_indicators` with per-file scoping: a paired rule can only fire when ONE file carries both
     halves. Non-diff input (a region the planner pulled out, a plain file) falls through to a single
     whole-text scan, so this is safe as the entry point for either shape. Both are read as a patch (a leading `+` is a diff marker):
     the host-side baseline reads every channel with its own flag, and the union keeps its stricter hit. Only the files of a
-    `diff --git` diff are a file's patch to `inline-code-exec` (`patch`); the fallthrough is read as it is."""
+    `diff --git` diff are a file's patch to `inline-code-exec` (`patch`); the fallthrough is read as it is. `files` also runs the
+    file-structure rules on each file of the diff, as `scan_files` does on an event's file list: the Action's `scan` reads a
+    diff of the change, while a diff the planner finds quoted in a comment is no file of the change."""
     raw = text or ""
     text = _lf(raw)
     segments = split_diff_by_file(text)
@@ -3213,9 +3330,15 @@ def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
         return scan_indicators(raw, location=location)
     lone_cr = _LONE_CR_RE.search(raw) or "\0" in raw     # the files were cut out of the text `_lf` made
     deduped: dict[str, IndicatorHit] = {}
+    # cut with only CRLF made LF: a lone CR, which `_lf` makes a line break, is a character of a `.pth` line to the patch
+    entries = [_diff_file(path, segment) for path, segment in split_diff_by_file(raw.replace("\r\n", "\n")) if path] if files else []
+    added = frozenset(posixpath.normpath(f["filename"]) for f in entries if f["status"] == "added")
     for path, segment in segments:
         found = scan_indicators(segment, location=path or location, patch=bool(path) and not lone_cr)
         for h in _or_closed(partial(_scope_to_file, found, path, segment), found, "_scope_to_file") if path else found:
+            keep_worse(deduped, h)
+    for f in entries:     # the file-structure rules an event's file list gets (`scan_files`), from the diff's own headers
+        for h in _file_hits(f, added):
             keep_worse(deduped, h)
     if _LONE_CR_RE.search(raw):
         # `scan_indicators` reads a lone CR as a character of a word for a text it is handed as it is; the files of a diff were cut out of the text with the CR made a newline
@@ -3233,7 +3356,7 @@ def scan_diff(text: str, *, location: str = "") -> list[IndicatorHit]:
 _DETECTORS = (
     _scan_shell, _scan_obfuscation, _scan_exfil, _scan_urls, _scan_exfil_domains, _scan_ci_paths, _scan_ci_bypass,
     _scan_workflow_perms, _scan_injection, _scan_entropy, _scan_workflow_config, _scan_diff_evasion, _scan_js_exec,
-    _scan_hex_identifiers, _scan_string_array, _scan_run_asset,
+    _scan_hex_identifiers, _scan_string_array, _scan_run_asset, _scan_py_exec,
 )
 
 
@@ -3696,6 +3819,15 @@ def _file_structure_hits(f: dict, added: frozenset[str]) -> list[IndicatorHit]:
             found, autorun = _autorun_hits(path, tokens)
             hits += found
         hits += _run_entry_hits(f, added, tokens, autorun)
+    base = posixpath.basename(low)
+    if base.endswith(".pth"):
+        line = next((part for part in _pth_written(patch) if _PTH_IMPORT_RE.match(part)), None)
+        if line is not None:
+            hits.append(_hit("python-startup-hook", "high", "a `.pth` file that runs code at every Python start",
+                             line[:_MAX_EVIDENCE], location=path, form=path))
+    elif _CUSTOMIZE_RE.search(low) and (_added_lines(patch).strip() or f["status"] == "renamed"):
+        hits.append(_hit("python-startup-hook", "high", f"a `{_CUSTOMIZE_RE.search(low).group(1)}` module (Python runs it at every start)",
+                         _snip(_added_lines(patch), 0, 0, pad=160) or f"renamed to {path[:160]}", location=path, form=path))
     if _DEV_CONFIG_RE.search(path):
         new = _added_lines(patch)
         if _scan_string_array(new):
@@ -3703,6 +3835,21 @@ def _file_structure_hits(f: dict, added: frozenset[str]) -> list[IndicatorHit]:
                              "machine-obfuscated JavaScript added to a config file that runs on lint, build or test",
                              _snip(new, 0, 0, pad=160), location=path, form=path))
     return hits
+
+
+# The lines `site` executes in a `.pth` file of site-packages: those that start with `import` and a blank, at every start
+# of the interpreter (the rest of the file is a list of paths). It reads the file as `utf-8-sig` and splits it with
+# `str.splitlines` (3.13; earlier, text mode, which also ends a line at a lone CR), so a line of the patch can hold several.
+_PTH_IMPORT_RE = re.compile(r"\ufeff?import[ \t]")
+# `sitecustomize` and `usercustomize`, as a module or a package, which `site` imports at every start.
+_CUSTOMIZE_RE = re.compile(r"(?:^|/)((?:site|user)customize)(?:\.py|/__init__\.py)$")
+
+
+def _pth_written(patch: str) -> list[str]:
+    """The lines of a `.pth` file that the patch writes, split as `site` splits them: a lone CR, a form feed and the other
+    `str.splitlines` breaks end a line there, though no line of the patch ends at them."""
+    return [part for line in patch.split("\n") if line.startswith("+") and not line.startswith("+++")
+            for part in line[1:].splitlines()]
 
 
 def _added_lines(patch: str) -> str:
@@ -3718,14 +3865,18 @@ def scan_files(event: dict) -> list[IndicatorHit]:
     added = frozenset(posixpath.normpath(f["filename"]) for f in files if f["status"] == "added")
     deduped: dict[str, IndicatorHit] = {}
     for f in files:
-        try:
-            found = _file_structure_hits(f, added)
-        except Exception as exc:  # noqa: BLE001 (fail CLOSED, as `scan_indicators` does)
-            found = [_hit("scanner-error", "high", "a file-structure rule raised on this file, so it was not fully scanned",
-                          f"_file_structure_hits: {type(exc).__name__}", location=f["filename"])]
-        for h in found:
+        for h in _file_hits(f, added):
             keep_worse(deduped, h)
     return list(deduped.values())
+
+
+def _file_hits(f: dict, added: frozenset[str]) -> list[IndicatorHit]:
+    """`_file_structure_hits` of one file, or a `scanner-error` for it when a rule raises."""
+    try:
+        return _file_structure_hits(f, added)
+    except Exception as exc:  # noqa: BLE001 (fail CLOSED, as `scan_indicators` does)
+        return [_hit("scanner-error", "high", "a file-structure rule raised on this file, so it was not fully scanned",
+                     f"_file_structure_hits: {type(exc).__name__}", location=f["filename"])]
 
 
 def scan_change(event: dict) -> list[IndicatorHit]:
