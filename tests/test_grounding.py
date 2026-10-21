@@ -23,16 +23,6 @@ EVENT = {
 }
 
 
-@pytest.fixture
-def recorded(monkeypatch):
-    """The tool's recorded calls, captured instead of written to a trace."""
-    from rlm_harness import trace
-
-    calls: list[dict] = []
-    monkeypatch.setattr(trace, "record_tool_call", lambda tool, **kw: calls.append({"tool": tool, **kw}))
-    return calls
-
-
 def _tool(event=EVENT):
     from diff_sentry.indicators import make_indicator_tool
 

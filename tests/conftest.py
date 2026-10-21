@@ -96,6 +96,31 @@ def configure_dummy():
     return dummy
 
 
+class _Capture:
+    """A stand-in recorder that keeps each recorded payload in memory instead of writing a trace."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def record(self, type_: str, payload: dict) -> dict:
+        self.calls.append(payload)
+        return payload
+
+
+@pytest.fixture
+def recorded():
+    """The tool_call payloads recorded during the test, captured by an active in-memory recorder.
+
+    The capture goes through the recorder context rather than by patching `rlm_harness.trace.record_tool_call`: a
+    module that imports the function by name (`deep_classify`, `fetch_tool`) binds whatever the attribute holds at its
+    first import, so a patch active then would stay bound for the rest of the session."""
+    from rlm_harness.trace import recorder_scope
+
+    capture = _Capture()
+    with recorder_scope(capture):
+        yield capture.calls
+
+
 @pytest.fixture
 def make_trace(tmp_path):
     """builder(event=MALICIOUS_EVENT, verdict=MALICIOUS_VERDICT, run_id="pr-7", with_result=True) ->

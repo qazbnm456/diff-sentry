@@ -25,15 +25,6 @@ def _sev(hits, rule: str) -> set[str]:
     return {h.severity for h in hits if h.rule == rule}
 
 
-@pytest.fixture
-def recorded(monkeypatch):
-    from rlm_harness import trace
-
-    calls: list[dict] = []
-    monkeypatch.setattr(trace, "record_tool_call", lambda tool, **kw: calls.append(kw))
-    return calls
-
-
 def _tool_sev(event: dict, region: str, recorded: list, rule: str, **kw) -> set[str]:
     recorded.clear()
     make_indicator_tool(event)(region, **kw)
