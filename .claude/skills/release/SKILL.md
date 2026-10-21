@@ -33,5 +33,7 @@ check it by hand.
    …`, notes = the CHANGELOG section). The user publishes it in the web UI with "Publish this Action to
    the GitHub Marketplace" ticked (the CLI cannot tick it). Publishing is what builds, verifies, and
    uploads to PyPI via Trusted Publishing, and the upload is irreversible.
-6. After `release.yml` succeeds, re-run the failed consumer-install job
+6. After `release.yml` succeeds and PyPI's simple index lists the version (`curl -s -H "Accept:
+   application/vnd.pypi.simple.v1+json" https://pypi.org/simple/diff-sentry/`; the index lags the upload by
+   minutes, and a rerun before it lists the version fails to resolve), re-run the failed consumer-install job
    (`gh run rerun <ci run id> --failed`); green proves the published package installs and scans.
