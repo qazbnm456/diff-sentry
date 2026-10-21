@@ -2,6 +2,14 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.10.0
+
+Upgrade from 0.9.0: the GitHub Action now flags a GitHub owner that imitates your repository's own, so a workflow change it passed before can fail it now. Nothing needs configuring: the Action reads the repository from `GITHUB_REPOSITORY`. `rlm-harness==1.22.0` is unchanged.
+
+### Added
+- **`lookalike-owner` flags a GitHub owner that imitates the repository's own**, such as the `Berri-AI/litellm` that litellm's release workflow was pointed at to build 1.107.0 (the project is `BerriAI`). An owner that equals yours once hyphens are dropped is `critical` in a workflow and `high` in a URL, an action, a clone or a `--repo` elsewhere; one a single character away is `medium`, since real sibling organisations sit that close. A workflow that checks out another owner's repository is `foreign-checkout`, `medium`.
+- **`diff-sentry scan --repo owner/name`** names the repository a diff is of; it defaults to `GITHUB_REPOSITORY`.
+
 ## 0.9.0
 
 Upgrade from 0.8.0: a new `release-watch` command, and one rule that fires less on Rust code. The GitHub Action's scan is otherwise unchanged, nothing needs configuring, and `rlm-harness==1.22.0` is unchanged. `packaging` is a new dependency.
