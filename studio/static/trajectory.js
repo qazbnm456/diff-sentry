@@ -243,7 +243,7 @@
     if (t.label === "classify") {
       return head + (t.verdict ? kv("verdict", esc(t.verdict)) : "") +
         (t.confidence != null ? kv("confidence", esc(t.confidence)) : "") +
-        (t.circuit_broken ? `<div class="det-muted">circuit broke — too many unusable replies</div>` : "") +
+        (t.circuit_broken ? `<div class="det-muted">circuit broke — too many unusable replies or failing calls</div>` : "") +
         (t.error ? `<div class="det-bad">endpoint error · ${esc(t.error)}</div>` : "") +
         ((t.errors || []).length ? `<ul class="errors">${t.errors.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : "") +
         (t.findings ? srcBlock("Findings (input)", t.findings, true) : "") +

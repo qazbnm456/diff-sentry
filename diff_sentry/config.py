@@ -121,7 +121,7 @@ class DetectConfig:
     classifier_transient_retries: int = 1
     # Extra request parameters of the classifier's call, over its `temperature=0.1` (`_classifier_lm_kwargs`).
     classifier_lm_kwargs: dict | None = None
-    # After this many CONSECUTIVE invalid classifications the tool short-circuits (rlm-harness make_model_tool).
+    # After this many CONSECUTIVE unusable replies or repeating error statuses the tool short-circuits (make_model_tool).
     classifier_circuit_break: int = 4
 
     # ── RLM runtime knobs ────────────────────────────────────────────────────────────────────────

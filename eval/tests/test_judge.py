@@ -6,6 +6,7 @@ from diff_sentry_eval.judge import (
     EVAL_TEMPLATE,
     PROMPT_VERSION,
     EvalJudgeConfig,
+    is_fast_fail_http,
     make_eval_judge,
     parse_eval_json,
     stub_judge,
@@ -56,3 +57,28 @@ def test_config_reads_dseval_env(monkeypatch):
     assert cfg.model == "some/judge-model" and cfg.base_url == "https://judge.example"
     assert PROMPT_VERSION == "atlas-diffsentry-eval-v1"
     assert "{verdict}" in EVAL_TEMPLATE and "DO NOT run" in EVAL_TEMPLATE  # never-execute in the prompt
+
+
+def test_a_judge_error_status_that_repeats_is_sent_once():
+    import httpx
+    import openai
+
+    def status(code):
+        request = httpx.Request("POST", "http://judge.invalid/v1/chat/completions")
+        return openai.APIStatusError(f"status {code}", response=httpx.Response(code, request=request), body=None)
+
+    assert is_fast_fail_http(status(401)) and is_fast_fail_http(status(404))
+    assert not is_fast_fail_http(status(400)) and not is_fast_fail_http(status(422))   # one input's, not the batch's
+    assert not is_fast_fail_http(status(429)) and not is_fast_fail_http(status(500))
+    assert not is_fast_fail_http(TimeoutError("slow"))
+    calls = []
+
+    def chat(prompt):
+        calls.append(prompt)
+        raise status(401)
+
+    judge = make_eval_judge(EvalJudgeConfig(model="m", max_consecutive_invalid=1), chat_fn=chat)
+    inputs = {"change": "c", "reference": "r", "verdict": "malicious", "indicators": "i",
+              "execution_summary": "e", "total_rounds": 3}
+    assert not judge(inputs).ok and len(calls) == 1
+    assert "circuit breaker" in judge(inputs).reason and len(calls) == 1

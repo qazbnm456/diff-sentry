@@ -151,3 +151,40 @@ def test_a_reply_cut_after_its_answer_still_counts(monkeypatch):
 def test_an_ordinary_unusable_reply_does_not_blame_the_budget(monkeypatch):
     out = make_deep_classify_tool(_cfg(), chat_fn=_chat(monkeypatch, ("no json here", "stop")))("findings")
     assert "unusable" in out.lower() and "max_tokens" not in out
+
+
+def _status_error(status):
+    import httpx
+    import openai
+
+    response = httpx.Response(status, request=httpx.Request("POST", "http://classifier.invalid/v1/chat/completions"))
+    return openai.APIStatusError(f"status {status}", response=response, body=None)
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_an_error_status_that_repeats_is_sent_once_and_trips_the_breaker(status):
+    calls = []
+
+    def chat(findings):
+        calls.append(findings)
+        raise _status_error(status)
+
+    tool = make_deep_classify_tool(DetectConfig(main_model="x", sub_model="x", classifier_model="c", classifier_circuit_break=2),
+                                   chat_fn=chat)
+    assert "ENDPOINT ERROR" in tool("findings") and len(calls) == 1      # not re-sent: the same request fails the same way
+    tool("findings")
+    assert "CIRCUIT BREAKER" in tool("findings") and len(calls) == 2
+
+
+@pytest.mark.parametrize("error", [lambda: _status_error(429), lambda: _status_error(503), lambda: TimeoutError("slow")])
+def test_a_passing_endpoint_error_is_retried_and_never_trips_the_breaker(error):
+    calls = []
+
+    def chat(findings):
+        calls.append(findings)
+        raise error()
+
+    tool = make_deep_classify_tool(DetectConfig(main_model="x", sub_model="x", classifier_model="c", classifier_circuit_break=1),
+                                   chat_fn=chat)
+    assert "ENDPOINT ERROR" in tool("findings") and len(calls) == 2      # the transient retry
+    assert "ENDPOINT ERROR" in tool("findings") and len(calls) == 4

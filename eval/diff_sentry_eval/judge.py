@@ -172,6 +172,24 @@ def parse_eval_json(raw: str) -> _EvalValidation:
     return _EvalValidation(ok=True, scores=scores, notes=str(obj.get("notes", ""))[:2000])
 
 
+# The HTTP statuses an OpenAI-compatible endpoint answers the same way to EVERY request: a wrong key, a model or route that
+# does not exist. One judge's breaker spans the whole batch, so a status one input earns (a 400 or 422 for a change past
+# the context window, a content filter) is not here: it would leave the batch's later runs unscored. A 408, a 409, a 429
+# and every 5xx can pass.
+_REPEATING_STATUSES = frozenset({401, 403, 404})
+
+
+def is_fast_fail_http(exc: BaseException) -> bool:
+    """`make_model_tool`'s `is_fast_fail` for the judge's openai client: an error status that repeats on every request
+    is not re-sent and counts toward the circuit breaker, so a misconfigured judge stops being called. Anything else keeps
+    the transient retry."""
+    try:
+        from openai import APIStatusError
+    except ImportError:
+        return False
+    return isinstance(exc, APIStatusError) and exc.status_code in _REPEATING_STATUSES
+
+
 def _judge_chat(config: EvalJudgeConfig) -> Callable[[str], str]:
     """The judge's chat on an OpenAI-compatible endpoint. Lazy openai import so the stub path (tests, CI,
     score-only installs without the `judge` extra) never needs it."""
@@ -214,12 +232,13 @@ def make_eval_judge(config: EvalJudgeConfig | None = None, *,
         chat, parse_eval_json,
         transient_retries=max(0, config.transient_retries),
         max_consecutive_invalid=config.max_consecutive_invalid,
+        is_fast_fail=is_fast_fail_http,
     )
 
     def judge(inputs: dict) -> JudgeVerdict:
         result = call(EVAL_TEMPLATE.format(**inputs))
         if result.circuit_broken:
-            return JudgeVerdict(ok=False, reason="judge circuit breaker: too many unusable replies in a row")
+            return JudgeVerdict(ok=False, reason="judge circuit breaker: too many unusable replies or failing calls in a row")
         if result.endpoint_error is not None:
             return JudgeVerdict(ok=False, reason=f"judge endpoint error: {result.endpoint_error}")
         validated: _EvalValidation = result.validated

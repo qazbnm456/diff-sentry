@@ -89,6 +89,22 @@ def _parse_reply(raw: str) -> ClassifyValidation:
                               rationale=str(obj.get("rationale", "")), techniques=[str(t) for t in techniques])
 
 
+# The HTTP statuses an OpenAI-compatible endpoint answers the same way to the same request: a malformed or oversized
+# request, a wrong key, a model or route that does not exist. A 408, a 409, a 429 and every 5xx can pass.
+_REPEATING_STATUSES = frozenset({400, 401, 403, 404, 422})
+
+
+def is_fast_fail_http(exc: BaseException) -> bool:
+    """`make_model_tool`'s `is_fast_fail` for a chat on the openai client: an error status that repeats on the same
+    request is not re-sent, and it counts toward the circuit breaker, so a misconfigured endpoint stops being called.
+    Anything else (a timeout, a transport error, an exception of another client) keeps the transient retry."""
+    try:
+        from openai import APIStatusError
+    except ImportError:
+        return False
+    return isinstance(exc, APIStatusError) and exc.status_code in _REPEATING_STATUSES
+
+
 def _selfclassify_chat(config: DetectConfig) -> Callable[[str], str]:
     """The `classify_backend="self"` chat: a general model returns a structured verdict on its
     OpenAI-compatible API. Lazy openai import so tests need not install it."""
@@ -133,6 +149,7 @@ def make_deep_classify_tool(config: DetectConfig, chat_fn: Callable[[str], str] 
         chat, _parse_classifier_json,
         transient_retries=max(0, config.classifier_transient_retries),
         max_consecutive_invalid=cb if cb and cb > 0 else None,
+        is_fast_fail=is_fast_fail_http,
     )
 
     def deep_classify(findings: str) -> str:
@@ -143,7 +160,7 @@ def make_deep_classify_tool(config: DetectConfig, chat_fn: Callable[[str], str] 
         if r.circuit_broken:
             record_tool_call("deep_classify", args={"findings": findings[:400]}, ok=False,
                              circuit_broken=True, errors=r.errors)
-            return ("DEEP_CLASSIFY CIRCUIT BREAKER — too many unusable replies. Decide from the "
+            return ("DEEP_CLASSIFY CIRCUIT BREAKER — too many unusable replies or failing calls in a row. Decide from the "
                     "deterministic indicators and your own reading; do not keep re-asking.")
         if r.endpoint_error is not None:
             record_tool_call("deep_classify", args={"findings": findings[:400]}, error=r.endpoint_error)
