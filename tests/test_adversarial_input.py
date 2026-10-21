@@ -252,7 +252,7 @@ def test_a_change_of_many_small_hostile_files_costs_the_same_per_character_as_on
 _CHILD = r"""
 import re, sys, time, importlib
 mods = ["diff_sentry.indicators", "diff_sentry.hosts", "diff_sentry.normalize", "diff_sentry.shelllex", "diff_sentry.linewide", "diff_sentry.ingest",
-        "diff_sentry.actors", "diff_sentry.snapshot", "diff_sentry.watch", "diff_sentry.cli"]
+        "diff_sentry.actors", "diff_sentry.snapshot", "diff_sentry.watch", "diff_sentry.releases", "diff_sentry.cli"]
 SIZE, BUDGET = 65536, 2.0
 def literals(p):
     words = re.findall(r"[A-Za-z_][A-Za-z_./-]{2,}", p.pattern.replace("\\", " "))

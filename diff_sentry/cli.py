@@ -97,11 +97,14 @@ def _baseline_indicators(event: dict, *, content_hits: list[IndicatorHit] | None
     detectors over the raw content ∪ the provenance detectors over the ingest facts. Both re-source into the
     evidence union on read (MF3), so a false-benign SUBMIT can skew the verdict but never suppress these."""
     from .indicators import keep_worse, scan_change, scan_provenance
+    from .releases import release_scope, scan_release
 
     # `content_hits` lets a caller that already scanned the change (the watcher, once per change) avoid scanning
     # the same text again: the scan is the expensive part.
     hits = (scan_change(event) if content_hits is None else list(content_hits)) \
-        + scan_provenance(event.get("provenance") or {})
+        + scan_provenance(event.get("provenance") or {}) + scan_release(event.get("release") or {})
+    if event.get("kind") == "release":
+        hits = release_scope(hits)
     # Hits an EARLIER version of this same change raised ride along, so an edit that removes the payload
     # cannot also remove the evidence (the watcher supplies them; a change scanned on its own has none).
     for raw in event.get("prior_indicators") or []:
@@ -360,6 +363,50 @@ def _cmd_scan(args) -> int:
     return 1 if failed else 0
 
 
+def _cmd_release_watch(args) -> int:
+    import logging
+    import signal
+
+    from .releases import ReleaseWatcher, parse_packages
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if not math.isfinite(args.interval) or args.interval <= 0:
+        print("release-watch: --interval must be a positive number of seconds", file=sys.stderr)
+        return 2
+    texts = list(args.packages) + [os.getenv("DS_RELEASE_PACKAGES", "")]
+    try:
+        if args.packages_file:
+            with open(args.packages_file, encoding="utf-8") as fh:
+                texts.append(fh.read())
+        packages = parse_packages(texts)
+        if args.check:
+            packages = parse_packages([args.check[0]])
+        watcher = ReleaseWatcher(packages, state_dir=args.state, out_dir=args.out, emit=not args.no_emit)
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"release-watch: {exc}", file=sys.stderr)
+        return 2
+    try:
+        if args.check:
+            print(json.dumps(watcher.check(packages[0], args.check[1]), indent=2, default=str))
+            return 0
+        if not packages:
+            print("release-watch: no packages (--packages, --packages-file or DS_RELEASE_PACKAGES)", file=sys.stderr)
+            return 2
+        if args.once:
+            for result in watcher.poll_once():
+                print(json.dumps(result, default=str))
+            return 0
+        stopping = []
+        signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
+        try:
+            watcher.run(args.interval, stop=lambda: bool(stopping))
+        except KeyboardInterrupt:
+            pass
+        return 0
+    finally:
+        watcher.close()
+
+
 def _cmd_render(args) -> int:
     from rlm_harness.trace import load_events
 
@@ -615,6 +662,21 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--requeue-failed", action="store_true",
                    help="bring back runs that exhausted their attempts (e.g. a model that was down for hours)")
     w.set_defaults(func=_cmd_watch)
+
+    rw = sub.add_parser("release-watch",
+                        help="compare each new release of watched PyPI packages with the one before it (no model)")
+    rw.add_argument("--packages", nargs="+", default=[], help="PyPI project names (or set DS_RELEASE_PACKAGES)")
+    rw.add_argument("--packages-file", help="a file of project names, one per line (# comments allowed)")
+    rw.add_argument("--out", default="./output")
+    rw.add_argument("--state", default=os.getenv("DS_WATCH_STATE_DIR", "./output/state"),
+                    help="state directory: releases.db, snapshots/")
+    rw.add_argument("--interval", type=float, default=float(os.getenv("DS_RELEASE_INTERVAL", "300")),
+                    help="seconds between polls (DS_RELEASE_INTERVAL, default 300)")
+    rw.add_argument("--no-emit", action="store_true", help="do not emit SIEM signals")
+    rw.add_argument("--once", action="store_true", help="one poll, then exit")
+    rw.add_argument("--check", nargs=2, metavar=("PACKAGE", "VERSION"),
+                    help="judge one release against the one before it now, print the result, and exit")
+    rw.set_defaults(func=_cmd_release_watch)
 
     ac = sub.add_parser("actor", help="the dossier of an account the watcher has seen (offline)")
     ac.add_argument("login", help="a login, or `id:<github id>`")
