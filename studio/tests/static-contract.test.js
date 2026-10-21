@@ -1,8 +1,5 @@
-/* Static CSS contracts the zero-build frontend relies on (run: `node tests/static-contract.test.js`).
-   Pinned textually (no browser in the suite):
-   1. the `[hidden]` guard: author `display:*` on a class otherwise beats the UA's
-      `[hidden]{display:none}` and every JS `.hidden` toggle silently no-ops (the mode panes stack,
-      the trajectory handle shows before any run);
+/* Static CSS contracts the zero-build frontend relies on (run: `node tests/static-contract.test.js`). Pinned textually (no browser in the suite):
+   1. the `[hidden]` guard: author `display:*` on a class otherwise beats the UA's `[hidden]{display:none}` and every JS `.hidden` toggle silently no-ops (the mode panes stack, the trajectory handle shows before any run);
    2. the empty-stage glyph sizing: an inline SVG with only a viewBox inflates to the column width. */
 "use strict";
 const assert = require("assert");
@@ -36,8 +33,7 @@ test("the grid owns the viewport height and the meta column is its own scroll tr
 });
 
 test("meta modules are pinned at content height inside the scrolling column", () => {
-  // overflow:hidden flips a flex item's automatic min-size to 0: without this pin the fixed-height
-  // column COMPRESSES every module to fit (content crushed) instead of scrolling.
+  // overflow:hidden flips a flex item's automatic min-size to 0: without this pin the fixed-height column COMPRESSES every module to fit (content crushed) instead of scrolling.
   const rule = css.match(/(^|\n)\.meta-col \.module\s*\{([^}]*)\}/);
   assert.ok(rule && /flex-shrink\s*:\s*0|flex\s*:\s*none/.test(rule[2]),
     ".meta-col .module must not compress inside the scroll column");

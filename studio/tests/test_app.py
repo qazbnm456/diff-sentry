@@ -1,6 +1,4 @@
-"""The FastAPI surface: verified with `run_live` STUBBED, so it needs no LLM, dspy, gh, or diff_sentry.
-Exercises the live endpoint's worker-thread → async-queue → SSE glue and the replay endpoints' file
-handling, plus the path-traversal, no-cache, and cited-unknown-augmentation guards."""
+"""The FastAPI surface: verified with `run_live` STUBBED, so it needs no LLM, dspy, gh, or diff_sentry. Exercises the live endpoint's worker-thread → async-queue → SSE glue and the replay endpoints' file handling, plus the path-traversal, no-cache, and cited-unknown-augmentation guards."""
 
 import itertools
 import json
@@ -40,8 +38,7 @@ def test_config_classifier_falls_back_to_analyst(monkeypatch):
 
 
 def test_config_classifier_never_surfaces_a_subscription_analyst(monkeypatch):
-    # the classifier is a make_model_tool endpoint and from_env REJECTS a subscription classifier, so
-    # the panel must NOT show a subscription-sentinel analyst as the classifier (a config a run can't use).
+    # the classifier is a make_model_tool endpoint and from_env REJECTS a subscription classifier, so the panel must NOT show a subscription-sentinel analyst as the classifier (a config a run can't use).
     monkeypatch.setenv("DS_SUB_LM", "claude-agent-sdk/claude-fable-5")
     monkeypatch.delenv("DS_CLASSIFIER_LM", raising=False)
     cfg = client.get("/v1/config").json()["models"]
@@ -89,8 +86,7 @@ def test_get_run_404_when_absent():
 
 
 def test_run_id_path_is_slug_sanitized_against_traversal(tmp_path, monkeypatch):
-    # a run_id embeds user input (a repo string) and becomes a file path. A traversal attempt must fold to
-    # a harmless slug that resolves inside ARTIFACTS (→ 404), never escape it.
+    # a run_id embeds user input (a repo string) and becomes a file path. A traversal attempt must fold to a harmless slug that resolves inside ARTIFACTS (→ 404), never escape it.
     monkeypatch.setattr(appmod, "ARTIFACTS", tmp_path)
     assert appmod._slug_id("../../etc/passwd") == "etc-passwd"
     assert appmod._slug_id("..") == "unknown" and "/" not in appmod._slug_id("a/b/c")
@@ -105,9 +101,7 @@ def _write_trace(tmp_path, lines):
 
 
 def test_replay_streams_mapped_events(tmp_path, monkeypatch):
-    # A REAL finished trace holds both `final` (record_main_trajectory) and `run_end` (recorder __exit__),
-    # in that order, with `result` between them. The mapper must skip `final` so the terminal event fires
-    # exactly ONCE, and after `detection.result.done`, not before it.
+    # A REAL finished trace holds both `final` (record_main_trajectory) and `run_end` (recorder __exit__), in that order, with `result` between them. The mapper must skip `final` so the terminal event fires exactly ONCE, and after `detection.result.done`, not before it.
     _write_trace(tmp_path, [
         {"type": "run_start", "step_id": 0, "payload": {"meta": {"planner": "P"}}},
         {"type": "tool_call", "step_id": 1, "payload": {"tool": "scan_indicators", "hits": [{"severity": "high"}], "n": 1}},
@@ -123,9 +117,7 @@ def test_replay_streams_mapped_events(tmp_path, monkeypatch):
 
 
 def test_replay_orders_causally_by_ts_with_step_id_tiebreak(tmp_path, monkeypatch):
-    # rlm-harness flushes `main_step`s AFTER the run, so by step_id every turn trails every tool call. A
-    # turn's `ts` is its live parse stamp, so by `ts` it precedes the scan its own code made. `step_id`
-    # breaks a `ts` tie (deterministic, not input order); an event with no `ts` sorts last, never raises.
+    # rlm-harness flushes `main_step`s AFTER the run, so by step_id every turn trails every tool call. A turn's `ts` is its live parse stamp, so by `ts` it precedes the scan its own code made. `step_id` breaks a `ts` tie (deterministic, not input order); an event with no `ts` sorts last, never raises.
     _write_trace(tmp_path, [
         {"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {"planner": "P"}}},
         {"type": "tool_call", "step_id": 1, "ts": 3.0, "payload": {"tool": "scan_indicators", "hits": [], "n": 0}},
@@ -143,10 +135,7 @@ def test_replay_orders_causally_by_ts_with_step_id_tiebreak(tmp_path, monkeypatc
 
 
 def test_replay_order_is_permutation_invariant_with_nan_or_inf_stamps_and_run_end_last(tmp_path, monkeypatch):
-    # `json.loads` is non-strict (admits NaN/Infinity), `isinstance(nan, float)` is True, and every NaN
-    # comparison is False, so without the `isfinite` guard the replay order depends on INPUT ORDER (and
-    # can put an event after run_end). A NaN/±inf stamp must join the ts-less tail (step_id order), the
-    # result stay deterministic, and `run_end` stay terminal.
+    # `json.loads` is non-strict (admits NaN/Infinity), `isinstance(nan, float)` is True, and every NaN comparison is False, so without the `isfinite` guard the replay order depends on INPUT ORDER (and can put an event after run_end). A NaN/±inf stamp must join the ts-less tail (step_id order), the result stay deterministic, and `run_end` stay terminal.
     ev = [{"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {"planner": "P"}}},
           {"type": "tool_call", "step_id": 1, "ts": float("nan"), "payload": {"tool": "scan_indicators", "hits": [], "n": 0}},
           {"type": "main_step", "step_id": 2, "ts": 2.0, "payload": {"turn": 0, "reasoning": "r", "code": "c"}},
@@ -163,8 +152,7 @@ def test_replay_order_is_permutation_invariant_with_nan_or_inf_stamps_and_run_en
 
 
 def test_replay_of_truncated_trace_still_ends_with_completed(tmp_path, monkeypatch):
-    # a hard-killed run (SIGKILL) leaves a trace with NO run_end; replay must still emit the terminal
-    # `completed` so the client stops "Classifying…" and GETs the stored response instead of hanging.
+    # a hard-killed run (SIGKILL) leaves a trace with NO run_end; replay must still emit the terminal `completed` so the client stops "Classifying…" and GETs the stored response instead of hanging.
     _write_trace(tmp_path, [
         {"type": "run_start", "step_id": 0, "payload": {"meta": {"planner": "P"}}},
         {"type": "tool_call", "step_id": 1, "payload": {"tool": "scan_indicators", "hits": [], "n": 0}}])
@@ -251,8 +239,7 @@ def test_iterations_breakdown_from_trace(tmp_path, monkeypatch):
 
 
 def test_fixtures_lists_incident_demos_or_empty(tmp_path, monkeypatch):
-    # CORPUS is anchored to the repo root INDEPENDENTLY of ARTIFACTS (a DS_ARTIFACTS_DIR override must not
-    # empty the demo picker), so the test points CORPUS at a tmp tree, not ARTIFACTS.
+    # CORPUS is anchored to the repo root INDEPENDENTLY of ARTIFACTS (a DS_ARTIFACTS_DIR override must not empty the demo picker), so the test points CORPUS at a tmp tree, not ARTIFACTS.
     corpus = tmp_path / "corpus"
     monkeypatch.setattr(appmod, "CORPUS", corpus)
     assert client.get("/v1/fixtures").json() == {"fixtures": []}       # no corpus tree → empty, never 500

@@ -1,8 +1,6 @@
 """Subscription-path wiring: the classifier-hazard guard (config) + the sentinel router (detect).
 
-Runs WITHOUT the `[subscription]` extra: the hazard tests touch only dspy-free config.from_env; the
-router test exercises only the NON-sentinel branch (which never imports rlm-harness's adapter). The
-sentinel branch, which imports claude-agent-sdk, is left to a live run / an env that has the extra.
+Runs WITHOUT the `[subscription]` extra: the hazard tests touch only dspy-free config.from_env; the router test exercises only the NON-sentinel branch (which never imports rlm-harness's adapter). The sentinel branch, which imports claude-agent-sdk, is left to a live run / an env that has the extra.
 """
 
 from __future__ import annotations
@@ -78,16 +76,14 @@ def test_from_env_proxy_path_unchanged(monkeypatch):
 def test_maybe_subscription_lm_missing_extra_is_actionable(monkeypatch):
     """Sentinel + missing claude-agent-sdk → an error that NAMES the fix, not a bare import crash.
 
-    (The real-world path: `uv lock` records the extra but only `uv sync --extra subscription`
-    installs it; a sentinel-configured run in a never-synced env must say so.)
+    (The real-world path: `uv lock` records the extra but only `uv sync --extra subscription` installs it; a sentinel-configured run in a never-synced env must say so.)
     """
     pytest.importorskip("dspy")  # importing detect pulls dspy+rlm_harness, present in the dev env
     import sys
 
     from diff_sentry.detect import _maybe_subscription_lm
 
-    # rlm-harness defers the SDK import to ClaudeAgentLM construction; None in sys.modules makes that
-    # `import claude_agent_sdk` raise, so the missing extra surfaces at build time, not at module import.
+    # rlm-harness defers the SDK import to ClaudeAgentLM construction; None in sys.modules makes that `import claude_agent_sdk` raise, so the missing extra surfaces at build time, not at module import.
     monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)
     with pytest.raises(ModuleNotFoundError) as exc:
         _maybe_subscription_lm("claude-agent-sdk/claude-sonnet-5")
@@ -103,6 +99,5 @@ def test_maybe_subscription_lm_non_sentinel_returns_none():
 
     had_adapter = "rlm_harness.claude_agent_lm" in sys.modules  # a prior sentinel test may have loaded it
     assert _maybe_subscription_lm("openai/gpt-4o") is None
-    # the non-sentinel branch returns BEFORE the lazy `from rlm_harness import ClaudeAgentLM`, so the call
-    # must not NEWLY import the adapter (robust to test ordering, unlike a bare `not in sys.modules`)
+    # the non-sentinel branch returns BEFORE the lazy `from rlm_harness import ClaudeAgentLM`, so the call must not NEWLY import the adapter (robust to test ordering, unlike a bare `not in sys.modules`)
     assert ("rlm_harness.claude_agent_lm" in sys.modules) == had_adapter

@@ -1,7 +1,6 @@
 """DetectConfig: env parsing (from_env), the classify_backend guard, and the can_emit property.
 
-The developer's shell may carry ambient `DS_*` vars; every test scrubs the full set first so a real
-environment can't flip a default under the test.
+The developer's shell may carry ambient `DS_*` vars; every test scrubs the full set first so a real environment can't flip a default under the test.
 """
 
 from __future__ import annotations

@@ -1,7 +1,6 @@
 """Runs inside the container: `bash -n` and `dash -n` on each fragment, and reports what each said on stderr.
 
-A shell that reaches the end of a fragment inside a quote, a substitution, `${…}` or a here-document says so; one that
-meets a different syntax error earlier stops there. Nothing is executed (`-n` only parses).
+A shell that reaches the end of a fragment inside a quote, a substitution, `${…}` or a here-document says so; one that meets a different syntax error earlier stops there. Nothing is executed (`-n` only parses).
 """
 import json
 import os

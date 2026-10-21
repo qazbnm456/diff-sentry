@@ -3,10 +3,7 @@ name = "diff-sentry-eval"
 version = "0.1.0"
 description = "Offline, reward-free evaluation harness for diff-sentry: score recorded runs against the ATLAS 4-category (TF/TA/TG/PA, 0-10) LLM-as-judge of the assembled malicious-change VERDICT and render a terminal scorecard. A one-way reader of the trace contract; never a reward."
 requires-python = ">=3.11"  # matches the sibling diff-sentry (>=3.11); keeps `uv run` resolvable
-# diff-sentry is a CORE dependency (unlike studio, which gates it behind a `live` extra): the score path
-# imports `diff_sentry.verdict_from_events` / `run_labels` / `run_metrics` / `AssembledVerdict` (the PUBLIC
-# surface, same rule the studio follows) for every mode, so it must always resolve. pydantic + rlm-harness
-# (trace readers, make_model_tool) arrive as diff-sentry deps.
+# diff-sentry is a CORE dependency (unlike studio, which gates it behind a `live` extra): the score path imports `diff_sentry.verdict_from_events` / `run_labels` / `run_metrics` / `AssembledVerdict` (the PUBLIC surface, same rule the studio follows) for every mode, so it must always resolve. pydantic + rlm-harness (trace readers, make_model_tool) arrive as diff-sentry deps.
 dependencies = [
     "diff-sentry",
 ]

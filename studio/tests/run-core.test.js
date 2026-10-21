@@ -1,5 +1,4 @@
-/* Unit tests for the pure run-driver core (run: `node tests/run-core.test.js`). Node 16 lacks the
-   built-in test runner, so this is a tiny assert-based harness that exits non-zero on any failure. */
+/* Unit tests for the pure run-driver core (run: `node tests/run-core.test.js`). Node 16 lacks the built-in test runner, so this is a tiny assert-based harness that exits non-zero on any failure. */
 "use strict";
 const assert = require("assert");
 const RC = require("../static/run-core.js");

@@ -1,22 +1,8 @@
 """THE entry point: a GitHub change in → a structured malicious-intent verdict out, signal emitted.
 
-    python -m diff_sentry pr owner/repo 7                 # classify a PR (needs gh + DS_* creds + Deno)
-    python -m diff_sentry issue owner/repo 12             # classify an issue
-    python -m diff_sentry classify event.json             # classify a payload you already hold
-    python -m diff_sentry render traces/pr-7.jsonl pr-7   # re-render the response from a trace (offline)
-    python -m diff_sentry export "traces/*.jsonl" ds.json # reward-free dataset export (offline)
-    git diff main...HEAD | python -m diff_sentry scan -   # indicators only, exit 1 at/above the floor
-    python -m diff_sentry watch --repos owner/name        # monitor a watchlist (--screen-only needs no model)
-    python -m diff_sentry actor mallory                   # the dossier of an account the watcher has seen
-    python -m diff_sentry archive verify                  # re-hash the snapshot archive
+    python -m diff_sentry pr owner/repo 7                 # classify a PR (needs gh + DS_* creds + Deno) python -m diff_sentry issue owner/repo 12             # classify an issue python -m diff_sentry classify event.json             # classify a payload you already hold python -m diff_sentry render traces/pr-7.jsonl pr-7   # re-render the response from a trace (offline) python -m diff_sentry export "traces/*.jsonl" ds.json # reward-free dataset export (offline) git diff main...HEAD | python -m diff_sentry scan -   # indicators only, exit 1 at/above the floor python -m diff_sentry watch --repos owner/name        # monitor a watchlist (--screen-only needs no model) python -m diff_sentry actor mallory                   # the dossier of an account the watcher has seen python -m diff_sentry archive verify                  # re-hash the snapshot archive
 
-`run()` is the programmatic entry. It records `traces/{run_id}.jsonl`, writes `responses/{run_id}.json`,
-and (host-side, AFTER the run) emits a SIEM signal when the assembled verdict warrants it. A host-side
-BASELINE indicator scan runs at ingest and rides in the run_start meta, so the deterministic evidence is
-in the trace before the planner takes a turn (MF3). `scan`/`render`/`export` work offline;
-`pr`/`issue`/`classify` need model creds (DS_* env) + a Deno sandbox (`classify` only *ingests* offline).
-`scan` exposes that deterministic baseline on its own: the half we can run in our own CI on an untrusted
-fork PR, where no creds exist and none may be handed over (see `_cmd_scan`).
+`run()` is the programmatic entry. It records `traces/{run_id}.jsonl`, writes `responses/{run_id}.json`, and (host-side, AFTER the run) emits a SIEM signal when the assembled verdict warrants it. A host-side BASELINE indicator scan runs at ingest and rides in the run_start meta, so the deterministic evidence is in the trace before the planner takes a turn (MF3). `scan`/`render`/`export` work offline; `pr`/`issue`/`classify` need model creds (DS_* env) + a Deno sandbox (`classify` only *ingests* offline). `scan` exposes that deterministic baseline on its own: the half we can run in our own CI on an untrusted fork PR, where no creds exist and none may be handed over (see `_cmd_scan`).
 """
 
 from __future__ import annotations
@@ -69,8 +55,7 @@ async def detect_from_event(
             "instructions": task.instructions,
             # The change under review: echoed into the response envelope + the SIEM signal.
             "source": _source_echo(event),
-            # The host-derived facts about the author and the event (account age as of the event, profile,
-            # timestamps, fork, commit offsets), so an offline reader sees what the ingest saw.
+            # The host-derived facts about the author and the event (account age as of the event, profile, timestamps, fork, commit offsets), so an offline reader sees what the ingest saw.
             **({"provenance": event["provenance"]} if event.get("provenance") else {}),
             # The deterministic baseline: assemble unions this with every scan_indicators tool call.
             "baseline_indicators": baseline,
@@ -83,9 +68,7 @@ async def detect_from_event(
             # The budget THIS run ran under, so an offline reader computes hit_iteration_cap correctly.
             "max_iterations": config.max_iterations,
             "max_llm_calls": config.max_llm_calls,
-            # The ATLAS rubric decomposition carried as LABELS (structure only; the trainer scores dᵢ). A
-            # FIXED skeleton (default_rubric): diff-sentry's task is constant, so only the per-criterion
-            # FACTS vary per run (re-sourced from the trace on read; see rubric.criteria_facts).
+            # The ATLAS rubric decomposition carried as LABELS (structure only; the trainer scores dᵢ). A FIXED skeleton (default_rubric): diff-sentry's task is constant, so only the per-criterion FACTS vary per run (re-sourced from the trace on read; see rubric.criteria_facts).
             "rubric": rubric_to_meta(default_rubric()),
         }):
             return await _run()
@@ -93,20 +76,16 @@ async def detect_from_event(
 
 
 def _baseline_indicators(event: dict, *, content_hits: list[IndicatorHit] | None = None) -> list[dict]:
-    """The host-side deterministic evidence recorded in run_start meta BEFORE the planner runs: the text
-    detectors over the raw content ∪ the provenance detectors over the ingest facts. Both re-source into the
-    evidence union on read (MF3), so a false-benign SUBMIT can skew the verdict but never suppress these."""
+    """The host-side deterministic evidence recorded in run_start meta BEFORE the planner runs: the text detectors over the raw content ∪ the provenance detectors over the ingest facts. Both re-source into the evidence union on read (MF3), so a false-benign SUBMIT can skew the verdict but never suppress these."""
     from .indicators import keep_worse, scan_change, scan_provenance
     from .releases import release_scope, scan_release
 
-    # `content_hits` lets a caller that already scanned the change (the watcher, once per change) avoid scanning
-    # the same text again: the scan is the expensive part.
+    # `content_hits` lets a caller that already scanned the change (the watcher, once per change) avoid scanning the same text again: the scan is the expensive part.
     hits = (scan_change(event) if content_hits is None else list(content_hits)) \
         + scan_provenance(event.get("provenance") or {}) + scan_release(event.get("release") or {})
     if event.get("kind") == "release":
         hits = release_scope(hits)
-    # Hits an EARLIER version of this same change raised ride along, so an edit that removes the payload
-    # cannot also remove the evidence (the watcher supplies them; a change scanned on its own has none).
+    # Hits an EARLIER version of this same change raised ride along, so an edit that removes the payload cannot also remove the evidence (the watcher supplies them; a change scanned on its own has none).
     for raw in event.get("prior_indicators") or []:
         if isinstance(raw, IndicatorHit):
             hits.append(raw)
@@ -168,9 +147,7 @@ def run(
     poster=None,
     emit_failed: bool = True,
 ) -> RunArtifacts:
-    """THE programmatic entry: classify one change, write the response, and (host-side, after the run)
-    emit a SIEM signal when warranted. Never raises on a run failure: a failed run still writes an
-    informative response and returns result-less RunArtifacts."""
+    """THE programmatic entry: classify one change, write the response, and (host-side, after the run) emit a SIEM signal when warranted. Never raises on a run failure: a failed run still writes an informative response and returns result-less RunArtifacts."""
     from rlm_harness.trace import load_events
 
     from .assemble import assemble_verdict
@@ -189,8 +166,7 @@ def run(
         resp = build_failed_response(run_id, events, f"{type(exc).__name__}: {exc}")
         response_path = _write((os.path.join(outdir, "responses"), f"{run_id}.json"),
                                resp.model_dump_json(indent=2) + "\n")
-        # `emit_failed=False` is for a caller that retries a failed run: the screen already alerted on the
-        # evidence, and a `status=failed` signal per attempt would page the SIEM ten times for one change.
+        # `emit_failed=False` is for a caller that retries a failed run: the screen already alerted on the evidence, and a `status=failed` signal per attempt would page the SIEM ten times for one change.
         emit_result = emit_signal(resp, config, poster=poster) if emit and emit_failed else None
         return RunArtifacts(None, events, run_id, trace_path, response_path, emit_result, status="failed")
 
@@ -213,9 +189,7 @@ def screen(
     poster=None,
     baseline: list[dict] | None = None,
 ):
-    """The deterministic SCREEN: baseline indicators only, no model. Writes `<out>/screened/{run_id}.json`
-    (a `not_escalated` response carrying the evidence) and, when the evidence reaches the floor, emits the
-    early `stage=screen` SIEM signal. Never raises on the emit path; needs no model creds or Deno.
+    """The deterministic SCREEN: baseline indicators only, no model. Writes `<out>/screened/{run_id}.json` (a `not_escalated` response carrying the evidence) and, when the evidence reaches the floor, emits the early `stage=screen` SIEM signal. Never raises on the emit path; needs no model creds or Deno.
 
     It writes no trace: a screen is not a trajectory, so it must not enter the rollout corpus."""
     from rlm_harness.trace import EVENT_RUN_START
@@ -301,14 +275,9 @@ def _cmd_classify(args) -> int:
 def drop_deleted_lines(text: str) -> str:
     """Strip a unified diff's `-` deletion lines, keeping additions and context.
 
-    A diff carries the code being REMOVED as well as the code being added, and the detectors read plain
-    text, so scanning a raw diff flags a change for a payload it is DELETING. That turns every
-    remediation commit red, which is the worst possible failure mode for a security gate: it penalises
-    exactly the change you wanted. `---` (the file header) is kept; only true `-` deletion lines go.
+    A diff carries the code being REMOVED as well as the code being added, and the detectors read plain text, so scanning a raw diff flags a change for a payload it is DELETING. That turns every remediation commit red, which is the worst possible failure mode for a security gate: it penalises exactly the change you wanted. `---` (the file header) is kept; only true `-` deletion lines go.
 
-    Non-diff input is returned untouched: the check is per line, so a plain source file has no `-`-
-    prefixed lines to lose. `scan --include-deletions` opts back in when you want to audit what a change
-    removed (a payload can also be hidden by deleting a check)."""
+    Non-diff input is returned untouched: the check is per line, so a plain source file has no `-`- prefixed lines to lose. `scan --include-deletions` opts back in when you want to audit what a change removed (a payload can also be hidden by deleting a check)."""
     if not text:
         return text
     return "\n".join(ln for ln in text.split("\n")
@@ -316,13 +285,9 @@ def drop_deleted_lines(text: str) -> str:
 
 
 def _cmd_scan(args) -> int:
-    """The deterministic HALF of the pipeline, standalone: run the indicator suite over text and exit
-    non-zero on a hit at/above the floor. No LLM, no network, no creds, no Deno, just `indicators`.
+    """The deterministic HALF of the pipeline, standalone: run the indicator suite over text and exit non-zero on a hit at/above the floor. No LLM, no network, no creds, no Deno, just `indicators`.
 
-    This is what makes the detector safe to dogfood in our OWN CI. The full `pr`/`classify` path needs
-    `DS_*` creds, and the only way to hand creds to a fork PR's run is `pull_request_target`, the exact
-    misconfiguration that opened the AsyncAPI "Miasma" supply-chain compromise. `scan` needs nothing, so
-    it runs under the same read-only `contents: read` token an untrusted fork PR already gets."""
+    This is what makes the detector safe to dogfood in our OWN CI. The full `pr`/`classify` path needs `DS_*` creds, and the only way to hand creds to a fork PR's run is `pull_request_target`, the exact misconfiguration that opened the AsyncAPI "Miasma" supply-chain compromise. `scan` needs nothing, so it runs under the same read-only `contents: read` token an untrusted fork PR already gets."""
     from .indicators import scan_diff
     from .schema import severity_rank
 
@@ -443,8 +408,7 @@ def _cmd_export(args) -> int:
 
 
 def _json_out(obj) -> str:
-    """JSON for a terminal: non-ASCII text stays readable, but C0/C1 control characters (which `json.dumps` leaves
-    raw in the 0x80-0x9f range) are escaped so an attacker-influenced string cannot drive the terminal."""
+    """JSON for a terminal: non-ASCII text stays readable, but C0/C1 control characters (which `json.dumps` leaves raw in the 0x80-0x9f range) are escaped so an attacker-influenced string cannot drive the terminal."""
     text = json.dumps(obj, ensure_ascii=False, indent=2)
     return "".join(f"\\u{ord(c):04x}" if _is_terminal_control(c) else c for c in text)
 

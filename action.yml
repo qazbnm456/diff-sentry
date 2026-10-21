@@ -1,7 +1,5 @@
 name: 'diff-sentry malicious change scan'
-# Marketplace hard-caps this at 124 characters (the publish form rejects 125+), and it is the one line
-# shown on the listing card and in search results. Keep it under the cap and keep it concrete; the long
-# form lives in the README.
+# Marketplace hard-caps this at 124 characters (the publish form rejects 125+), and it is the one line shown on the listing card and in search results. Keep it under the cap and keep it concrete; the long form lives in the README.
 description: 'Catch malicious pull requests before they merge: obfuscated payloads, exfiltration, pwn-requests. No API key.'
 author: 'qazbnm456'
 
@@ -41,9 +39,7 @@ inputs:
       which is what this repo's own CI uses so that a PR is scanned by the rules IN
       that PR rather than by the ones already on main.
     required: false
-    # KEEP IN STEP WITH [project].version. release.yml fails the build if this drifts
-    # from the tag being released, because a stale default here would silently run an
-    # old scanner under a new action tag.
+    # KEEP IN STEP WITH [project].version. release.yml fails the build if this drifts from the tag being released, because a stale default here would silently run an old scanner under a new action tag.
     default: '0.9.0'
 
 outputs:
@@ -67,8 +63,7 @@ runs:
   using: composite
   steps:
     - name: Install uv
-      # SHA-pinned: a moving major tag on a third-party action could be repointed at code that runs
-      # with the calling workflow's token. Bump the SHA and the trailing version comment together.
+      # SHA-pinned: a moving major tag on a third-party action could be repointed at code that runs with the calling workflow's token. Bump the SHA and the trailing version comment together.
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         enable-cache: true
@@ -76,9 +71,7 @@ runs:
     - name: Scan the change
       id: scan
       shell: bash
-      # Event data is read from `env:`, never interpolated into the script body. A
-      # `${{ github.event.* }}` expanded straight into a shell command is the classic Actions
-      # script-injection sink, and this action exists to catch that class of mistake.
+      # Event data is read from `env:`, never interpolated into the script body. A `${{ github.event.* }}` expanded straight into a shell command is the classic Actions script-injection sink, and this action exists to catch that class of mistake.
       env:
         EVENT_NAME: ${{ github.event_name }}
         PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -108,9 +101,7 @@ runs:
         fi
         echo "diffing ${base}...$(git rev-parse HEAD)"
 
-        # Split the change into a gated half and a report-only half. Anything the caller listed as
-        # pattern-bearing is excluded from the gate and scanned separately, so a repo that legitimately
-        # ships attack samples is not permanently red while the rest of it stays enforced.
+        # Split the change into a gated half and a report-only half. Anything the caller listed as pattern-bearing is excluded from the gate and scanned separately, so a repo that legitimately ships attack samples is not permanently red while the rest of it stays enforced.
         gated_ex=()
         report_inc=()
         while IFS= read -r p; do

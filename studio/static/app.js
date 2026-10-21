@@ -1,7 +1,4 @@
-/* diff-sentry-studio frontend: the detection console. Zero-build vanilla JS. Reads window.ReplayCore,
-   window.RunCore, window.Trajectory (loaded before this). See DESIGN.md for the visual contract. The
-   load-bearing rule (§2): the card frame is keyed to the DERIVED state (signal + evidence severity), NOT
-   the planner's verdict; a verdict can be skewed by an injection; the evidence cannot. */
+/* diff-sentry-studio frontend: the detection console. Zero-build vanilla JS. Reads window.ReplayCore, window.RunCore, window.Trajectory (loaded before this). See DESIGN.md for the visual contract. The load-bearing rule (§2): the card frame is keyed to the DERIVED state (signal + evidence severity), NOT the planner's verdict; a verdict can be skewed by an injection; the evidence cannot. */
 (function () {
   "use strict";
   const $ = (s) => document.querySelector(s);
@@ -52,9 +49,7 @@
   }
 
   // ── live feed rows ──────────────────────────────────────────────────────
-  // The feed shows ACTIONS only, in BOTH live and replay. `detection.plan.step` (planner reasoning) and
-  // `detection.result.done` are deliberately absent: reasoning lives in the Trajectory drawer, and an
-  // unmapped event falls through `FEED[event] || (() => null)` to no row (never a stuck skeleton).
+  // The feed shows ACTIONS only, in BOTH live and replay. `detection.plan.step` (planner reasoning) and `detection.result.done` are deliberately absent: reasoning lives in the Trajectory drawer, and an unmapped event falls through `FEED[event] || (() => null)` to no row (never a stuck skeleton).
   const FEED = {
     "detection.scan": (d) => ({ icon: "scan", fam: `sev-${d.worst || "info"}`, label: "Scan", meta: `${d.n || 0} hit${d.n === 1 ? "" : "s"}${d.worst ? " · " + d.worst : ""}` }),
     "detection.classify": (d) => ({ icon: "classify", fam: d.circuit_broken || d.error ? "fam-bad" : (d.ok ? "fam-ok" : "fam-warn"),
@@ -65,8 +60,7 @@
     "detection.fetch": (d) => ({ icon: "fetch", fam: d.ok ? "fam-signal" : "fam-bad", label: d.ok ? "Fetch" : "Fetch failed",
       meta: d.status != null ? `${d.status}${d.bytes != null ? " · " + fmtBytes(d.bytes) : ""}` : "", detail: d.ok ? d.url : d.note }),
     "detection.skill.read": (d) => ({ icon: "skill", fam: "fam-skill", label: "Read skill", meta: d.name }),
-    // An unrecognized tool: a generic row (never dropped from the feed). Its short scalar fields ride the
-    // Trajectory drawer; the feed shows the tool name + ok state.
+    // An unrecognized tool: a generic row (never dropped from the feed). Its short scalar fields ride the Trajectory drawer; the feed shows the tool name + ok state.
     "detection.tool": (d) => ({ icon: "tool", fam: d.ok === false ? "fam-bad" : "fam-tool",
       label: d.tool || "Tool", meta: d.ok == null ? "" : (d.ok ? "ok" : "failed") }),
     "detection.run.created": () => ({ icon: "flag", fam: "fam-signal", label: "Classification started" }),
@@ -90,8 +84,7 @@
     const hardEvidence = sevRank(r.floor_indicator_severity || r.max_indicator_severity) >= sevRank("high");
     if (r.signal && hardEvidence) return { key: "alert", head: "ALERT" };
     if (r.signal) return { key: "amber", head: "FLAGGED" };
-    // No signal, but the planner did NOT clear it (e.g. a narrowed DS_EMIT_ON leaves a `suspicious`
-    // verdict sub-threshold). Green CLEAR would contradict the verdict chip; amber "NOTED", no signal.
+    // No signal, but the planner did NOT clear it (e.g. a narrowed DS_EMIT_ON leaves a `suspicious` verdict sub-threshold). Green CLEAR would contradict the verdict chip; amber "NOTED", no signal.
     if (r.verdict !== "benign") return { key: "amber", head: "NOTED" };
     return { key: "clear", head: "CLEAR" };   // §2: clear only when !signal AND verdict benign
   }
@@ -110,9 +103,7 @@
     const st = deriveState(r);
     const isRefusal = st.key === "iron";
     const hasChange = !!(r.source && (r.source.repo || r.source.number)) || (CURRENT._change);
-    // ONE page-height alloy card (frame = derived state, MF3), three views behind the top-right
-    // switch, in triage order: VERDICT → INDICATORS (always reachable, even on a refusal: the
-    // evidence outlives the self-report) → CHANGE (when the run carries one; never on a refusal).
+    // ONE page-height alloy card (frame = derived state, MF3), three views behind the top-right switch, in triage order: VERDICT → INDICATORS (always reachable, even on a refusal: the evidence outlives the self-report) → CHANGE (when the run carries one; never on a refusal).
     const views = [["verdict", "Verdict"], ["indicators", "Indicators"]];
     if (!isRefusal && hasChange) views.push(["change", "Change"]);
     if (!views.some(([v]) => v === stageView)) stageView = "verdict";
@@ -163,8 +154,7 @@
     } else if (plan.kind === "body") {
       diff = `<div class="diff-well"><span class="diff-line ctx">${esc(change.body)}</span></div>`;
     } else if (plan.kind === "trace") {
-      // A pr/issue (or replayed) run: the diff never reaches the client. This is the run's OWN
-      // `run_start` event from /iterations: the exact normalized untrusted content the planner saw.
+      // A pr/issue (or replayed) run: the diff never reaches the client. This is the run's OWN `run_start` event from /iterations: the exact normalized untrusted content the planner saw.
       diff = `<div class="diff-well"><span class="diff-line ctx">${esc(CURRENT._traceChange)}</span></div>`;
     } else if (plan.kind === "loading") {
       if (plan.fetch) fetchTraceChange(CURRENT);
@@ -215,8 +205,7 @@
   function renderModules(r) {
     const p = r.process || {};
 
-    // Show the run's OWN step count unclamped; clamping to CONFIG.max_iterations (today's env) would
-    // falsify a replayed run recorded under a different cap. Cap-hit is authoritative from `process`.
+    // Show the run's OWN step count unclamped; clamping to CONFIG.max_iterations (today's env) would falsify a replayed run recorded under a different cap. Cap-hit is authoritative from `process`.
     const steps = p.steps != null ? String(p.steps) : "—";
     const analyst = RunCore.analystStat(p);
     const stats = [
@@ -251,9 +240,7 @@
     return `<div class="module"><div class="module-cap"></div><div class="module-head">${esc(label)}</div><div class="module-body">${body}</div></div>`;
   }
 
-  // The ATLAS rubric module: the run's reward-free TF/TA/TG/PA LABELS. Each criterion shows the
-  // deterministic FACTS re-lensed from the trace (never a score/verdict; the trainer scores dᵢ). Guarded:
-  // a legacy response with no `rubric` field renders nothing.
+  // The ATLAS rubric module: the run's reward-free TF/TA/TG/PA LABELS. Each criterion shows the deterministic FACTS re-lensed from the trace (never a score/verdict; the trainer scores dᵢ). Guarded: a legacy response with no `rubric` field renders nothing.
   function fmtFact(v) {
     if (Array.isArray(v)) return v.length ? v.join(", ") : "—";
     if (v === null || v === undefined) return "—";
@@ -270,8 +257,7 @@
         ? `<div class="rub-facts">${facts.map(([k, v]) =>
             `<span class="rub-fact"><span class="rk">${esc(k)}</span><span class="rv">${esc(fmtFact(v))}</span></span>`).join("")}</div>`
         : `<div class="rub-facts empty">no facts observed</div>`;
-      // the category class sits on `.rub-crit` so its `--rc` accent inherits to BOTH the left rule
-      // (`.rub-crit` border) and the badge child; CSS custom props inherit downward only.
+      // the category class sits on `.rub-crit` so its `--rc` accent inherits to BOTH the left rule (`.rub-crit` border) and the badge child; CSS custom props inherit downward only.
       return `<div class="rub-crit cat-${catCls}"><div class="rub-crit-head">` +
         `<span class="cat-badge">${esc(c.category)}</span>` +
         `<span class="rub-name">${esc(c.criterion)}</span></div>` +
@@ -283,8 +269,7 @@
       `<div class="module-body"><div class="rub-list">${rubric.criteria.map(crit).join("")}</div></div></div>`;
   }
   function siemPayload(r) {
-    // Mirror emit.signal_payload field-for-field: the console claims this is what the host-side emitter
-    // would POST, so it must not drop fields the real payload carries.
+    // Mirror emit.signal_payload field-for-field: the console claims this is what the host-side emitter would POST, so it must not drop fields the real payload carries.
     const grounded = (h) => h.grounded !== false;          // a hit without the field reads as grounded
     const hits = (r.indicators || []).slice()
       .sort((a, b) => (grounded(b) - grounded(a)) || (sevRank(b.severity) - sevRank(a.severity)))
@@ -330,8 +315,7 @@
   async function classify(overwrite) {
     const req = currentRequest();
     if (!req) return;
-    // Reset FIRST: only a pasted payload is held client-side for the Change view. Without this reset a
-    // pr/issue run (whose files live server-side) would render the PREVIOUS paste's diff under its source.
+    // Reset FIRST: only a pasted payload is held client-side for the Change view. Without this reset a pr/issue run (whose files live server-side) would render the PREVIOUS paste's diff under its source.
     CURRENT_CHANGE = null;
     if (req.mode === "classify" && req.payload) CURRENT_CHANGE = req.payload;
     feedEl.innerHTML = ""; showSkeleton(); traj.reset(); setBusy(true);
@@ -350,8 +334,7 @@
       showEmpty(); return;
     }
     if (plan.stage === "failed") { feedError(err); renderResult({ status: "failed", refusal: { reason: "stream_error", detail: err && (err.detail || err.message) } }); return; }
-    // clean end: the completed event carried the raw response; re-GET for the trace-derived
-    // cited_unknown_ids augmentation (the fabrication tell the envelope omits; see /v1/runs/{id}).
+    // clean end: the completed event carried the raw response; re-GET for the trace-derived cited_unknown_ids augmentation (the fabrication tell the envelope omits; see /v1/runs/{id}).
     if (finalResp) {
       let full = finalResp;
       try { const g = await fetch(`/v1/runs/${encodeURIComponent(currentRunId)}`); if (g.ok) full = await g.json(); } catch (_) {}

@@ -1,8 +1,6 @@
 """The edges of the patterns, the shape gate, the rendered view and the shield, each pinned by the shortest text that tells the code from one mutant of it.
 
-`_EDGE_ROWS` holds, per pattern, a text and the span `search` finds in it (None: no match): each row is the shortest text on which a mutant of the pattern (one alternative
-dropped, a quantifier removed or changed, a class member removed, a bound moved, an anchor or a lookaround removed) answers differently. The functions below pin the defaults of
-the softening and the rendered view, the window of the list strings, the strings a gate decodes, and the shield's fence and HTML-block ends."""
+`_EDGE_ROWS` holds, per pattern, a text and the span `search` finds in it (None: no match): each row is the shortest text on which a mutant of the pattern (one alternative dropped, a quantifier removed or changed, a class member removed, a bound moved, an anchor or a lookaround removed) answers differently. The functions below pin the defaults of the softening and the rendered view, the window of the list strings, the strings a gate decodes, and the shield's fence and HTML-block ends."""
 
 from __future__ import annotations
 

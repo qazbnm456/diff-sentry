@@ -1,6 +1,4 @@
-"""Where `node -e` and direction marks are below the floor: a maintainer's reproduction steps and a mail client's marks
-around a run in right-to-left text. Everything around them keeps its reading, source code included, and a planner scan of
-a region copied from the change reads what the baseline read."""
+"""Where `node -e` and direction marks are below the floor: a maintainer's reproduction steps and a mail client's marks around a run in right-to-left text. Everything around them keeps its reading, source code included, and a planner scan of a region copied from the change reads what the baseline read."""
 
 import pytest
 

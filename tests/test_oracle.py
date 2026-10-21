@@ -2,20 +2,11 @@
 
 Four properties, over seeded random candidates:
 
-* RECALL. Whatever a real `bash` or `dash` runs as a downloaded script must be `critical` in a code file. (The reverse is not
-  asked: a rule may report more than what runs.)
-* RECALL IN PROSE. The same download written into documentation (emphasis, HTML, typographic quotes, CJK prose, a label
-  glued to the command) stays `critical` in a body, a comment and a README: the softening is for known installers only.
-* LEXER. `diff_sentry.shelllex` says what is still open where a fragment ends; bash must never be inside a quote, a
-  substitution, `${…}` or a here-document there when the lexer says nothing is (and says it is "unknown" where bash and dash
-  disagree). dash is held to the same, except for the body of a backtick, which its `-n` does not parse, and for a `case` (it
-  says of one that waits for its next pattern what it says of a `$(` that waits for its `)`). The fragments are random atoms, programs
-  from a grammar cut short at every newline, and a few tokens put inside each context (`tests/oracle/programs.py`).
-  The unit tests' own shell snippets are the regression corpus: each is also read with a line continuation put at every position of
-  it (a continuation joins whatever stands on both sides of it) and with one or two random edits.
-* SOUNDNESS OF THE PROSE SOFTENING. Whatever the rules reduce to `medium` in prose must, when it is really run, fetch
-  nothing but a known installer and call nothing else. A `medium` that fetches an attacker's URL or calls `evil`, `docker`
-  or `ssh` is a payload that got through.
+* RECALL. Whatever a real `bash` or `dash` runs as a downloaded script must be `critical` in a code file. (The reverse is not asked: a rule may report more than what runs.)
+* RECALL IN PROSE. The same download written into documentation (emphasis, HTML, typographic quotes, CJK prose, a label glued to the command) stays `critical` in a body, a comment and a README: the softening is for known installers only.
+* LEXER. `diff_sentry.shelllex` says what is still open where a fragment ends; bash must never be inside a quote, a substitution, `${…}` or a here-document there when the lexer says nothing is (and says it is "unknown" where bash and dash disagree). dash is held to the same, except for the body of a backtick, which its `-n` does not parse, and for a `case` (it says of one that waits for its next pattern what it says of a `$(` that waits for its `)`). The fragments are random atoms, programs from a grammar cut short at every newline, and a few tokens put inside each context (`tests/oracle/programs.py`).
+  The unit tests' own shell snippets are the regression corpus: each is also read with a line continuation put at every position of it (a continuation joins whatever stands on both sides of it) and with one or two random edits.
+* SOUNDNESS OF THE PROSE SOFTENING. Whatever the rules reduce to `medium` in prose must, when it is really run, fetch nothing but a known installer and call nothing else. A `medium` that fetches an attacker's URL or calls `evil`, `docker` or `ssh` is a payload that got through.
 
 Opt-in: `DS_ORACLE=1` (and Docker with the `python:3.11-slim` image). `DS_ORACLE_N` scales the number of candidates.
 """
@@ -74,9 +65,7 @@ def test_every_download_a_real_shell_runs_is_critical_in_a_code_file():
 
 
 def test_every_download_a_real_shell_runs_is_critical_in_prose_too():
-    """RECALL in documentation: the softening applies to a known installer only, so an attacker's download stays `critical`
-    whatever Markdown, HTML, quotes or language the sentence around it is written in (a payload in `_x_` emphasis, in CJK prose
-    with no spaces, in typographic quotes, behind a label, is still a payload)."""
+    """RECALL in documentation: the softening applies to a known installer only, so an attacker's download stays `critical` whatever Markdown, HTML, quotes or language the sentence around it is written in (a payload in `_x_` emphasis, in CJK prose with no spaces, in typographic quotes, behind a label, is still a payload)."""
     rng = random.Random(_SEED)
     candidates = [grammar.payload(rng, prose=True) for _ in range(_N)]
     forced = [(c, ctx) for c in grammar.LEADING_PIPE for ctx in grammar.CO_RESIDENT]       # a known installer beside each
@@ -113,8 +102,7 @@ def test_what_the_prose_softening_reduces_to_medium_fetches_only_known_installer
     for _ in range(_N):
         crumbs = rng.random() < 0.1                          # a dedicated share: 4+ breadcrumbs, then a program or a path
         x = grammar.documented(rng, lead=rng.choice(grammar.CRUMB_LEADS) if crumbs else None)
-        # a context whose whole text a shell would also read as a command (`curl \`evil\` \`…\``) is run whole; the rest are
-        # prose around the command, and only the command runs
+        # a context whose whole text a shell would also read as a command (`curl \`evil\` \`…\``) is run whole; the rest are prose around the command, and only the command runs
         whole = "`" not in x and rng.random() < 0.3
         # a command that holds a backtick of its own (`evil` in front) is not put inside a code span: the span would be ill-formed
         contexts = grammar.WHOLE if whole else grammar.CONTEXTS if "`" not in x else grammar.BARE
@@ -145,10 +133,7 @@ _LEX_ATOMS = ["'", '"', "`", "\\", "$(", "$((", "${", "$'", ")", "))", "}", "(",
 
 
 def _lexer_against_the_shells(fragments: list[str]) -> None:
-    """The lexer never says closed where a shell says a construct is open (UNKNOWN fragments are not compared), and says open where bash says
-    closed only rarely (a safe direction: a caller then does not soften). Two ways to ask the shell: what `-n` reports at the end of the
-    text, and whether a line with one quote put behind the text is read as a quote (a shell that is inside a string, a here-document or a
-    substitution swallows it)."""
+    """The lexer never says closed where a shell says a construct is open (UNKNOWN fragments are not compared), and says open where bash says closed only rarely (a safe direction: a caller then does not soften). Two ways to ask the shell: what `-n` reports at the end of the text, and whether a line with one quote put behind the text is read as a quote (a shell that is inside a string, a here-document or a substitution swallows it)."""
     from diff_sentry import shelllex
 
     said = harness.open_at_end(fragments)
@@ -194,8 +179,7 @@ def test_the_lexer_never_says_closed_in_programs_cut_short_where_a_shell_says_a_
 
 
 def test_the_lexer_never_says_closed_inside_each_place_a_construct_can_be_open_in():
-    """A few tokens put inside each context (a substitution, a parameter expansion, a backtick, an arithmetic command, a here-document body...):
-    the shapes that random atoms rarely build."""
+    """A few tokens put inside each context (a substitution, a parameter expansion, a backtick, an arithmetic command, a here-document body...): the shapes that random atoms rarely build."""
     from tests.oracle import programs
 
     _lexer_against_the_shells(programs.contexts(random.Random(_SEED), _N * 10))
@@ -210,8 +194,7 @@ def _regression_snippets() -> list[str]:
 
 
 def test_a_line_continuation_at_any_position_of_a_regression_snippet_is_read_as_the_shells_read_it():
-    """A continuation joins what stands on both sides of it, so a rule keyed on a whole word (`then`, `extglob`, `a[`, `=(`, `coproc NAME (`)
-    is wrong where the word is split."""
+    """A continuation joins what stands on both sides of it, so a rule keyed on a whole word (`then`, `extglob`, `a[`, `=(`, `coproc NAME (`) is wrong where the word is split."""
     snippets = [s for s in _regression_snippets() if "\\\n" not in s]
     _lexer_against_the_shells(sorted({s[:p] + "\\\n" + s[p:] + "\n" for s in snippets for p in range(1, len(s))}))
 

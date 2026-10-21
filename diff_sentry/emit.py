@@ -1,14 +1,8 @@
 """Host-side SIEM emitter: the "emit a signal into a SIEM" stage, run AFTER the RLM finalizes.
 
-Emitting a signal is DETERMINISTIC plumbing, not an agentic decision, so it runs HOST-SIDE outside the
-trajectory: the planner never gets SIEM credentials and the POST never appears as a tool call (the same
-reasoning that keeps any finished-deliverable publish step host-side). A signal is emitted only when the
-assembled response says so (`response.signal`, derived deterministically in `assemble`) AND the config
-carries a webhook. The transport is injectable (`poster`) so this is unit-testable with no network; the
-whole call is guarded so a SIEM outage can never sink an already-finished classification.
+Emitting a signal is DETERMINISTIC plumbing, not an agentic decision, so it runs HOST-SIDE outside the trajectory: the planner never gets SIEM credentials and the POST never appears as a tool call (the same reasoning that keeps any finished-deliverable publish step host-side). A signal is emitted only when the assembled response says so (`response.signal`, derived deterministically in `assemble`) AND the config carries a webhook. The transport is injectable (`poster`) so this is unit-testable with no network; the whole call is guarded so a SIEM outage can never sink an already-finished classification.
 
-The signal PAYLOAD is a compact, machine-readable subset of the `DetectionResponse`, a Datadog Cloud
-SIEM / Splunk-HEC / generic-webhook consumer builds detection rules on it. Pure stdlib + httpx; no dspy.
+The signal PAYLOAD is a compact, machine-readable subset of the `DetectionResponse`, a Datadog Cloud SIEM / Splunk-HEC / generic-webhook consumer builds detection rules on it. Pure stdlib + httpx; no dspy.
 """
 
 from __future__ import annotations
@@ -19,12 +13,10 @@ from dataclasses import dataclass
 from .config import DetectConfig
 from .schema import DetectionResponse, severity_rank
 
-# A SIEM payload lists the most severe indicators first and no more than this; `indicator_count` says how many
-# there were, and the full list stays in the response file.
+# A SIEM payload lists the most severe indicators first and no more than this; `indicator_count` says how many there were, and the full list stays in the response file.
 _MAX_SIGNAL_INDICATORS = 100
 
-# A poster maps (url, headers, json_payload) to an HTTP status code. Sync: this runs host-side, but a
-# sync seam keeps it symmetric with the rest and trivially fakeable in tests.
+# A poster maps (url, headers, json_payload) to an HTTP status code. Sync: this runs host-side, but a sync seam keeps it symmetric with the rest and trivially fakeable in tests.
 Poster = Callable[[str, dict, dict], int]
 
 
@@ -44,9 +36,7 @@ class EmitResult:
 def signal_payload(response: DetectionResponse, *, stage: str = "final") -> dict:
     """The compact SIEM signal: verdict, severity, techniques, and the deterministic indicators.
 
-    `stage` is `screen` for the early alert a watcher sends the moment deterministic evidence reaches the
-    floor (before the model has judged the change), `final` for the run's own signal. Both carry the same
-    `run_id`, so a consumer that wants one alert per change keeps the latest."""
+    `stage` is `screen` for the early alert a watcher sends the moment deterministic evidence reaches the floor (before the model has judged the change), `final` for the run's own signal. Both carry the same `run_id`, so a consumer that wants one alert per change keeps the latest."""
     return {
         "run_id": response.id,
         "stage": stage,

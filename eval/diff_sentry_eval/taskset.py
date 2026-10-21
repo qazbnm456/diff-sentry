@@ -1,15 +1,8 @@
 """Eval tasksets: the change PAYLOAD the planner sees + the concrete reference only the judge sees.
 
-That split is ATLAS's fuzzy-vs-concrete design. diff-sentry's planner classifies a CHANGE (a webhook-style
-payload: repo/kind/number/author/title/body/files); so a task carries a `change` dict the `run` subcommand
-ingests (`diff_sentry.event_from_payload` → the normalized untrusted content the planner sees), plus the
-judge-only `reference`: the concrete expected classification (the correct verdict + why) consumed ONLY by
-the eval judge, never shown to the planner. It is non-machine-checkable by design: a change admits nuanced
-reads, so there is no gold label; the judgement is deferred to the LLM judge exactly as the paper does.
+That split is ATLAS's fuzzy-vs-concrete design. diff-sentry's planner classifies a CHANGE (a webhook-style payload: repo/kind/number/author/title/body/files); so a task carries a `change` dict the `run` subcommand ingests (`diff_sentry.event_from_payload` → the normalized untrusted content the planner sees), plus the judge-only `reference`: the concrete expected classification (the correct verdict + why) consumed ONLY by the eval judge, never shown to the planner. It is non-machine-checkable by design: a change admits nuanced reads, so there is no gold label; the judgement is deferred to the LLM judge exactly as the paper does.
 
-Runs pair to tasks by the `run_id == task id` convention. `demo_taskset()` is a tiny built-in set for the
-offline `score --stub` path (paired against synthetic or recorded traces). Pure stdlib + pydantic, no
-diff_sentry import (the `run` subcommand ingests the change).
+Runs pair to tasks by the `run_id == task id` convention. `demo_taskset()` is a tiny built-in set for the offline `score --stub` path (paired against synthetic or recorded traces). Pure stdlib + pydantic, no diff_sentry import (the `run` subcommand ingests the change).
 """
 
 from __future__ import annotations
@@ -20,13 +13,9 @@ from pydantic import BaseModel, Field
 
 
 class EvalTask(BaseModel):
-    """One eval task: id (pairs a run to its task via `run_id == task id`), the `change` PAYLOAD the PLANNER
-    sees (ingested by the `run` subcommand into the normalized untrusted content), and the judge-only
-    reference.
+    """One eval task: id (pairs a run to its task via `run_id == task id`), the `change` PAYLOAD the PLANNER sees (ingested by the `run` subcommand into the normalized untrusted content), and the judge-only reference.
 
-    `change` is optional: the `score` subcommand can grade EXISTING traces with only `id` + `reference`
-    (the planner-visible change falls back to the run's `run_start` meta). The `run` subcommand REQUIRES
-    `change` (it ingests it to drive a real classification)."""
+    `change` is optional: the `score` subcommand can grade EXISTING traces with only `id` + `reference` (the planner-visible change falls back to the run's `run_start` meta). The `run` subcommand REQUIRES `change` (it ingests it to drive a real classification)."""
 
     id: str
     change: dict = Field(default_factory=dict,
@@ -58,10 +47,7 @@ def load_taskset(path: str) -> list[EvalTask]:
 
 
 def demo_taskset() -> list[EvalTask]:
-    """A tiny built-in set: the offline fixture that proves the score→aggregate→report pipeline with the
-    stub judge and zero creds. The changes are deliberately compact; the references are judge-only, and
-    cover both poles: a clearly MALICIOUS CI-injection change (must be caught + signal) and a plainly BENIGN
-    docs change (must NOT be over-flagged), so a judge/scorecard exercises both regimes."""
+    """A tiny built-in set: the offline fixture that proves the score→aggregate→report pipeline with the stub judge and zero creds. The changes are deliberately compact; the references are judge-only, and cover both poles: a clearly MALICIOUS CI-injection change (must be caught + signal) and a plainly BENIGN docs change (must NOT be over-flagged), so a judge/scorecard exercises both regimes."""
     return [
         EvalTask(
             id="demo-malicious-ci",

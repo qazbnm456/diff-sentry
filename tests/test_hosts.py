@@ -1,8 +1,6 @@
 """Payload hosts: which hosts a change's indicators point at, and which of them link nothing.
 
-The lists are curated and short on purpose. A host missing from `COMMON_HOSTS` costs a noisy campaign link; a
-host wrongly in `KNOWN_INSTALLERS` hides a download-and-execute, so that list is exact hosts (plus path
-prefixes for shared ones), never a whole platform."""
+The lists are curated and short on purpose. A host missing from `COMMON_HOSTS` costs a noisy campaign link; a host wrongly in `KNOWN_INSTALLERS` hides a download-and-execute, so that list is exact hosts (plus path prefixes for shared ones), never a whole platform."""
 
 from __future__ import annotations
 

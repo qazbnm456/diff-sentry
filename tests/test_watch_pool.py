@@ -1,5 +1,4 @@
-"""`watch --workers N`: model runs at once, each in a process of its own (dspy's configuration is bound to the thread
-that set it up, so a run never shares a thread). The worker thread keeps every read and write of the state."""
+"""`watch --workers N`: model runs at once, each in a process of its own (dspy's configuration is bound to the thread that set it up, so a run never shares a thread). The worker thread keeps every read and write of the state."""
 
 from __future__ import annotations
 

@@ -1,20 +1,12 @@
 """diff-sentry: classify a GitHub change for malicious intent, as a traced RLM harness.
 
-A downstream *consumer* of rlm-harness (an exact PyPI pin) reproducing Datadog's BewAIre defense shape:
-ingest a GitHub PR/issue/push → analyze the diff as UNTRUSTED data in a sandboxed REPL → produce a
-judgement-only structured verdict (benign/suspicious/malicious/inconclusive) → union the deterministic indicator
-evidence on read → emit a SIEM signal host-side → export reward-free trajectories.
+A downstream *consumer* of rlm-harness (an exact PyPI pin) reproducing Datadog's BewAIre defense shape: ingest a GitHub PR/issue/push → analyze the diff as UNTRUSTED data in a sandboxed REPL → produce a judgement-only structured verdict (benign/suspicious/malicious/inconclusive) → union the deterministic indicator evidence on read → emit a SIEM signal host-side → export reward-free trajectories.
 
 Public surface::
 
-    from diff_sentry import DetectConfig, run, detect_from_event          # drive a run
-    from diff_sentry import ChangeVerdict, AssembledVerdict, DetectionResponse  # shapes
-    from diff_sentry import scan_indicators, assemble_verdict, build_response, emit_signal
-    from diff_sentry import normalize_event, event_from_payload, export_dataset
+    from diff_sentry import DetectConfig, run, detect_from_event          # drive a run from diff_sentry import ChangeVerdict, AssembledVerdict, DetectionResponse  # shapes from diff_sentry import scan_indicators, assemble_verdict, build_response, emit_signal from diff_sentry import normalize_event, event_from_payload, export_dataset
 
-`config`, `schema`, `normalize`, `indicators`, `assemble`, `response`, `emit`, `ingest`, `hosts`, `dbutil`, `actors`,
-`snapshot`, `watch`, `rl_export`, `rubric` import NO dspy at module top (unit-testable in isolation).
-`ClassifyChange` / `setup` / `run` / `screen` / `detect_from_event` pull in dspy lazily (via RLMTask).
+`config`, `schema`, `normalize`, `indicators`, `assemble`, `response`, `emit`, `ingest`, `hosts`, `dbutil`, `actors`, `snapshot`, `watch`, `rl_export`, `rubric` import NO dspy at module top (unit-testable in isolation). `ClassifyChange` / `setup` / `run` / `screen` / `detect_from_event` pull in dspy lazily (via RLMTask).
 """
 
 from __future__ import annotations

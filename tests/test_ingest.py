@@ -82,8 +82,7 @@ def test_pr_event_404_author_becomes_a_fact_transient_does_not():
 
 
 def test_pr_event_aborts_when_the_primary_fetch_fails():
-    # a missing PR must NOT become an empty event: the primary fetch raises and aborts pr_event (the
-    # host-side run() then records a status=failed response). Only enrichment calls are best-effort.
+    # a missing PR must NOT become an empty event: the primary fetch raises and aborts pr_event (the host-side run() then records a status=failed response). Only enrichment calls are best-effort.
     def api(path):
         raise GhApiError("not found", status=404)
     try:
@@ -94,8 +93,7 @@ def test_pr_event_aborts_when_the_primary_fetch_fails():
 
 
 def test_pr_event_commits_tally_survives_malformed_bodies_and_bounds():
-    # a TRUTHY non-dict `commit`/`verification`/`author` must not sink the ingest (best-effort contract),
-    # and the git-author list is deduped + bounded so an attacker can't flood or oversize it.
+    # a TRUTHY non-dict `commit`/`verification`/`author` must not sink the ingest (best-effort contract), and the git-author list is deduped + bounded so an attacker can't flood or oversize it.
     def api(path):
         if "/files" in path:
             return []

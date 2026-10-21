@@ -15,9 +15,7 @@ dependencies = [
     "packaging>=23",    # PEP 440 version order: which release a new one is compared with (`release-watch`)
 ]
 
-# The console entry point. `python -m diff_sentry` also works and is what the repo's own docs use for
-# local runs, but a `diff-sentry` command is what makes the tool installable-and-runnable in one step
-# (`uvx diff-sentry scan …`), which is how the GitHub Action invokes it.
+# The console entry point. `python -m diff_sentry` also works and is what the repo's own docs use for local runs, but a `diff-sentry` command is what makes the tool installable-and-runnable in one step (`uvx diff-sentry scan …`), which is how the GitHub Action invokes it.
 [project.scripts]
 diff-sentry = "diff_sentry.cli:main"
 
@@ -25,27 +23,18 @@ diff-sentry = "diff_sentry.cli:main"
 # The swappable second-stage classifier's default `self` backend talks an OpenAI-compatible API.
 classify = ["openai>=1.0"]
 observe = ["langfuse>=4.6.1", "openinference-instrumentation-dspy>=0.1.36"]
-# Run planner + analyst on a Claude Pro/Max subscription (DS_ROOT_LM / DS_SUB_LM =
-# `claude-agent-sdk/<id>`) via rlm-harness's `rlm_harness.ClaudeAgentLM`. Installs the Claude Agent SDK the
-# adapter needs; also needs the Claude Code CLI installed + logged in, a runtime prerequisite pip
-# can't express (see .env.example).
+# Run planner + analyst on a Claude Pro/Max subscription (DS_ROOT_LM / DS_SUB_LM = `claude-agent-sdk/<id>`) via rlm-harness's `rlm_harness.ClaudeAgentLM`. Installs the Claude Agent SDK the adapter needs; also needs the Claude Code CLI installed + logged in, a runtime prerequisite pip can't express (see .env.example).
 subscription = ["claude-agent-sdk>=0.1.60"]
 
-# Bare `uv sync` (and `--all-packages`) default-installs the `subscription-sdk` dev group (below). An
-# EXTRA is not synced by default, so without the group a `uv sync` lacking `--extra subscription` PRUNES
-# the Claude Agent SDK and a subscription dev run crashes (ClaudeAgentLM ImportError). `dev` MUST stay
-# listed: default-groups REPLACES uv's `["dev"]` default rather than appending to it.
+# Bare `uv sync` (and `--all-packages`) default-installs the `subscription-sdk` dev group (below). An EXTRA is not synced by default, so without the group a `uv sync` lacking `--extra subscription` PRUNES the Claude Agent SDK and a subscription dev run crashes (ClaudeAgentLM ImportError). `dev` MUST stay listed: default-groups REPLACES uv's `["dev"]` default rather than appending to it.
 # Opt out for one sync: `uv sync --no-group subscription-sdk`.
 [tool.uv]
 default-groups = ["dev", "subscription-sdk"]
 
-# rlm-harness resolves from PyPI at the version pinned above, so the workspace needs no source override
-# for it. When co-developing the kit locally, overlay an editable install (`uv pip install -e
-# ../rlm-harness`) so a fix that surfaces here can be promoted upstream, then bump the pin once it ships.
+# rlm-harness resolves from PyPI at the version pinned above, so the workspace needs no source override for it. When co-developing the kit locally, overlay an editable install (`uv pip install -e ../rlm-harness`) so a fix that surfaces here can be promoted upstream, then bump the pin once it ships.
 
 # The in-repo workspace members, each its OWN package, NOT part of the `diff_sentry` wheel:
-#   studio/: the visualization console (fastapi/uvicorn/frontend, behind its `live` extra);
-#   eval/:   the offline, reward-free LLM-as-judge scorecard (a one-way trace reader).
+#   studio/: the visualization console (fastapi/uvicorn/frontend, behind its `live` extra); eval/:   the offline, reward-free LLM-as-judge scorecard (a one-way trace reader).
 # Both read this package's trace/DetectionResponse contract, so co-locating keeps them in sync.
 [tool.uv.workspace]
 members = ["studio", "eval"]
@@ -63,31 +52,21 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 110
 
-# ruff's DEFAULT rule set is not a stable contract, which is why CI pins the version (see ci.yml).
-# The handful of default rules that fight this project's design are ignored BY NAME here, with the
-# reason.
+# ruff's DEFAULT rule set is not a stable contract, which is why CI pins the version (see ci.yml). The handful of default rules that fight this project's design are ignored BY NAME here, with the reason.
 #
-# Deliberately no `select` list: curating one is a real policy decision, and this codebase leans on
-# lazy imports (keeping modules SDK-free, deferring optional extras) that a broader selection would
-# immediately argue with.
+# Deliberately no `select` list: curating one is a real policy decision, and this codebase leans on lazy imports (keeping modules SDK-free, deferring optional extras) that a broader selection would immediately argue with.
 #
-# `S110`/`BLE001` are deliberately NOT here. A best-effort swallow IS the design at several
-# boundaries, but every such site already carries a `# noqa` naming why, which is more precise than
-# a blanket ignore and keeps a NEW one from arriving unexamined.
+# `S110`/`BLE001` are deliberately NOT here. A best-effort swallow IS the design at several boundaries, but every such site already carries a `# noqa` naming why, which is more precise than a blanket ignore and keeps a NEW one from arriving unexamined.
 [tool.ruff.lint]
 ignore = [
-    # `__all__` is grouped by concern (config/schema, scan, normalize, assemble, response, emit),
-    # which tells a reader the package's shape. Alphabetical order would lose that.
+    # `__all__` is grouped by concern (config/schema, scan, normalize, assemble, response, emit), which tells a reader the package's shape. Alphabetical order would lose that.
     "RUF022",
-    # Would swap ValueError for TypeError at two taskset validation sites. That is a PUBLIC
-    # behaviour change (callers and tests catch ValueError) bought for a lint preference.
+    # Would swap ValueError for TypeError at two taskset validation sites. That is a PUBLIC behaviour change (callers and tests catch ValueError) bought for a lint preference.
     "TRY004",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Test idiom, not debt: a mutable class attribute on a throwaway fixture needs no `ClassVar`, and a
-# `subprocess.run` whose exit code the test asserts on itself does not want `check=True` (it would
-# raise before the assertion that reports WHY it failed).
+# Test idiom, not debt: a mutable class attribute on a throwaway fixture needs no `ClassVar`, and a `subprocess.run` whose exit code the test asserts on itself does not want `check=True` (it would raise before the assertion that reports WHY it failed).
 "tests/**" = ["RUF012", "S101", "PLW1510"]
 "eval/tests/**" = ["RUF012", "S101", "PLW1510"]
 "studio/tests/**" = ["RUF012", "S101", "PLW1510"]
@@ -97,6 +76,5 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# `packages` ships every file under the package dir: the skills/*.md ride along automatically. (A
-# redundant force-include of those same paths duplicates them and breaks the wheel build.)
+# `packages` ships every file under the package dir: the skills/*.md ride along automatically. (A redundant force-include of those same paths duplicates them and breaks the wheel build.)
 packages = ["diff_sentry"]

@@ -1,40 +1,22 @@
-"""The watcher: continuous monitoring of a watchlist of repositories for the attacks that arrive as a PR
-or an issue.
+"""The watcher: continuous monitoring of a watchlist of repositories for the attacks that arrive as a PR or an issue.
 
-    python -m diff_sentry watch --repos owner/name other/name        # poll, screen, queue for the model
-    python -m diff_sentry watch --screen-only --repos-file repos.txt # deterministic tier only, no model
+    python -m diff_sentry watch --repos owner/name other/name        # poll, screen, queue for the model python -m diff_sentry watch --screen-only --repos-file repos.txt # deterministic tier only, no model
 
-It is HOST-SIDE plumbing in front of `cli.run`, like `ingest` and `emit`: the planner never sees GitHub, the
-store, or the queue. One change moves through these stages:
+It is HOST-SIDE plumbing in front of `cli.run`, like `ingest` and `emit`: the planner never sees GitHub, the store, or the queue. One change moves through these stages:
 
     poll (ETag, sorted by update)  →  ingest (+ raw responses)  →  snapshot archive
-      →  correlate (actor store)  →  screen (deterministic baseline; early SIEM alert at the floor)
-      →  queue (priority order)   →  model run (`cli.run`)      →  finalize (verdict onto the sighting)
+      →  correlate (actor store)  →  screen (deterministic baseline; early SIEM alert at the floor) →  queue (priority order)   →  model run (`cli.run`)      →  finalize (verdict onto the sighting)
 
 Design facts, each of which a test pins:
 
-* **Time is the cost, not money.** The intended model is local, so every change reaches the model by default
-  (`deep_min_severity="info"`); the screen decides the ORDER (highest severity first), never whether. The
-  optional caps (`max_queue`, `max_deep_per_hour`, `deep_min_severity`) default to off and are env-driven.
-* **The early alert does not wait for the model.** Evidence at the signal floor is emitted the moment the
-  screen finishes (`stage=screen`); the model's own signal follows (`stage=final`) under the same run id. A
-  later revision alerts early again only for evidence at the floor that no earlier revision already alerted.
-* **Nothing is lost silently.** A change the queue sheds keeps its screened record and a `shed` state; a
-  listing deeper than one pass can read is reported as truncated; a change that cannot be ingested is retried
-  with backoff and, after `_MAX_FAILS`, parked as `error` and logged, never skipped without a trace.
-* **The first copy is kept.** Every capture is archived before anything else happens to the change, and an
-  edit adds a new revision (`-r1`, `-r2`, …) instead of overwriting: the original, and the trace of the run
-  that judged it, stay. Hits an earlier revision raised ride into the next one, so removing a payload cannot
-  remove the evidence.
-* **A read that failed is not a change.** If a re-check cannot read the comment thread, it is retried later
-  rather than judged as an edit that deleted the comments.
-* **Re-checks catch what an author does afterwards.** A change is re-ingested on a schedule (15 min, 1 h,
-  6 h, 24 h by default) to see a deleted fork, a deleted account, or an edited body.
+* **Time is the cost, not money.** The intended model is local, so every change reaches the model by default (`deep_min_severity="info"`); the screen decides the ORDER (highest severity first), never whether. The optional caps (`max_queue`, `max_deep_per_hour`, `deep_min_severity`) default to off and are env-driven.
+* **The early alert does not wait for the model.** Evidence at the signal floor is emitted the moment the screen finishes (`stage=screen`); the model's own signal follows (`stage=final`) under the same run id. A later revision alerts early again only for evidence at the floor that no earlier revision already alerted.
+* **Nothing is lost silently.** A change the queue sheds keeps its screened record and a `shed` state; a listing deeper than one pass can read is reported as truncated; a change that cannot be ingested is retried with backoff and, after `_MAX_FAILS`, parked as `error` and logged, never skipped without a trace.
+* **The first copy is kept.** Every capture is archived before anything else happens to the change, and an edit adds a new revision (`-r1`, `-r2`, …) instead of overwriting: the original, and the trace of the run that judged it, stay. Hits an earlier revision raised ride into the next one, so removing a payload cannot remove the evidence.
+* **A read that failed is not a change.** If a re-check cannot read the comment thread, it is retried later rather than judged as an edit that deleted the comments.
+* **Re-checks catch what an author does afterwards.** A change is re-ingested on a schedule (15 min, 1 h, 6 h, 24 h by default) to see a deleted fork, a deleted account, or an edited body.
 
-One poller thread and one worker thread. dspy's global configuration is bound to the thread that first set it
-up, so a run never shares a thread with another: with `workers=1` the worker thread runs the model itself, and
-with more each run goes to a process of its own (`spawn`, its own dspy), while the worker thread keeps every
-read and write of the state. Neither thread dies on an unexpected exception.
+One poller thread and one worker thread. dspy's global configuration is bound to the thread that first set it up, so a run never shares a thread with another: with `workers=1` the worker thread runs the model itself, and with more each run goes to a process of its own (`spawn`, its own dspy), while the worker thread keeps every read and write of the state. Neither thread dies on an unexpected exception.
 
 Pure stdlib + the package's own modules; no dspy at import (the default runner imports `cli` lazily).
 """
@@ -196,8 +178,7 @@ ListApi = Callable[[str, "str | None"], ListResult]
 
 
 def _gh_cli_list(timeout: float = 30.0) -> ListApi:
-    """`gh api -i` with `If-None-Match`. A 304 makes `gh` exit non-zero but still print the status line and
-    headers on stdout (verified against the live API), and a 304 does not spend rate limit."""
+    """`gh api -i` with `If-None-Match`. A 304 makes `gh` exit non-zero but still print the status line and headers on stdout (verified against the live API), and a 304 does not spend rate limit."""
     def call(path: str, etag: str | None = None) -> ListResult:
         import subprocess  # host-side only; NEVER reached from inside the RLM
 
@@ -300,10 +281,7 @@ class WatchState:
 
     def record_examined(self, repo: str, kind: str, number: int, cols: dict[str, Any], *,
                         queue: tuple[str, int, dict, datetime] | None = None, shed: str | None = None) -> None:
-        """What one examination decided, in ONE transaction: the change row, its queue row (`queue`: run id,
-        priority, event, time), and the change `shed` to make room. A failure writes none of them, so a change
-        never reads `queued` without a queue row (the next poll would call it unchanged and never run it), and a
-        worker never claims a queue row whose change has no row."""
+        """What one examination decided, in ONE transaction: the change row, its queue row (`queue`: run id, priority, event, time), and the change `shed` to make room. A failure writes none of them, so a change never reads `queued` without a queue row (the next poll would call it unchanged and never run it), and a worker never claims a queue row whose change has no row."""
         with self._lock:
             try:
                 if shed is not None:
@@ -347,9 +325,7 @@ class WatchState:
                                     "ORDER BY priority ASC, seq DESC LIMIT 1").fetchone()
 
     def claim(self, now: datetime) -> sqlite3.Row | None:
-        """Take the most urgent change that is ready. The row stays until `complete`, so a crash mid-run leaves
-        it for `requeue_claimed` instead of losing the change. Claiming counts as an attempt, so an input that
-        kills the process cannot loop forever across restarts."""
+        """Take the most urgent change that is ready. The row stays until `complete`, so a crash mid-run leaves it for `requeue_claimed` instead of losing the change. Claiming counts as an attempt, so an input that kills the process cannot loop forever across restarts."""
         with self._lock:
             row = self._db.execute(
                 "SELECT * FROM queue WHERE claimed=0 AND (not_before IS NULL OR not_before<=?) "
@@ -435,16 +411,13 @@ class PollReport:
 
 
 def run_id_for(repo: str, kind: str, number: int, revision: int) -> str:
-    """`owner__name-pr-7` (`-r1` for a later revision). Owners cannot contain `_`, so the first `__` always
-    splits owner from name and two different repositories can never share an id (`a-b/c` vs `a/b-c`)."""
+    """`owner__name-pr-7` (`-r1` for a later revision). Owners cannot contain `_`, so the first `__` always splits owner from name and two different repositories can never share an id (`a-b/c` vs `a/b-c`)."""
     base = f"{repo.replace('/', '__')}-{'pr' if kind == 'pull_request' else 'issue'}-{number}"
     return base if revision == 0 else f"{base}-r{revision}"
 
 
 def _priority(hits: list[IndicatorHit], prov: dict) -> int:
-    """Screen order for the model queue: severity first, then how many DISTINCT rules fired (one rule matching
-    fifteen times is one piece of evidence), then whether the author is an outsider. It only orders the queue:
-    with no cap set, every change is still run."""
+    """Screen order for the model queue: severity first, then how many DISTINCT rules fired (one rule matching fifteen times is one piece of evidence), then whether the author is an outsider. It only orders the queue: with no cap set, every change is still run."""
     top = max((severity_rank(h.severity) for h in hits), default=0)
     age = prov.get("author_account_age_days")
     outsider = (str(prov.get("author_association") or "").upper() in OUTSIDER_ASSOCIATIONS
@@ -460,8 +433,7 @@ def _flags(event: dict) -> str:
 
 
 class _InstanceLock:
-    """One `watch` per state directory. Two processes on the same files would each requeue the other's running
-    change and could run one run id twice. An advisory `flock`; a platform without `fcntl` runs unguarded."""
+    """One `watch` per state directory. Two processes on the same files would each requeue the other's running change and could run one run id twice. An advisory `flock`; a platform without `fcntl` runs unguarded."""
 
     def __init__(self, state_dir: str):
         self._path = os.path.join(state_dir, "watch.lock")
@@ -546,9 +518,7 @@ class Watcher:
         self._rate_reset: datetime | None = None
 
     def recover(self) -> None:
-        """Take the state directory's lock and put back whatever a previous process was judging when it stopped.
-        `serve()` and `watch --once` call this; a read-only look at the state does not, so it cannot steal a
-        running change from a live watcher."""
+        """Take the state directory's lock and put back whatever a previous process was judging when it stopped. `serve()` and `watch --once` call this; a read-only look at the state does not, so it cannot steal a running change from a live watcher."""
         self._lock.acquire()
         n = self.state.requeue_claimed()
         if n:
@@ -559,8 +529,7 @@ class Watcher:
     # ── polling ────────────────────────────────────────────────────────────────────────────────────
 
     def poll_once(self) -> PollReport:
-        """One pass: list each repository (cheap, ETag), examine what is new or updated, then the re-checks
-        that have come due. Never raises: a repository that fails is reported and the pass continues."""
+        """One pass: list each repository (cheap, ETag), examine what is new or updated, then the re-checks that have come due. Never raises: a repository that fails is reported and the pass continues."""
         report = PollReport()
         now = self._clock()
         if self._rate_wait_until and now < self._rate_wait_until:
@@ -647,9 +616,7 @@ class Watcher:
             report.truncated.append(f"{repo} {kind}")
             log.warning("listing of %s %s is deeper than %d changes — older updates were not examined",
                         repo, kind, _MAX_PAGES * _PAGE)
-        # Oldest first: the listing is newest-first, but correlation reads what came BEFORE a change (an
-        # account's earlier sightings, a payload host's earlier use), so a burst must be examined in the
-        # order it happened or its last member would see none of the others.
+        # Oldest first: the listing is newest-first, but correlation reads what came BEFORE a change (an account's earlier sightings, a payload host's earlier use), so a burst must be examined in the order it happened or its last member would see none of the others.
         held: str | None = None
         now = self._clock()
         for updated, number in sorted(pending):
@@ -671,16 +638,13 @@ class Watcher:
                 log.warning("examine %s %s#%s failed: %s", kind, repo, number, exc)
                 if self._note_failure(repo, kind, number, updated, now):
                     held = updated if held is None else min(held, updated)
-        # A failed change keeps the watermark from passing it AND the ETag from being stored (or the next
-        # listing would answer 304 and it would never be retried); the others behind it are recognised by
-        # their stored `updated_at` and skipped.
+        # A failed change keeps the watermark from passing it AND the ETag from being stored (or the next listing would answer 304 and it would never be retried); the others behind it are recognised by their stored `updated_at` and skipped.
         if first is not None and held is None:
             self.state.set_etag(*first)
         self.state.set_watermark(repo, kind, min(newest, held) if held else newest)
 
     def _note_failure(self, repo: str, kind: str, number: int, updated: str, now: datetime) -> bool:
-        """Record an ingest failure. Returns True while the change should still be retried; after `_MAX_FAILS` it
-        is parked as `error` (logged, and no longer holding the watermark)."""
+        """Record an ingest failure. Returns True while the change should still be retried; after `_MAX_FAILS` it is parked as `error` (logged, and no longer holding the watermark)."""
         row = self.state.change(repo, kind, number)
         fails = (row["fail_count"] if row else 0) + 1
         fresh = {} if row else {"first_seen": _iso(now)}
@@ -707,8 +671,7 @@ class Watcher:
         self._rate_low(report)
 
     def _rate_low(self, report: PollReport) -> bool:
-        """Whether the API budget we believe is left is under the reserve. The list responses report it; every
-        ingest then spends about ten calls that report nothing, so `_ingest` subtracts what it used."""
+        """Whether the API budget we believe is left is under the reserve. The list responses report it; every ingest then spends about ten calls that report nothing, so `_ingest` subtracts what it used."""
         if self._rate_left is None or self._rate_left >= self.config.rate_reserve:
             return False
         self._rate_wait_until = self._rate_reset or self._clock() + timedelta(minutes=15)
@@ -722,8 +685,7 @@ class Watcher:
                                                                      "rate limit" in str(exc).lower()))
 
     def _on_rate_limited(self, report: PollReport) -> None:
-        """GitHub refused a call for rate limiting. Wait for the reset it reports (the `rate_limit` endpoint is
-        free) or 15 minutes; a refusal is not a failure of the change, so it is never counted toward `error`."""
+        """GitHub refused a call for rate limiting. Wait for the reset it reports (the `rate_limit` endpoint is free) or 15 minutes; a refusal is not a failure of the change, so it is never counted toward `error`."""
         reset = None
         try:
             data = (self._api or _default_api())("rate_limit")
@@ -809,8 +771,7 @@ class Watcher:
 
         if (prior_row is not None and prior_row["run_id"] and prov0.get("comments_incomplete")
                 and prior_row["state"] != "gone"):
-            # The comment thread could not be read this time. Judging that as "the comments are gone" would
-            # invent an edit, so keep what we have and look again later.
+            # The comment thread could not be read this time. Judging that as "the comments are gone" would invent an edit, so keep what we have and look again later.
             self.state.upsert_change(repo, kind, number, checks=checks, next_check_at=next_check)
             report.unchanged += 1
             log.info("%s %s#%s: comments unreadable this pass — not judged as an edit", kind, repo, number)
@@ -847,9 +808,7 @@ class Watcher:
         else:
             report.new += 1
 
-        # Alert early only for floor-level evidence no earlier revision already alerted: an edit or a comment
-        # on a change that was already flagged must not page the SIEM again with the same finding. Evidence
-        # counts as alerted only once the SIEM accepted it; a refused or failed POST is retried each poll.
+        # Alert early only for floor-level evidence no earlier revision already alerted: an edit or a comment on a change that was already flagged must not page the SIEM again with the same finding. Evidence counts as alerted only once the SIEM accepted it; a refused or failed POST is retried each poll.
         floor_ids = {h.id for h in hits if at_signal_floor(h.severity)}
         alerted = set(json.loads(prior_row["alerted"] or "[]")) if prior_row is not None else set()
         new_evidence = self._emit and bool(floor_ids - alerted)
@@ -883,9 +842,7 @@ class Watcher:
                  max((h.severity for h in hits), key=severity_rank, default="info"), len(hits), state)
 
     def _next_check(self, first_seen: str, checks: int) -> str | None:
-        """The next scheduled re-check after `checks` have run: the first offset from `first_seen` that is still
-        in the future (a poller that was down does not owe every missed check at once), or None when the
-        schedule is spent."""
+        """The next scheduled re-check after `checks` have run: the first offset from `first_seen` that is still in the future (a poller that was down does not owe every missed check at once), or None when the schedule is spent."""
         offsets = [o for o in _RECHECK_OFFSETS if o <= self.config.recheck_s][checks:]
         base, now = datetime.fromisoformat(first_seen), self._clock()
         for offset in offsets:
@@ -911,8 +868,7 @@ class Watcher:
         return top >= severity_rank(self.config.deep_min_severity)
 
     def _admit(self, run_id: str, hits: list[IndicatorHit], event: dict) -> tuple[str, int, str | None]:
-        """Whether the change joins the queue (`queued`) or is shed (`shed`), its priority, and the less urgent
-        change to shed to make room when the queue is capped. Decides only: `record_examined` writes it all."""
+        """Whether the change joins the queue (`queued`) or is shed (`shed`), its priority, and the less urgent change to shed to make room when the queue is capped. Decides only: `record_examined` writes it all."""
         prio = _priority(hits, event.get("provenance") or {})
         cap = self.config.max_queue
         if cap and self.state.queue_size() >= cap:
@@ -945,8 +901,7 @@ class Watcher:
         return row, event
 
     def _mark(self, run_id: str, event: dict, state: str) -> None:
-        """Set the change's state, but only for its latest revision: an older one finishing, failing or starting
-        again is not the state of the change."""
+        """Set the change's state, but only for its latest revision: an older one finishing, failing or starting again is not the state of the change."""
         repo, kind, number = event["repo"], event["kind"], event["number"]
         latest = self.state.change(repo, kind, number)
         if latest is None or latest["run_id"] == run_id:
@@ -956,9 +911,7 @@ class Watcher:
         return (self._runner, run_id, self.config.out_dir, self.detect_config, self._emit, self._poster)
 
     def run_next(self) -> str | None:
-        """Run the highest-priority ready change through the model, in this thread. Returns its run id, or None
-        when nothing is ready or the hourly cap is reached. A run that itself fails (a model outage) is retried
-        with backoff up to `_MAX_ATTEMPTS` times before the change is marked `failed`."""
+        """Run the highest-priority ready change through the model, in this thread. Returns its run id, or None when nothing is ready or the hourly cap is reached. A run that itself fails (a model outage) is retried with backoff up to `_MAX_ATTEMPTS` times before the change is marked `failed`."""
         claimed = self._claim()
         if claimed is None:
             return None
@@ -967,8 +920,7 @@ class Watcher:
         return row["run_id"]
 
     def _settle(self, row: sqlite3.Row, event: dict, outcome: tuple | None) -> None:
-        """Record what a run produced: the verdict onto the sighting and the queue row done, or a retry with
-        backoff, or after `_MAX_ATTEMPTS` the change buried as `failed`. `outcome` is `_outcome`'s tuple."""
+        """Record what a run produced: the verdict onto the sighting and the queue row done, or a retry with backoff, or after `_MAX_ATTEMPTS` the change buried as `failed`. `outcome` is `_outcome`'s tuple."""
         run_id = row["run_id"]
         try:
             if outcome is not None:
@@ -987,8 +939,7 @@ class Watcher:
                 log.error("run %s failed %d times — marked failed (kept; `watch --requeue-failed` brings it back)",
                           run_id, _MAX_ATTEMPTS)
         except Exception:
-            # The run itself happened; only the bookkeeping failed. Do not leave the row claimed for ever, and do
-            # not leave the change reading `running`.
+            # The run itself happened; only the bookkeeping failed. Do not leave the row claimed for ever, and do not leave the change reading `running`.
             log.exception("bookkeeping for %s failed", run_id)
             self.state.complete(run_id)
             try:
@@ -1004,8 +955,7 @@ class Watcher:
 
     def _pump(self, pool: ProcessPoolExecutor, inflight: dict[Future, tuple[sqlite3.Row, dict]],
               budget: int | None) -> tuple[int, bool]:
-        """Fill the free processes with ready changes (at most `budget` more), then settle whatever finished
-        within a second. Returns how many it started and whether the pool broke (a child died)."""
+        """Fill the free processes with ready changes (at most `budget` more), then settle whatever finished within a second. Returns how many it started and whether the pool broke (a child died)."""
         started = 0
         while len(inflight) < self.config.workers and (budget is None or started < budget):
             try:
@@ -1035,16 +985,13 @@ class Watcher:
         return started, broken
 
     def _settle_all(self, inflight: dict[Future, tuple[sqlite3.Row, dict]]) -> None:
-        """Settle every run still in flight from what its future holds: a finished one keeps its result, the rest
-        count as a failed attempt (their process is gone or about to be)."""
+        """Settle every run still in flight from what its future holds: a finished one keeps its result, the rest count as a failed attempt (their process is gone or about to be)."""
         for fut, (row, event) in list(inflight.items()):
             inflight.pop(fut)
             self._settle(row, event, _result(fut, row["run_id"])[0] if fut.done() else None)
 
     def _run_pool(self, limit: int | None, *, serving: bool = False) -> int:
-        """Run ready changes `workers` at a time until none is left and none is running (`drain`, at most
-        `limit`), or, `serving`, until `stop()`. Returns how many it started. A stop or an interrupt leaves the
-        runs it cuts off claimed for `recover()`; an error settles them, so a long-lived watcher strands nothing."""
+        """Run ready changes `workers` at a time until none is left and none is running (`drain`, at most `limit`), or, `serving`, until `stop()`. Returns how many it started. A stop or an interrupt leaves the runs it cuts off claimed for `recover()`; an error settles them, so a long-lived watcher strands nothing."""
         pool = self._new_pool()
         inflight: dict[Future, tuple[sqlite3.Row, dict]] = {}
         ran = 0
@@ -1090,9 +1037,7 @@ class Watcher:
         self._wake.set()
 
     def serve(self) -> None:
-        """Poll and run until `stop()`. The poller and the model worker are separate threads, so a slow local
-        model never delays the screen or the early alert (a slow SIEM endpoint still delays polling: the POST
-        is synchronous, bounded by its 15 s timeout)."""
+        """Poll and run until `stop()`. The poller and the model worker are separate threads, so a slow local model never delays the screen or the early alert (a slow SIEM endpoint still delays polling: the POST is synchronous, bounded by its 15 s timeout)."""
         self.recover()
         worker = threading.Thread(target=self._work_loop if self.config.workers == 1 else self._pool_loop,
                                   name="diff-sentry-worker", daemon=True)
@@ -1156,8 +1101,7 @@ def _outcome(arts: Any) -> tuple | None:
 
 def _run_model(event: dict, runner: Callable[..., Any] | None, run_id: str, out_dir: str, config: DetectConfig,
                emit: bool, poster: Callable[[str, dict, dict], int] | None) -> tuple | None:
-    """One model run, in the worker thread or in a child process. Never raises: `cli.run` does not, and a custom
-    runner that does counts as a failed run."""
+    """One model run, in the worker thread or in a child process. Never raises: `cli.run` does not, and a custom runner that does counts as a failed run."""
     if runner is None:
         from .cli import run as runner
     try:
@@ -1172,8 +1116,7 @@ def _child_init(level: int, parent: int) -> None:
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(processName)s %(message)s")
 
     def orphaned() -> None:
-        # A watcher killed outright (SIGKILL, the OOM killer) cannot stop its children. One left running would
-        # finish its run while a restarted watcher runs the same run id again: exit as soon as the parent is gone.
+        # A watcher killed outright (SIGKILL, the OOM killer) cannot stop its children. One left running would finish its run while a restarted watcher runs the same run id again: exit as soon as the parent is gone.
         while os.getppid() == parent:
             time.sleep(1)
         os._exit(1)
@@ -1182,8 +1125,7 @@ def _child_init(level: int, parent: int) -> None:
 
 
 def _result(fut: Future, run_id: str) -> tuple[tuple | None, bool]:
-    """A finished future's outcome, and whether its process died. Whatever it raises counts as a failed run, a
-    `KeyboardInterrupt` a child received with the terminal's Ctrl-C included, so the worker thread lives on."""
+    """A finished future's outcome, and whether its process died. Whatever it raises counts as a failed run, a `KeyboardInterrupt` a child received with the terminal's Ctrl-C included, so the worker thread lives on."""
     try:
         return fut.result(), False
     except BrokenProcessPool:
@@ -1203,8 +1145,7 @@ def _terminate(pool: ProcessPoolExecutor) -> None:
 
 
 def _accepts(fn: Callable[..., Any], name: str) -> bool:
-    """Whether `fn` takes keyword `name` (or `**kwargs`). A custom runner or screener written before a keyword
-    existed must keep working, not fail every attempt with a TypeError."""
+    """Whether `fn` takes keyword `name` (or `**kwargs`). A custom runner or screener written before a keyword existed must keep working, not fail every attempt with a TypeError."""
     import inspect
 
     try:

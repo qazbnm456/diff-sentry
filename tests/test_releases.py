@@ -1,5 +1,4 @@
-"""Release watch: a release compared with the one before it, from artifacts built in memory and a PyPI served by a fake
-fetch. No network; nothing is installed or written outside the test's own directory."""
+"""Release watch: a release compared with the one before it, from artifacts built in memory and a PyPI served by a fake fetch. No network; nothing is installed or written outside the test's own directory."""
 
 from __future__ import annotations
 

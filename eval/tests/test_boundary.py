@@ -1,8 +1,6 @@
 """The one-way dependency fence: diff_sentry NEVER imports diff_sentry_eval; the reverse is the design.
 
-A fresh subprocess interpreter, so no previously-imported module can mask a violation. An eval score with a
-path back into the rollout core is the exact violation this prevents (it would bias the very measure the
-harness provides).
+A fresh subprocess interpreter, so no previously-imported module can mask a violation. An eval score with a path back into the rollout core is the exact violation this prevents (it would bias the very measure the harness provides).
 """
 
 from __future__ import annotations
@@ -21,8 +19,7 @@ def test_import_diff_sentry_does_not_import_the_eval_harness():
 
 
 def test_import_eval_pulls_diff_sentry_one_way_and_stays_light():
-    """The harness reads diff-sentry's contract (the one-way direction) without dragging dspy or openai at
-    import time; scoring with the stub judge needs neither."""
+    """The harness reads diff-sentry's contract (the one-way direction) without dragging dspy or openai at import time; scoring with the stub judge needs neither."""
     code = ("import sys, diff_sentry_eval; assert 'diff_sentry' in sys.modules; "
             "assert 'dspy' not in sys.modules; assert 'openai' not in sys.modules; print('ok')")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)

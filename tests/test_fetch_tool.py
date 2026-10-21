@@ -1,10 +1,6 @@
 """The GitHub-allowlisted enrichment fetch (MF2): the exfil-critical guard, tested offline.
 
-The change under classification is attacker-authored, so an injected instruction could try to steer the
-fetcher to a non-GitHub URL to exfiltrate context. These tests pin: only GitHub hosts are reachable,
-every REDIRECT HOP is re-checked against the allowlist AND the DNS-rebinding resolved-IP guard, and the
-byte/redirect caps hold. A fake httpx keeps it offline; `resolved_host_is_safe` is monkeypatched to
-isolate the allowlist vs. the rebinding check.
+The change under classification is attacker-authored, so an injected instruction could try to steer the fetcher to a non-GitHub URL to exfiltrate context. These tests pin: only GitHub hosts are reachable, every REDIRECT HOP is re-checked against the allowlist AND the DNS-rebinding resolved-IP guard, and the byte/redirect caps hold. A fake httpx keeps it offline; `resolved_host_is_safe` is monkeypatched to isolate the allowlist vs. the rebinding check.
 """
 
 from __future__ import annotations

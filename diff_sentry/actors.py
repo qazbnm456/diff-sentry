@@ -1,26 +1,16 @@
 """Host-side actor store: who is behind a change, and what else they did.
 
-A per-change classifier sees one PR. The campaigns worth catching span many: hackerbot-claw hit seven
-repositories in ten days from one account, with one payload host. The defender of each repository saw one
-attempt; a watcher that remembers sees a pattern from the second. This store is that memory, and the source
-of the post-incident dossier (account age, profile, when and where the account acted, in what timezone
-evidence, what it left behind).
+A per-change classifier sees one PR. The campaigns worth catching span many: hackerbot-claw hit seven repositories in ten days from one account, with one payload host. The defender of each repository saw one attempt; a watcher that remembers sees a pattern from the second. This store is that memory, and the source of the post-incident dossier (account age, profile, when and where the account acted, in what timezone evidence, what it left behind).
 
 It is HOST-SIDE plumbing like `ingest` and `emit`: the planner never queries it. Three things leave it:
 
-* `correlate` → plain provenance facts (`actor_repos_24h`, `ioc_reuse`, …) that `indicators.scan_provenance`
-  turns into baseline hits, so cross-event evidence joins the same union as every other hit (MF3) and there
-  is no second signal derivation;
-* `history` → a bounded, host-derived summary the normalizer shows the planner as data (repositories,
-  outcomes, rule names, hours active, and which profile FIELDS changed, never the profile text);
+* `correlate` → plain provenance facts (`actor_repos_24h`, `ioc_reuse`, …) that `indicators.scan_provenance` turns into baseline hits, so cross-event evidence joins the same union as every other hit (MF3) and there is no second signal derivation;
+* `history` → a bounded, host-derived summary the normalizer shows the planner as data (repositories, outcomes, rule names, hours active, and which profile FIELDS changed, never the profile text);
 * `dossier` → the full record, for a human.
 
-Attribution is by who wrote the text. A hit that came from someone else's comment on a change is recorded
-against the commenter (`channel='comment'`), never against the change's author: otherwise a drive-by comment
-would frame a maintainer. The commenter's dossier is also where the slash-command vector shows up.
+Attribution is by who wrote the text. A hit that came from someone else's comment on a change is recorded against the commenter (`channel='comment'`), never against the change's author: otherwise a drive-by comment would frame a maintainer. The commenter's dossier is also where the slash-command vector shows up.
 
-Storage is one SQLite file (stdlib). Only public GitHub facts are kept; emails are reduced to a domain before
-they reach an event. Pure stdlib; no dspy.
+Storage is one SQLite file (stdlib). Only public GitHub facts are kept; emails are reduced to a domain before they reach an event. Pure stdlib; no dspy.
 """
 
 from __future__ import annotations
@@ -73,8 +63,7 @@ _IOC_MIN_SEVERITY = "medium"
 def actor_key(login: str, gh_id: Any = None, *, change: str = "") -> str:
     """The stable identity of an account: its immutable numeric id when known (rename-proof), else the login.
 
-    GitHub's `ghost` is ONE shared identity for every deleted account, so it is not an actor: a `ghost` change
-    keys on the change itself, and two unrelated deleted authors never share a history."""
+    GitHub's `ghost` is ONE shared identity for every deleted account, so it is not an actor: a `ghost` change keys on the change itself, and two unrelated deleted authors never share a history."""
     if (login or "").strip().lower() == "ghost":
         return f"ghost:{change}"
     if isinstance(gh_id, int) and not isinstance(gh_id, bool):
@@ -103,8 +92,7 @@ def _utc(value: Any) -> str | None:
 
 
 def extract_iocs(hits: Iterable[IndicatorHit]) -> list[str]:
-    """Payload infrastructure named by a change's medium-and-up indicators (their evidence and de-obfuscated
-    form), as the tokens `hosts.ioc_of` says are worth linking on.
+    """Payload infrastructure named by a change's medium-and-up indicators (their evidence and de-obfuscated form), as the tokens `hosts.ioc_of` says are worth linking on.
 
     Reads only what the deterministic layer already recorded, never the raw change, and never fetches."""
     found: dict[str, None] = {}
@@ -120,8 +108,7 @@ def extract_iocs(hits: Iterable[IndicatorHit]) -> list[str]:
 
 
 def _longest_quiet_run(hours: list[int]) -> int:
-    """The longest cyclic run of zero-activity hours. A human's account has a night; an unattended agent's
-    does not. Meaningful only with enough events, so callers gate on the total."""
+    """The longest cyclic run of zero-activity hours. A human's account has a night; an unattended agent's does not. Meaningful only with enough events, so callers gate on the total."""
     if not any(hours):
         return 24
     best = run = 0
@@ -132,21 +119,17 @@ def _longest_quiet_run(hours: list[int]) -> int:
 
 
 def _is_own(hit: IndicatorHit, login: str) -> bool:
-    """A hit is the author's own unless it came from ANOTHER account's comment (`IndicatorHit.via`, a structured
-    field set from where the text came from, never parsed out of the free-form `location`)."""
+    """A hit is the author's own unless it came from ANOTHER account's comment (`IndicatorHit.via`, a structured field set from where the text came from, never parsed out of the free-form `location`)."""
     return not hit.via or hit.via.strip().lower() == login.strip().lower()
 
 
-# C0/C1 controls plus the characters that reorder or hide text on a terminal: bidi overrides, embeddings and
-# isolates, the line and paragraph separators, the zero-width space, the word joiner, the byte-order mark, and the
-# tag characters. The joiners and marks that real text needs (ZWJ in an emoji family, ZWNJ, LRM, RLM, ALM) stay.
+# C0/C1 controls plus the characters that reorder or hide text on a terminal: bidi overrides, embeddings and isolates, the line and paragraph separators, the zero-width space, the word joiner, the byte-order mark, and the tag characters. The joiners and marks that real text needs (ZWJ in an emoji family, ZWNJ, LRM, RLM, ALM) stay.
 _PRINTABLE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b\u2028-\u202e\u2060-\u2069\ufeff"
                         "\U000E0000-\U000E007F]")
 
 
 def _clean(text: object) -> str:
-    """Control characters replaced, for text that goes to a terminal: an attacker-influenced string in a dossier
-    must not be able to move the cursor or rewrite earlier lines."""
+    """Control characters replaced, for text that goes to a terminal: an attacker-influenced string in a dossier must not be able to move the cursor or rewrite earlier lines."""
     return _PRINTABLE.sub("?", str(text))
 
 
@@ -182,8 +165,7 @@ class ActorStore:
                 theirs.setdefault(h.via, []).append(h)
         top = max_severity([h.severity for h in own])
         signal = int(at_signal_floor(top))
-        # "Mixed" = a third party wrote floor-level evidence. A sub-floor remark (a stray backtick, a passing
-        # mention of a prompt) must not stop the model's verdict reaching the author's own record.
+        # "Mixed" = a third party wrote floor-level evidence. A sub-floor remark (a stray backtick, a passing mention of a prompt) must not stop the model's verdict reaching the author's own record.
         mixed = any(at_signal_floor(max_severity([h.severity for h in chits])) for chits in theirs.values())
         repo, kind, number = str(event.get("repo") or ""), str(event.get("kind") or ""), event.get("number")
         with self._lock:
@@ -234,9 +216,7 @@ class ActorStore:
 
     def _record_commenter(self, event: dict, run_id: str, login: str, chits: list[IndicatorHit],
                           event_at: str | None, now: str | None) -> None:
-        """A sighting of someone else's comment on this change, against the commenter. Recorded only when the
-        comment reached the signal floor or fired a slash command: the rest (a backtick in prose) is noise that
-        would put every commenter in the store."""
+        """A sighting of someone else's comment on this change, against the commenter. Recorded only when the comment reached the signal floor or fired a slash command: the rest (a backtick in prose) is noise that would put every commenter in the store."""
         top = max_severity([h.severity for h in chits])
         if not (at_signal_floor(top) or any(h.rule == "slash-command-trigger" for h in chits)):
             return
@@ -264,8 +244,7 @@ class ActorStore:
 
     @staticmethod
     def _carrying_comment(event: dict, login: str, chits: list[IndicatorHit]) -> dict:
-        """The comment by `login` that produced these hits (so the sighting carries THAT comment's time), else
-        their first comment on the change."""
+        """The comment by `login` that produced these hits (so the sighting carries THAT comment's time), else their first comment on the change."""
         from .indicators import scan_indicators, scan_metadata
 
         mine = [c for c in event.get("comments") or []
@@ -290,8 +269,7 @@ class ActorStore:
     def finalize(self, run_id: str, *, verdict: str | None, signal: bool, max_severity: str) -> None:
         """Attach the model's outcome to a sighting once the run has finished.
 
-        Attribution follows the evidence. If the change's floor-level evidence is a third party's comment (the
-        author's own hits stayed below the floor), the verdict belongs to that commenter, not to the author."""
+        Attribution follows the evidence. If the change's floor-level evidence is a third party's comment (the author's own hits stayed below the floor), the verdict belongs to that commenter, not to the author."""
         with self._lock:
             row = self._db.execute("SELECT mixed, own_signal FROM sightings WHERE run_id=?", (run_id,)).fetchone()
             if row is not None and row["mixed"] and not row["own_signal"]:
@@ -301,8 +279,7 @@ class ActorStore:
                 if taken:
                     self._db.commit()
                     return
-                # nobody else's sighting exists to carry it (the comment is gone, or its writer could not be
-                # matched): the verdict is not lost, it stays with the change it was made about
+                # nobody else's sighting exists to carry it (the comment is gone, or its writer could not be matched): the verdict is not lost, it stays with the change it was made about
             self._db.execute("UPDATE sightings SET verdict=?, signal=?, max_severity=? WHERE run_id=?",
                              (verdict, int(signal), max_severity, run_id))
             self._db.commit()
@@ -310,8 +287,7 @@ class ActorStore:
     # ── reading ────────────────────────────────────────────────────────────────────────────────────
 
     def correlate(self, event: dict, content_hits: list[IndicatorHit]) -> tuple[dict, list[dict]]:
-        """Cross-event facts about this change's author and payload, for `scan_provenance`, plus the hits an
-        earlier version of this same change raised (`prior_indicators`). Read-only; call it BEFORE `record`."""
+        """Cross-event facts about this change's author and payload, for `scan_provenance`, plus the hits an earlier version of this same change raised (`prior_indicators`). Read-only; call it BEFORE `record`."""
         prov = event.get("provenance") if isinstance(event.get("provenance"), dict) else {}
         key = actor_key(str(prov.get("author_login") or event.get("author") or ""), prov.get("author_id"),
                         change=_change_of(event))
@@ -319,9 +295,7 @@ class ActorStore:
         repo, kind, number = str(event.get("repo") or ""), str(event.get("kind") or ""), event.get("number")
         since = _utc(t - _LOOKBACK)
         login = str(prov.get("author_login") or event.get("author") or "")
-        # What THIS author wrote. Another account's comment is judged (and remembered) against that account:
-        # its payload host must not link the author's next change, and its deletion by a moderator is not the
-        # author removing evidence.
+        # What THIS author wrote. Another account's comment is judged (and remembered) against that account: its payload host must not link the author's next change, and its deletion by a moderator is not the author removing evidence.
         mine = [h for h in content_hits if _is_own(h, login)]
         facts: dict[str, Any] = {}
         prior: dict[str, dict] = {}
@@ -336,8 +310,7 @@ class ActorStore:
             reuse_rows = []
             if iocs:
                 marks = ",".join("?" * len(iocs))
-                # The payload link is EVIDENCE (the same infrastructure used again), so no verdict removes it:
-                # only a prior sighting that reached the signal floor counts, whatever the model said of it.
+                # The payload link is EVIDENCE (the same infrastructure used again), so no verdict removes it: only a prior sighting that reached the signal floor counts, whatever the model said of it.
                 reuse_rows = self._db.execute(
                     f"SELECT DISTINCT i.ioc, s.repo, s.actor_key FROM iocs i JOIN sightings s "
                     f"ON s.run_id=i.run_id WHERE i.ioc IN ({marks}) AND s.signal=1 "
@@ -357,9 +330,7 @@ class ActorStore:
         bad = sorted({r["repo"] for r in others if r["signal"] and r["verdict"] == "malicious"})
         if bad:
             facts["actor_known_bad_repos"] = bad
-        # The account-level flag is an INFERENCE about a person, so a model's `benign` clears it: one false
-        # positive must not taint an account for good. Not over a change that talked to the model, though: that
-        # verdict may be the injection working.
+        # The account-level flag is an INFERENCE about a person, so a model's `benign` clears it: one false positive must not taint an account for good. Not over a change that talked to the model, though: that verdict may be the injection working.
         flagged = sorted({r["repo"] for r in others if r["signal"] and r["verdict"] != "malicious"
                           and self._stands(r)})
         if flagged:
@@ -376,17 +347,14 @@ class ActorStore:
                     held = prior.get(raw["id"])
                     if held is None or severity_rank(raw["severity"]) > severity_rank(held["severity"]):
                         prior[raw["id"]] = raw
-            # "Scrubbed" means the KIND of evidence is gone from where it was, not that its text moved: a
-            # hit is matched by rule and location, so reworded evidence or a flipped association does not
-            # read as an author removing a payload.
+            # "Scrubbed" means the KIND of evidence is gone from where it was, not that its text moved: a hit is matched by rule and location, so reworded evidence or a flipped association does not read as an author removing a payload.
             # ... and by whether that kind is still at the floor there: a payload rewritten to read as prose (the same
             # rule, now `medium`) is as gone, for the signal, as one deleted.
             fresh: dict[tuple[str, str], bool] = {}
             for h in mine:
                 spot = (h.rule, h.location)
                 fresh[spot] = fresh.get(spot, False) or at_signal_floor(h.severity)
-            # Only evidence that could have signalled counts: dropping a `$(pwd)` from prose is an edit, not
-            # a payload removal.
+            # Only evidence that could have signalled counts: dropping a `$(pwd)` from prose is an edit, not a payload removal.
             scrubbed = sorted(h["id"] for h in prior.values()
                               if (not h.get("via") or h["via"].strip().lower() == login.strip().lower())
                               and not fresh.get((h["rule"], h.get("location", "")), False)
@@ -397,13 +365,11 @@ class ActorStore:
 
     @staticmethod
     def _stands(r: sqlite3.Row) -> bool:
-        """Whether an earlier sighting's flag survives its verdict: anything but `benign`, or a `benign` over a
-        change that carried a prompt injection."""
+        """Whether an earlier sighting's flag survives its verdict: anything but `benign`, or a `benign` over a change that carried a prompt injection."""
         return r["verdict"] != "benign" or '"prompt-injection"' in (r["rules_json"] or "")
 
     def history(self, event: dict, *, recent: int = 30, flagged: int = 20) -> dict | None:
-        """A bounded summary of this author's earlier sightings for the planner, or None for a first-timer.
-        Host-derived; rendered as untrusted because the logins and refs inside came from GitHub users."""
+        """A bounded summary of this author's earlier sightings for the planner, or None for a first-timer. Host-derived; rendered as untrusted because the logins and refs inside came from GitHub users."""
         prov = event.get("provenance") if isinstance(event.get("provenance"), dict) else {}
         key = actor_key(str(prov.get("author_login") or event.get("author") or ""), prov.get("author_id"),
                         change=_change_of(event))
@@ -436,8 +402,7 @@ class ActorStore:
 
     @staticmethod
     def _hours(rows: Iterable[sqlite3.Row]) -> list[int]:
-        """Hours of the day (UTC) the account acted, one count per CHANGE at the time of its first sighting,
-        so an edit or a re-check of the same PR does not count as another act."""
+        """Hours of the day (UTC) the account acted, one count per CHANGE at the time of its first sighting, so an edit or a re-check of the same PR does not count as another act."""
         first: dict[tuple, datetime] = {}
         for r in rows:
             dt = _to_dt(r["event_at"])
@@ -462,8 +427,7 @@ class ActorStore:
         return out
 
     def dossier(self, who: str) -> dict | None:
-        """The full record of one account (by login or `id:<n>` key): identity, when and where it acted, the
-        timezone evidence, every change with its outcome, the payload hosts, and how its profile changed."""
+        """The full record of one account (by login or `id:<n>` key): identity, when and where it acted, the timezone evidence, every change with its outcome, the payload hosts, and how its profile changed."""
         with self._lock:
             actor = self._db.execute(
                 "SELECT * FROM actors WHERE key=? OR lower(login)=lower(?) ORDER BY last_seen DESC LIMIT 1",
@@ -497,9 +461,7 @@ class ActorStore:
             "timeline": [{**self._row_view(r), "revision": r["revision"], "head_ref": r["head_ref"],
                           "run_id": r["run_id"], "snapshot": r["snapshot_sha"]} for r in rows],
             "hour_utc": hours,
-            # The hour histogram is built from timestamps GitHub assigned, which no author can edit after the
-            # fact (though the author still chooses WHEN to act). The offsets below are what the commits
-            # CLAIM, since an author sets any date, so they corroborate and never establish anything.
+            # The hour histogram is built from timestamps GitHub assigned, which no author can edit after the fact (though the author still chooses WHEN to act). The offsets below are what the commits CLAIM, since an author sets any date, so they corroborate and never establish anything.
             "longest_quiet_hours": _longest_quiet_run(hours) if sum(hours) >= 30 else None,
             "commit_tz_offsets_claimed": offsets,
             "iocs": [{"ioc": r["ioc"], "repos": (r["repos"] or "").split(",")} for r in iocs],
@@ -507,8 +469,7 @@ class ActorStore:
 
 
 def format_dossier(d: dict) -> str:
-    """A human-readable rendering of `ActorStore.dossier` (times in UTC). Control characters are replaced, so an
-    attacker-influenced string cannot move the cursor or rewrite earlier lines of the terminal."""
+    """A human-readable rendering of `ActorStore.dossier` (times in UTC). Control characters are replaced, so an attacker-influenced string cannot move the cursor or rewrite earlier lines of the terminal."""
     return "\n".join(_clean(line) for line in _format_dossier(d).split("\n"))
 
 

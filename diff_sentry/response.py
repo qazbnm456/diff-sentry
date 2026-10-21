@@ -1,6 +1,4 @@
-"""Build the API-shaped `DetectionResponse` from an assembled verdict + the trace, a read-time
-presentation carrying no new judgement. `build_failed_response` is the crash path (no verdict →
-an informative refusal that still carries whatever deterministic indicators were gathered).
+"""Build the API-shaped `DetectionResponse` from an assembled verdict + the trace, a read-time presentation carrying no new judgement. `build_failed_response` is the crash path (no verdict → an informative refusal that still carries whatever deterministic indicators were gathered).
 
 Pure stdlib + pydantic; no dspy.
 """
@@ -72,10 +70,7 @@ def _process(events: list[dict]) -> ProcessInfo:
 
 
 def _rubric(events: list[dict]) -> RubricReport:
-    """The run's ATLAS TF/TA/TG/PA rubric as a reward-free presentation: join each deterministic
-    `CriterionFact` (from `criteria_facts`) with its skeleton `description`. Pure serialization: adds NO
-    judgement and NO score (mirrors `rl_export.rubric_signal`). Works on a partial/empty trace too, so it
-    is attached on every status (a failed run still has a trajectory worth labelling)."""
+    """The run's ATLAS TF/TA/TG/PA rubric as a reward-free presentation: join each deterministic `CriterionFact` (from `criteria_facts`) with its skeleton `description`. Pure serialization: adds NO judgement and NO score (mirrors `rl_export.rubric_signal`). Works on a partial/empty trace too, so it is attached on every status (a failed run still has a trajectory worth labelling)."""
     skel = {c.name: c for c in (rubric_from_meta(events).criteria or default_rubric().criteria)}
     criteria = [
         RubricCriterionView(
@@ -91,18 +86,13 @@ def _rubric(events: list[dict]) -> RubricReport:
 
 
 def _has_groundable_content(events: list[dict]) -> bool:
-    """Whether the run's normalized change carried real untrusted content, read from the `event` string
-    in run_start meta. Absent/unparseable → True, so a normal run is never mis-downgraded."""
+    """Whether the run's normalized change carried real untrusted content, read from the `event` string in run_start meta. Absent/unparseable → True, so a normal run is never mis-downgraded."""
     ev = _meta(events).get("event")
     return has_groundable_content(ev) if isinstance(ev, str) else True
 
 
 def _resolve_outcome(assembled: AssembledVerdict, events: list[dict]) -> tuple[str, str, str]:
-    """The response status for a FINALIZED run + the refusal (reason, detail) when it is not `classified`.
-    A finalized run is `classified` UNLESS the planner submitted an empty verdict, submitted the
-    sanctioned `inconclusive` outcome, OR the normalized change carried NO groundable content, in which
-    case a confident verdict is DOWNGRADED to inconclusive (defense-in-depth: an ungroundable input must
-    never ship a confident verdict)."""
+    """The response status for a FINALIZED run + the refusal (reason, detail) when it is not `classified`. A finalized run is `classified` UNLESS the planner submitted an empty verdict, submitted the sanctioned `inconclusive` outcome, OR the normalized change carried NO groundable content, in which case a confident verdict is DOWNGRADED to inconclusive (defense-in-depth: an ungroundable input must never ship a confident verdict)."""
     verdict = (assembled.verdict or "").strip().lower()
     if not verdict:
         return "inconclusive", "inconclusive", "The run finalized without a usable verdict."
@@ -150,8 +140,7 @@ def build_response(assembled: AssembledVerdict, events: list[dict], run_id: str)
 
 
 def _floor_signal(events: list[dict]):
-    """The evidence-only signal both no-verdict paths share: every hit in the trace, the highest severity,
-    and whether it reaches the floor. One derivation, so the crash path and the screen path cannot diverge."""
+    """The evidence-only signal both no-verdict paths share: every hit in the trace, the highest severity, and whether it reaches the floor. One derivation, so the crash path and the screen path cannot diverge."""
     from .schema import at_signal_floor, floor_severity, max_severity
 
     hits = hits_from_events(events)
@@ -160,9 +149,7 @@ def _floor_signal(events: list[dict]):
 
 
 def build_screened_response(run_id: str, events: list[dict]) -> DetectionResponse:
-    """The deterministic SCREEN of a change the model has not judged (yet): the baseline evidence and the
-    floor-derived signal, with `status="inconclusive"` and `reason="not_escalated"`. It is the early alert a
-    watcher can raise while the change waits in the model queue, and the standing record if it is never run."""
+    """The deterministic SCREEN of a change the model has not judged (yet): the baseline evidence and the floor-derived signal, with `status="inconclusive"` and `reason="not_escalated"`. It is the early alert a watcher can raise while the change waits in the model queue, and the standing record if it is never run."""
     hits, top, floor, signal = _floor_signal(events)
     return DetectionResponse(
         id=run_id, status="inconclusive", model=_models(events), source=_source(events),
@@ -175,8 +162,7 @@ def build_screened_response(run_id: str, events: list[dict]) -> DetectionRespons
 
 def build_failed_response(run_id: str, events: list[dict], detail: str, *, reason: str = "run_failed"
                           ) -> DetectionResponse:
-    """The crash path (or a trace with no result event): no verdict, but still carries the deterministic indicators gathered and
-    the derived signal (a run that crashed AFTER a critical indicator fired must STILL be able to alert)."""
+    """The crash path (or a trace with no result event): no verdict, but still carries the deterministic indicators gathered and the derived signal (a run that crashed AFTER a critical indicator fired must STILL be able to alert)."""
     hits, top, floor, signal = _floor_signal(events)
     return DetectionResponse(
         id=run_id, status="failed", model=_models(events), source=_source(events),

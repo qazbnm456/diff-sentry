@@ -1,44 +1,15 @@
 """A conservative, linear-time lexer for shell quoting: what is still open where each line of a text begins?
 
-A download piped into a shell, written in a document, is only a documented installer when no shell construct opened EARLIER
-swallows it as data: the quoted argument of a wrapper (`ssh evil.example '` with the download on the next line, `docker run x sh -c
-'…`), a here-document, a command or process substitution, `${…}`, backticks. Whether one is open is a question about the
-shell's lexer, which depends on the context it is in (Régis-Gianas, Jeannerod and Treinen, "Morbig: A Static Parser for POSIX
-Shell", SLE 2018) and so cannot be answered by counting quotes per line or by a regular expression. This module runs one pass
-with an explicit stack of the open constructs and a queue of pending here-documents (the two ideas Morbig and mvdan/sh share),
-jumping over plain text with precompiled character classes, so the work is linear in the text.
+A download piped into a shell, written in a document, is only a documented installer when no shell construct opened EARLIER swallows it as data: the quoted argument of a wrapper (`ssh evil.example '` with the download on the next line, `docker run x sh -c '…`), a here-document, a command or process substitution, `${…}`, backticks. Whether one is open is a question about the shell's lexer, which depends on the context it is in (Régis-Gianas, Jeannerod and Treinen, "Morbig: A Static Parser for POSIX Shell", SLE 2018) and so cannot be answered by counting quotes per line or by a regular expression. This module runs one pass with an explicit stack of the open constructs and a queue of pending here-documents (the two ideas Morbig and mvdan/sh share), jumping over plain text with precompiled character classes, so the work is linear in the text.
 
 `line_states` gives, for every line, a `State(openers, unknown)`:
 
-* `openers`: the constructs open where the line begins, outermost first. Each knows where it began and where the simple
-  command that holds it began, so the caller can ask whether that command is a wrapper (`ssh`, `docker run`, `sh -c`). (The
-  command of `coproc ssh h '` begins at `ssh`: the NAME of a coproc is the program of a simple command, or a name before a compound
-  command, and the command may begin at either.)
-* `unknown`: the text before the line holds something this lexer does not decide, because bash and dash (or two readings of
-  it) disagree or because deciding needs a parser: `$'…\\'…'`; a quote in `$((…))`, or in `${…}` inside double quotes; `${name:` (the name may be
-  digits or a special parameter) followed by `}` or by a quote, a backtick or a backslash (a substring offset is arithmetic to bash, and dash
-  reads a quote there as a string and the `}` of `${a:}` as its operator); `$'…'` in `$((…))` or `${…}`; a `${` that no parameter name follows
-  (`${'a'}`, `${\\a}`, `${#'a'}`; a workflow expression `${{ x }}` is a word); a `(` or `)` in a `${…}` inside `$((…))`; `$[ … ]`; `$${`, and `$$(` in a `${a:…}` (dash reads a `$` and the expansion `${` or the parenthesis where bash reads the process id and a brace or a parenthesis, in some contexts: undecided in all); a `((`
-  where a command can begin (after a separator, a reserved word, `time -p`, the NAME of `function`/`coproc`/`for`/`select`, `=`, `)` or
-  `for`), and `<((`; a line continuation inside a two-character token (`$` and `(`, `<` and `<`, `)` and `)`), or inside a word in `$(` or
-  `<(` (`ca\\⏎se`), or one that cuts a keyword of the grammar (`th\\⏎en`, `ca\\⏎se`, `do\\⏎ne`, `time -\\⏎-`) or a name that a `[` follows, or sits in `extglob`, `[[`, `=~`,
-  `((`, `=(`; an assignment subscript (`a[`, `a=( [1`) that is not a plain `[…]` on its line (quotes and `$name` are plain; `)`, `;` and
-  `$(` are not); `$((echo a); (echo b))`; `case` anywhere inside `(`, `$(`, `<(` or `name=(`; `[[ … =~ … ]]`; an extended glob once `extglob` has been read; a
-  `(` that follows a word inside a substitution (outside one it is a syntax error to every shell but bash inside `[[ … ]]`, where it groups a test, and opens nothing here, so `[a](#b)` and
-  ``Fix `x` (#1)`` lines pile up no subshells; the `)` of such a paren ends no case pattern); a here-document whose line also holds `$(`,
-  `<(` or `(` (in double quotes too: `<<E "$(a`), that a substitution closes on its own line, whose delimiter it cannot read (or has a quote across a newline), or whose unquoted body continues a line with a backslash or opens a
-  construct past its line; a nested backtick substitution, or a backtick body with two backslashes in front of a quote or a `$`; nesting
-  deeper than `MAX_DEPTH`. It stays set to the end of the text, except for what a backtick body that closes and holds no quote leaves undecided
-  when nothing is open around it (an inline code span such as `list[str | Enum]`): that is undecided for the lines of the body only. A caller
-  that counts it (`indicators._enclosing_lines`) does so on the lines after the first line, at or after the one that raised it, on which a command may begin like a wrapper's: it may only make a verdict more severe. `comments=False` reads a `#` as an ordinary character, as a zsh does in
-  a terminal. A `#` after the `)` that ends a case pattern begins a comment.
+* `openers`: the constructs open where the line begins, outermost first. Each knows where it began and where the simple command that holds it began, so the caller can ask whether that command is a wrapper (`ssh`, `docker run`, `sh -c`). (The command of `coproc ssh h '` begins at `ssh`: the NAME of a coproc is the program of a simple command, or a name before a compound command, and the command may begin at either.)
+* `unknown`: the text before the line holds something this lexer does not decide, because bash and dash (or two readings of it) disagree or because deciding needs a parser: `$'…\\'…'`; a quote in `$((…))`, or in `${…}` inside double quotes; `${name:` (the name may be digits or a special parameter) followed by `}` or by a quote, a backtick or a backslash (a substring offset is arithmetic to bash, and dash reads a quote there as a string and the `}` of `${a:}` as its operator); `$'…'` in `$((…))` or `${…}`; a `${` that no parameter name follows (`${'a'}`, `${\\a}`, `${#'a'}`; a workflow expression `${{ x }}` is a word); a `(` or `)` in a `${…}` inside `$((…))`; `$[ … ]`; `$${`, and `$$(` in a `${a:…}` (dash reads a `$` and the expansion `${` or the parenthesis where bash reads the process id and a brace or a parenthesis, in some contexts: undecided in all); a `((` where a command can begin (after a separator, a reserved word, `time -p`, the NAME of `function`/`coproc`/`for`/`select`, `=`, `)` or `for`), and `<((`; a line continuation inside a two-character token (`$` and `(`, `<` and `<`, `)` and `)`), or inside a word in `$(` or `<(` (`ca\\⏎se`), or one that cuts a keyword of the grammar (`th\\⏎en`, `ca\\⏎se`, `do\\⏎ne`, `time -\\⏎-`) or a name that a `[` follows, or sits in `extglob`, `[[`, `=~`, `((`, `=(`; an assignment subscript (`a[`, `a=( [1`) that is not a plain `[…]` on its line (quotes and `$name` are plain; `)`, `;` and `$(` are not); `$((echo a); (echo b))`; `case` anywhere inside `(`, `$(`, `<(` or `name=(`; `[[ … =~ … ]]`; an extended glob once `extglob` has been read; a `(` that follows a word inside a substitution (outside one it is a syntax error to every shell but bash inside `[[ … ]]`, where it groups a test, and opens nothing here, so `[a](#b)` and ``Fix `x` (#1)`` lines pile up no subshells; the `)` of such a paren ends no case pattern); a here-document whose line also holds `$(`, `<(` or `(` (in double quotes too: `<<E "$(a`), that a substitution closes on its own line, whose delimiter it cannot read (or has a quote across a newline), or whose unquoted body continues a line with a backslash or opens a construct past its line; a nested backtick substitution, or a backtick body with two backslashes in front of a quote or a `$`; nesting deeper than `MAX_DEPTH`. It stays set to the end of the text, except for what a backtick body that closes and holds no quote leaves undecided when nothing is open around it (an inline code span such as `list[str | Enum]`): that is undecided for the lines of the body only. A caller that counts it (`indicators._enclosing_lines`) does so on the lines after the first line, at or after the one that raised it, on which a command may begin like a wrapper's: it may only make a verdict more severe. `comments=False` reads a `#` as an ordinary character, as a zsh does in a terminal. A `#` after the `)` that ends a case pattern begins a comment.
 
-`line_states(text, probes=offsets)` also answers where each offset stands (`Lexed.probed`: a `Probe` with the constructs open before that
-character, where its simple command began, the `#` of the comment it is in, and whether something undecided came before it); the caller asks
-about the words of a single line.
+`line_states(text, probes=offsets)` also answers where each offset stands (`Lexed.probed`: a `Probe` with the constructs open before that character, where its simple command began, the `#` of the comment it is in, and whether something undecided came before it); the caller asks about the words of a single line.
 
-A text starts at the top level unless the caller says it starts inside a construct. `tests/test_oracle.py` (opt-in) checks the
-lexer against `bash -n` and `dash -n`.
+A text starts at the top level unless the caller says it starts inside a construct. `tests/test_oracle.py` (opt-in) checks the lexer against `bash -n` and `dash -n`.
 """
 from __future__ import annotations
 
@@ -58,17 +29,14 @@ _BQ_BACKSLASHES = re.compile(r"(?<!\\)\\{2,}['\"$]")         # from the start of
 _BLANKS = " \t"
 _CONTINUATION = "\\\n"
 _EXTGLOB = "@!+*?"
-# What may follow `${`: a parameter name or a special parameter, with `#` (length) or `!` (indirection) in front, and then `}`, an operator or
-# a dot (`${var.ami}`, `${project.version}`: Terraform, Maven and JavaScript spell it so; the shells close it at the `}`).
+# What may follow `${`: a parameter name or a special parameter, with `#` (length) or `!` (indirection) in front, and then `}`, an operator or a dot (`${var.ami}`, `${project.version}`: Terraform, Maven and JavaScript spell it so; the shells close it at the `}`).
 # Anything else (a quote, a backslash, `$(`, a blank, a second `$`) is read differently by bash and dash.
 _SUBSCRIPT = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*\[")         # `a[`: bash reads on to the matching `]`, through newlines
 _SUBSCRIPT_PIECE = r"""[^\[\]();|&<>`$\\#\n'"]|\$(?=[A-Za-z_])|'[^'\n]*'|"[^"\n$`\\]*\""""
 _PLAIN_SUBSCRIPT = re.compile(rf"\[(?:{_SUBSCRIPT_PIECE}|\[(?:{_SUBSCRIPT_PIECE})*\])*\]")        # `[1]`, `["name"]`, `[$i]`, `[b[0]]`
 _SUBSTRING_RISK = re.compile(r"[#!]?(?:(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+)|[@*?$!#-]):(?:\}|(?![-=?+])[^}\n]{0,200}['\"`\\])")       # `${a:'x'}`: a substring offset is arithmetic to bash, and dash reads a quote there as a string; `${a:}`: dash takes the `}` for its operator
 _PARAM_START = re.compile(r"[#!]?(?:(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+)|[@*?$!#-])(?=[}:#%/^,@\[=+?*.-])")
-# `${{ secrets.X }}`, `${{ github.ref == 'refs/heads/main' }}`: a workflow expression, read as a word when it ends on its line, holds no double
-# quote and no `}}` inside a single-quoted string (bash closes the parameter at the first `}`, dash calls it a bad substitution; neither leaves
-# anything open).
+# `${{ secrets.X }}`, `${{ github.ref == 'refs/heads/main' }}`: a workflow expression, read as a word when it ends on its line, holds no double quote and no `}}` inside a single-quoted string (bash closes the parameter at the first `}`, dash calls it a bad substitution; neither leaves anything open).
 _EXPRESSION = re.compile(r"\$\{\{(?:(?![<>]\(|<<)[^'\"}\n\\`$]|\}(?!\})|'(?:[^'\"}\n\\`$]|\}(?!\}))*')*\}\}")
 
 
@@ -120,9 +88,7 @@ def _names_a_compound(text: str, k: int) -> bool:
 
 
 def _stray_paren(text: str, i: int) -> bool:
-    """Whether the `(` at `i`, which is not where a command begins, follows a word (`f(x)`, `[a](#b)`, `foo (bar)`): a syntax error to
-    every shell (bash alone groups a test so in `[[ ( a == b ) ]]`, where the pair holds no quote state either way), which ends the command there. A function body (`f()`, `f ( )`), a case pattern (`case x in (a)`) and the compound command
-    that follows the NAME of a coproc or a function are no such paren, and neither is the paren of an extended glob group."""
+    """Whether the `(` at `i`, which is not where a command begins, follows a word (`f(x)`, `[a](#b)`, `foo (bar)`): a syntax error to every shell (bash alone groups a test so in `[[ ( a == b ) ]]`, where the pair holds no quote state either way), which ends the command there. A function body (`f()`, `f ( )`), a case pattern (`case x in (a)`) and the compound command that follows the NAME of a coproc or a function are no such paren, and neither is the paren of an extended glob group."""
     k = _blank_back(text, i)
     if not text[k - 1:k] or text[k - 1:k] in _NOT_A_WORD_END or (text[k - 1:k] in _EXTGLOB and not text[k:i].replace(_CONTINUATION, "")):
         return False                                # an operator or an opener in front of the paren: a command (or an extglob group) may begin
@@ -139,9 +105,7 @@ _EXTGLOB_GROUP_MAX = 200       # a longer group is undecided
 
 
 def _extglob_group_may_differ(text: str, i: int) -> bool:
-    """Whether the `(` at `i`, glued to one of `@!+*?`, is read differently by a bash that has `extglob` on (the group is a pattern then, and the word goes
-    on after its `)`) in a way that moves a quote: the group holds more than plain pattern characters (a newline is none), is not closed within
-    `_EXTGLOB_GROUP_MAX` characters (the search is bounded, so a run of `+(` costs a constant each), or a `#` follows it.
+    """Whether the `(` at `i`, glued to one of `@!+*?`, is read differently by a bash that has `extglob` on (the group is a pattern then, and the word goes on after its `)`) in a way that moves a quote: the group holds more than plain pattern characters (a newline is none), is not closed within `_EXTGLOB_GROUP_MAX` characters (the search is bounded, so a run of `+(` costs a constant each), or a `#` follows it.
     The option is the shell's, not the text's (`shopt -s extglob` may be in another block, spelled with quotes, or set by a startup file)."""
     close = text.find(")", i, i + _EXTGLOB_GROUP_MAX)
     return close == -1 or text[close + 1:close + 2] == "#" or _EXTGLOB_PLAIN_BODY.fullmatch(text, i + 1, close) is None
@@ -162,9 +126,7 @@ def _is_word_char(ch: str) -> bool:
 
 
 def _splits_a_word(text: str, i: int, after: int) -> bool:
-    """Whether the run of line continuations that begins at `i` and ends at `after` cuts a word whose whole is read differently from its halves:
-    a keyword (`th\\⏎en`, `fu\\⏎nction`, `time -\\⏎-`: the word after it is at a command position; `ca\\⏎se`, `do\\⏎ne`, and a word cut more than once,
-    `c\\⏎a\\⏎se`) or an identifier that a `[` follows (`a\\⏎1a[`, `a\\⏎[1`: the joined name opens an assignment subscript)."""
+    """Whether the run of line continuations that begins at `i` and ends at `after` cuts a word whose whole is read differently from its halves: a keyword (`th\\⏎en`, `fu\\⏎nction`, `time -\\⏎-`: the word after it is at a command position; `ca\\⏎se`, `do\\⏎ne`, and a word cut more than once, `c\\⏎a\\⏎se`) or an identifier that a `[` follows (`a\\⏎1a[`, `a\\⏎[1`: the joined name opens an assignment subscript)."""
     if not (i and _is_word_char(text[i - 1])):
         return False
     start, steps = i, 0
@@ -193,9 +155,7 @@ _COMMANDS = ("TOP", "CMD", "PROC", "SUB", "ARRAY", "BQ")        # the contexts i
 
 @dataclass(frozen=True, slots=True)
 class Opener:
-    """An open construct. `kind` is SQ, DQ, ANSI, BQ, CMD, PROC, SUB, ARRAY (`a=(`), ARITH, PARAM, HEREDOC or BODY (the text of an unquoted
-    here-document, which dash reads as if in double quotes); `offset` is where it began; `command_at` is where the simple command that holds
-    it began."""
+    """An open construct. `kind` is SQ, DQ, ANSI, BQ, CMD, PROC, SUB, ARRAY (`a=(`), ARITH, PARAM, HEREDOC or BODY (the text of an unquoted here-document, which dash reads as if in double quotes); `offset` is where it began; `command_at` is where the simple command that holds it began."""
     kind: str
     offset: int
     command_at: int
@@ -209,9 +169,7 @@ class State:
 
 @dataclass(frozen=True, slots=True)
 class Probe:
-    """Where an offset of the text stands, as the shell reads it up to that character: the constructs open there (outermost first), where
-    the simple command that holds it began, the offset of the `#` that begins the comment it is in (-1: it is in none), and whether
-    something undecided was seen before it."""
+    """Where an offset of the text stands, as the shell reads it up to that character: the constructs open there (outermost first), where the simple command that holds it began, the offset of the `#` that begins the comment it is in (-1: it is in none), and whether something undecided was seen before it."""
     openers: tuple[Opener, ...]
     command_at: int
     comment_at: int
@@ -219,9 +177,7 @@ class Probe:
 
 
 class Lexed(list):
-    """The states, one per line, and `closed`: the constructs that began on one line and ended on a later one, each with the
-    line it ended on. (A string a wrapper opened and the shell closed again is no longer open, but the text is a script that ran
-    the wrapper, and a caller may want to know.) `probed` answers the offsets that `line_states` was asked about."""
+    """The states, one per line, and `closed`: the constructs that began on one line and ended on a later one, each with the line it ended on. (A string a wrapper opened and the shell closed again is no longer open, but the text is a script that ran the wrapper, and a caller may want to know.) `probed` answers the offsets that `line_states` was asked about."""
 
     closed: list[tuple[int, Opener]]
     unknown_at_end: bool        # `unknown` after the last character: it may have been set on the last line, which no state shows
@@ -230,13 +186,7 @@ class Lexed(list):
 
 def line_states(text: str, start: tuple[Opener, ...] = (), base: int = 0, unknown_before: bool = False, comments: bool = True,
                 probes: tuple[int, ...] = ()) -> Lexed:
-    """The state where each line begins: one entry per line, so `text.count("\\n") + 1` of them. `base` is where `text` begins in the
-    text it was cut from (the body of a backtick substitution is read as a text of its own, and inherits `unknown`). `comments=False` reads a
-    `#` as an ordinary character, as a zsh does in a terminal (its `interactive_comments` is off by default). `probes` are offsets (of
-    `text`, in any order) whose `Probe` is wanted in `Lexed.probed`: the state before that character is read, or inside the comment it is
-    part of. A probe inside a here-document body gets the state of the line that opened it (the body's own `HEREDOC` is in the states of its lines, not in a
-    probe); one inside the body of a backtick substitution gets the exact state there, the substitution's opener below the constructs that the body opens
-    (the caller probes single lines)."""
+    """The state where each line begins: one entry per line, so `text.count("\\n") + 1` of them. `base` is where `text` begins in the text it was cut from (the body of a backtick substitution is read as a text of its own, and inherits `unknown`). `comments=False` reads a `#` as an ordinary character, as a zsh does in a terminal (its `interactive_comments` is off by default). `probes` are offsets (of `text`, in any order) whose `Probe` is wanted in `Lexed.probed`: the state before that character is read, or inside the comment it is part of. A probe inside a here-document body gets the state of the line that opened it (the body's own `HEREDOC` is in the states of its lines, not in a probe); one inside the body of a backtick substitution gets the exact state there, the substitution's opener below the constructs that the body opens (the caller probes single lines)."""
     stack: list[Opener] = list(start)
     arith: list[int] = [0] * sum(1 for o in stack if o.kind == "ARITH")     # open inner parentheses of each ARITH
     pending: list[tuple[str, bool, int, int, bool]] = []    # here-documents whose body follows: delimiter, <<-, offset, command, quoted
@@ -316,8 +266,7 @@ def line_states(text: str, start: tuple[Opener, ...] = (), base: int = 0, unknow
         return opener
 
     def backtick(at: int) -> int:
-        """Read the substitution whose backtick is at `at`: the shell cuts its body at the first backtick that is not escaped and
-        then reads the body as commands, so the lines inside it begin in whatever the body has open. Returns where to go on."""
+        """Read the substitution whose backtick is at `at`: the shell cuts its body at the first backtick that is not escaped and then reads the body as commands, so the lines inside it begin in whatever the body has open. Returns where to go on."""
         nonlocal unknown, nxt
         j = at + 1
         while True:
@@ -350,8 +299,7 @@ def line_states(text: str, start: tuple[Opener, ...] = (), base: int = 0, unknow
         states.closed.extend((here + line, o) for line, o in inner.closed)
         if end >= n or stack or "'" in text[at + 1:end] or '"' in text[at + 1:end]:
             unknown = unknown or inner.unknown_at_end
-        # (otherwise the body is read apart from the text around it, and cut at its closing backtick: with no quote in it and nothing open around
-        # it, what it leaves undecided (`a[1`, `${ x; }`) is undecided for its own lines and for no other)
+        # (otherwise the body is read apart from the text around it, and cut at its closing backtick: with no quote in it and nothing open around it, what it leaves undecided (`a[1`, `${ x; }`) is undecided for its own lines and for no other)
         if end < n:
             if len(states) - 1 > here:
                 states.closed.append((len(states) - 1, opener))
@@ -687,10 +635,7 @@ def line_states(text: str, start: tuple[Opener, ...] = (), base: int = 0, unknow
 
 def _bodies(text: str, i: int, pending: list, snap, states: list, base: int, in_substitution: bool) -> tuple[int, bool, bool]:
     """Read the bodies of the here-documents whose `<<` came on the line that just ended, each line up to its delimiter.
-    Every line of a body begins in the enclosing state plus a HEREDOC opener (the delimiter line is one: it ends the body).
-    Returns the offset after the last body, whether something undecidable was seen (an unquoted body joins lines through a
-    backslash-newline, or opens a construct that runs past the line, and bash and dash differ) and whether a line follows the last
-    delimiter, which the caller records."""
+    Every line of a body begins in the enclosing state plus a HEREDOC opener (the delimiter line is one: it ends the body). Returns the offset after the last body, whether something undecidable was seen (an unquoted body joins lines through a backslash-newline, or opens a construct that runs past the line, and bash and dash differ) and whether a line follows the last delimiter, which the caller records."""
     n = len(text)
     unknown = False
     for delim, strip, at, cmd, quoted in pending:
@@ -718,8 +663,7 @@ def _bodies(text: str, i: int, pending: list, snap, states: list, base: int, in_
 
 
 def _opens_across_lines(line: str) -> bool:
-    """Whether a line of an unquoted here-document body starts a `$(`, `${` or backtick that it does not close. dash reads such a body
-    as if it were in double quotes, at parse time, so the construct runs on past a line that bash takes for the delimiter."""
+    """Whether a line of an unquoted here-document body starts a `$(`, `${` or backtick that it does not close. dash reads such a body as if it were in double quotes, at parse time, so the construct runs on past a line that bash takes for the delimiter."""
     lexed = line_states(line + "\n", (Opener("BODY", -1, -1),))
     return lexed.unknown_at_end or len(lexed[1].openers) != 1
 

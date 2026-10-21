@@ -1,9 +1,6 @@
-"""The ingest's forensic capture: event timestamps, the account's absolute creation time and its age AS OF
-the event, profile facts, the head fork, the branch name, the comment thread, and commit UTC offsets.
+"""The ingest's forensic capture: event timestamps, the account's absolute creation time and its age AS OF the event, profile facts, the head fork, the branch name, the comment thread, and commit UTC offsets.
 
-These are the facts an attack-chain reconstruction needs ("when did the account appear, when did it act,
-from where, in what timezone evidence"), so each is pinned here. Everything is host-side and best-effort:
-a failed enrichment call omits its keys and never sinks the ingest."""
+These are the facts an attack-chain reconstruction needs ("when did the account appear, when did it act, from where, in what timezone evidence"), so each is pinned here. Everything is host-side and best-effort: a failed enrichment call omits its keys and never sinks the ingest."""
 
 from __future__ import annotations
 
@@ -87,8 +84,7 @@ def test_pr_event_records_the_event_timeline_and_head_fork():
 
 
 def test_account_age_is_measured_as_of_the_event_not_today():
-    # The account was created 2026-02-20 and struck 2026-02-27: 7 days old THEN, whatever today is. A replay
-    # of an old incident must see the account as it was, or every old attacker looks established.
+    # The account was created 2026-02-20 and struck 2026-02-27: 7 days old THEN, whatever today is. A replay of an old incident must see the account as it was, or every old attacker looks established.
     prov = pr_event("acme/widgets", 7, api=_api(user=_USER))["provenance"]
     assert prov["author_account_age_days"] == 7
     assert prov["author_account_created_at"] == "2026-02-20T00:00:00Z"

@@ -1,10 +1,6 @@
-"""Runs INSIDE the container (stdlib only). Reads a JSON list of command texts on stdin and, for each, reports what a real
-`bash` and a real `dash` did with it: whether the downloaded script ran (unmodified), what was fetched, what else was called.
+"""Runs INSIDE the container (stdlib only). Reads a JSON list of command texts on stdin and, for each, reports what a real `bash` and a real `dash` did with it: whether the downloaded script ran (unmodified), what was fetched, what else was called.
 
-The stubs: `curl`/`wget` log their arguments and proxy variables and print a script that logs a fixed marker line when a shell
-(or an interpreter, for `python3 -`) runs it; `nc`, `evil`, `docker`, ... only log that they were called; files a payload might
-name (`./evil`, `evil.sh`, `x.sh`) are planted in the working directory and log too. The stubs are restored before every run,
-because a candidate may delete them."""
+The stubs: `curl`/`wget` log their arguments and proxy variables and print a script that logs a fixed marker line when a shell (or an interpreter, for `python3 -`) runs it; `nc`, `evil`, `docker`, ... only log that they were called; files a payload might name (`./evil`, `evil.sh`, `x.sh`) are planted in the working directory and log too. The stubs are restored before every run, because a candidate may delete them."""
 import json
 import os
 import pathlib
@@ -31,8 +27,7 @@ done
 exec "$@"
 '''
 SU = '#!/bin/sh\nwhile [ $# -gt 0 ]; do case "$1" in -c) shift; exec sh -c "$1";; *) shift;; esac; done\n'
-# An interpreter: a program from stdin (or /dev/fd) is "the downloaded script ran" when it holds the marker; its own code
-# (-c, -e, a file) is something else.
+# An interpreter: a program from stdin (or /dev/fd) is "the downloaded script ran" when it holds the marker; its own code (-c, -e, a file) is something else.
 INTERP = f'''#!/bin/sh
 src=stdin
 while [ $# -gt 0 ]; do

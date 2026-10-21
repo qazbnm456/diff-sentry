@@ -1,8 +1,4 @@
-/* Contract tests for the trajectory drawer FACTORY (run: `node tests/trajectory.test.js`). trajectory.js
-   is a DOM factory, not a pure core, so we stub a minimal DOM and assert the dependency-injection
-   contract: building it runs every create/wiring path without a ReferenceError (a missing injected dep
-   would throw here, which app.js's node --check cannot catch), the facade shape is stable, and the live
-   getRunId/isBusy getters are actually consulted. Same tiny assert harness as run-core.test.js. */
+/* Contract tests for the trajectory drawer FACTORY (run: `node tests/trajectory.test.js`). trajectory.js is a DOM factory, not a pure core, so we stub a minimal DOM and assert the dependency-injection contract: building it runs every create/wiring path without a ReferenceError (a missing injected dep would throw here, which app.js's node --check cannot catch), the facade shape is stable, and the live getRunId/isBusy getters are actually consulted. Same tiny assert harness as run-core.test.js. */
 "use strict";
 const assert = require("assert");
 

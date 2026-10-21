@@ -1,17 +1,12 @@
 name: CI
 
-# Offline suite only: no live LLM, no network calls in tests, no Deno sandbox: dspy-bearing paths use
-# DummyLM / rlm-harness's ScriptedInterpreter, transports are injected fakes, and the corpus pins the
-# indicator suite's hit/miss behavior (see AGENTS.md "Verify"). `uv sync` resolves rlm-harness from PyPI
-# at the exact version pinned in pyproject.toml / uv.lock.
+# Offline suite only: no live LLM, no network calls in tests, no Deno sandbox: dspy-bearing paths use DummyLM / rlm-harness's ScriptedInterpreter, transports are injected fakes, and the corpus pins the indicator suite's hit/miss behavior (see AGENTS.md "Verify"). `uv sync` resolves rlm-harness from PyPI at the exact version pinned in pyproject.toml / uv.lock.
 on:
   push:
     branches: [main]
   pull_request:
 
-# Least privilege: this workflow only checks out code and runs tests/lint; it never writes. Specifying
-# `permissions:` also drops every unlisted scope to `none`, so a compromised dep/action on an untrusted
-# fork PR can't use the token to push, tag, or open issues.
+# Least privilege: this workflow only checks out code and runs tests/lint; it never writes. Specifying `permissions:` also drops every unlisted scope to `none`, so a compromised dep/action on an untrusted fork PR can't use the token to push, tag, or open issues.
 permissions:
   contents: read
 
@@ -32,9 +27,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install uv
-        # Third-party action pinned to a commit SHA for supply-chain integrity (a moving major tag
-        # could be repointed at malicious code that runs with this workflow's token). GitHub-owned
-        # actions (checkout) stay on a major tag. Bump the SHA and the trailing version comment together.
+        # Third-party action pinned to a commit SHA for supply-chain integrity (a moving major tag could be repointed at malicious code that runs with this workflow's token). GitHub-owned actions (checkout) stay on a major tag. Bump the SHA and the trailing version comment together.
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
@@ -50,27 +43,18 @@ jobs:
       - name: Studio console tests
         run: uv run --python ${{ matrix.python-version }} python -m pytest studio/tests
 
-      # The eval workspace member (diff-sentry-eval) has its OWN offline suite: the reward-free ATLAS
-      # scorecard, stub judge, synthetic traces, no creds.
+      # The eval workspace member (diff-sentry-eval) has its OWN offline suite: the reward-free ATLAS scorecard, stub judge, synthetic traces, no creds.
       - name: Eval scorecard tests
         run: uv run --package diff-sentry-eval --python ${{ matrix.python-version }} python -m pytest eval/tests
 
-      # The studio frontend's pure/factory cores (run-core, replay-core, trajectory) carry assert-based
-      # node tests; the ubuntu runner ships node, so gate them here too.
+      # The studio frontend's pure/factory cores (run-core, replay-core, trajectory) carry assert-based node tests; the ubuntu runner ships node, so gate them here too.
       - name: Frontend core unit tests (node)
         run: |
           for f in studio/tests/*.test.js; do echo "▸ $f"; node "$f"; done
 
-  # Dogfood: this repo's own CI runs the ACTION this repo publishes (`uses: ./`), not a copy of it.
-  # So every PR here is also an integration test of the thing users install: a drifted action.yml
-  # fails our own build before it reaches anyone's Marketplace install.
+  # Dogfood: this repo's own CI runs the ACTION this repo publishes (`uses: ./`), not a copy of it. So every PR here is also an integration test of the thing users install: a drifted action.yml fails our own build before it reaches anyone's Marketplace install.
   #
-  # DELIBERATELY the deterministic scan and not the full `classify` pipeline. `classify` needs DS_*
-  # model creds, and the only mechanism that hands creds to a fork PR's run is `pull_request_target`,
-  # precisely the misconfiguration that opened the AsyncAPI "Miasma" compromise. The scan needs no
-  # creds, no network and no Deno, so it runs under this workflow's read-only `contents: read` token.
-  # NO fork guard here, also deliberately: the job is read-only with no side effects outside its own
-  # repo, so a fork running it is correct and useful.
+  # DELIBERATELY the deterministic scan and not the full `classify` pipeline. `classify` needs DS_* model creds, and the only mechanism that hands creds to a fork PR's run is `pull_request_target`, precisely the misconfiguration that opened the AsyncAPI "Miasma" compromise. The scan needs no creds, no network and no Deno, so it runs under this workflow's read-only `contents: read` token. NO fork guard here, also deliberately: the job is read-only with no side effects outside its own repo, so a fork running it is correct and useful.
   self-scan:
     name: self-scan (dogfood)
     runs-on: ubuntu-latest
@@ -81,16 +65,9 @@ jobs:
 
       - uses: ./
         with:
-          # Scan this PR with the rules IN this PR, not the ones already on main. Without it the
-          # dogfood would grade a rule change against the previous rule set and always pass.
+          # Scan this PR with the rules IN this PR, not the ones already on main. Without it the dogfood would grade a rule change against the previous rule set and always pass.
           version: local
-          # This is a DETECTOR repo, so some files carry attack patterns as their JOB: the rule bodies,
-          # the planner prompt, the attack skills, the fixtures, the eval taskset, and the docs that
-          # tabulate all of the above. Scanning those against our own rules is a guaranteed self-hit
-          # (the pipe-to-shell example inside detect.INSTRUCTIONS and the field-separator token quoted
-          # in README's rule table both fire), so they are reported without gating while the machinery
-          # and the build/CI/dependency surface stay enforced. This file is in the GATED half:
-          # describe a payload shape here, never quote one.
+          # This is a DETECTOR repo, so some files carry attack patterns as their JOB: the rule bodies, the planner prompt, the attack skills, the fixtures, the eval taskset, and the docs that tabulate all of the above. Scanning those against our own rules is a guaranteed self-hit (the pipe-to-shell example inside detect.INSTRUCTIONS and the field-separator token quoted in README's rule table both fire), so they are reported without gating while the machinery and the build/CI/dependency surface stay enforced. This file is in the GATED half: describe a payload shape here, never quote one.
           report-only-paths: |
             diff_sentry/indicators.py
             diff_sentry/detect.py
@@ -102,10 +79,7 @@ jobs:
             eval/diff_sentry_eval/taskset.py
             *.md
 
-  # The self-scan job above runs with `version: local` on purpose, so it scans a PR with the rules IN
-  # that PR. That leaves the path a CONSUMER actually takes -- `uvx diff-sentry==<released>` from PyPI --
-  # covered by nothing: a quoting or resolution bug there would break every install while our own CI
-  # stayed green. This job exercises exactly that line against a known-malicious fixture.
+  # The self-scan job above runs with `version: local` on purpose, so it scans a PR with the rules IN that PR. That leaves the path a CONSUMER actually takes -- `uvx diff-sentry==<released>` from PyPI -- covered by nothing: a quoting or resolution bug there would break every install while our own CI stayed green. This job exercises exactly that line against a known-malicious fixture.
   consumer-install:
     name: consumer install path (PyPI)
     runs-on: ubuntu-latest
@@ -121,11 +95,8 @@ jobs:
           ver=$(uv run --no-project --with pyyaml python -c \
                 "import yaml;print(yaml.safe_load(open('action.yml'))['inputs']['version']['default'])")
           echo "action.yml default version: $ver"
-          # The fixture lives under tests/ (a report-only path) rather than inline here: this file is in
-          # the GATED half, so a payload written into it fails our own scan.
-          # FIRST prove the install. `scan` exits 1 when it flags, and uvx ALSO exits 1 when it cannot
-          # resolve `diff-sentry==${ver}` -- so the negative check below cannot tell "flagged" from "never
-          # installed" (e.g. a release commit whose version is not on PyPI yet).
+          # The fixture lives under tests/ (a report-only path) rather than inline here: this file is in the GATED half, so a payload written into it fails our own scan.
+          # FIRST prove the install. `scan` exits 1 when it flags, and uvx ALSO exits 1 when it cannot resolve `diff-sentry==${ver}` -- so the negative check below cannot tell "flagged" from "never installed" (e.g. a release commit whose version is not on PyPI yet).
           got=$(uvx "diff-sentry==${ver}" --version)
           echo "installed: $got"
           case "$got" in *" ${ver}") ;; *) echo "::error::expected version ${ver}, got '$got'"; exit 1;; esac
@@ -145,8 +116,5 @@ jobs:
         with:
           enable-cache: true
       - name: Lint
-        # PINNED on purpose. `uvx ruff` resolves the latest release at run time, and ruff's DEFAULT
-        # rule set is not a stable contract (0.16 widened it well past the pycodestyle/pyflakes
-        # baseline), so an unpinned run can turn this job red with no code change. Bump it
-        # deliberately, with the resulting fixes in the same commit.
+        # PINNED on purpose. `uvx ruff` resolves the latest release at run time, and ruff's DEFAULT rule set is not a stable contract (0.16 widened it well past the pycodestyle/pyflakes baseline), so an unpinned run can turn this job red with no code change. Bump it deliberately, with the resulting fixes in the same commit.
         run: uvx ruff@0.16.0 check .

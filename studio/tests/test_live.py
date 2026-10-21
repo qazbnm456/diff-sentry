@@ -1,6 +1,4 @@
-"""The live-run driver: verified with `cli.run` / ingest STUBBED, so it needs no LLM, dspy, gh, or
-diff_sentry. The action stream comes from the recorder's `on_event` (no dspy callback; diff-sentry's
-cli.run has none), so these tests exercise the sink mapping, the ingest dispatch, and the finalize path."""
+"""The live-run driver: verified with `cli.run` / ingest STUBBED, so it needs no LLM, dspy, gh, or diff_sentry. The action stream comes from the recorder's `on_event` (no dspy callback; diff-sentry's cli.run has none), so these tests exercise the sink mapping, the ingest dispatch, and the finalize path."""
 
 import json
 import types
@@ -71,10 +69,7 @@ def test_run_live_streams_actions_then_prefers_the_response_file(tmp_path):
 
 
 def test_run_live_calls_cli_run_with_the_real_run_signature(tmp_path):
-    # REGRESSION guard for the zero-harness-change promise: this fake MIRRORS diff-sentry's real
-    # `run(event, *, run_id, outdir, config, on_event, extra_tools, emit, poster)` EXACTLY. If run_live
-    # ever passed an unexpected kwarg (callbacks=, cancel_event=), the call would TypeError → a failed
-    # response, and this test would fail.
+    # REGRESSION guard for the zero-harness-change promise: this fake MIRRORS diff-sentry's real `run(event, *, run_id, outdir, config, on_event, extra_tools, emit, poster)` EXACTLY. If run_live ever passed an unexpected kwarg (callbacks=, cancel_event=), the call would TypeError → a failed response, and this test would fail.
     final = {}
 
     def cli_run(event, *, run_id="change", outdir="./output", config=None, on_event=None,
@@ -102,9 +97,7 @@ def test_run_live_failure_becomes_an_informative_failed_response(tmp_path):
 
 
 def test_run_live_missing_live_extra_completes_as_failed_not_hang():
-    # server started WITHOUT the `live` extra → `from diff_sentry import ingest` (or cli) raises in the
-    # worker. on_done MUST still fire (else the SSE hangs forever). ingest/cli_run default to None → the
-    # real imports, absent in a replay-only env.
+    # server started WITHOUT the `live` extra → `from diff_sentry import ingest` (or cli) raises in the worker. on_done MUST still fire (else the SSE hangs forever). ingest/cli_run default to None → the real imports, absent in a replay-only env.
     import importlib.util
     if importlib.util.find_spec("diff_sentry") is not None:
         pytest.skip("diff-sentry present (live extra) — this repro requires it ABSENT")
@@ -129,9 +122,7 @@ def test_describe_exc_without_a_cause_is_just_the_error():
 
 
 def test_failed_dict_is_self_contained_when_diff_sentry_absent():
-    # build_failed_response=None forces importing diff_sentry.response; when it is absent (replay-only) the
-    # minimal literal is returned: status=failed / object=change.detection / detail preserved, so the SSE
-    # can always complete. (Uses a fake bfr here to stay import-light.)
+    # build_failed_response=None forces importing diff_sentry.response; when it is absent (replay-only) the minimal literal is returned: status=failed / object=change.detection / detail preserved, so the SSE can always complete. (Uses a fake bfr here to stay import-light.)
     d = _failed_dict("r", "detail here", lambda run_id, events, detail: types.SimpleNamespace(
         model_dump=lambda: {"status": "failed", "detail": detail}))
     assert d == {"status": "failed", "detail": "detail here"}

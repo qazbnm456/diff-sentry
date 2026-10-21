@@ -1,8 +1,6 @@
 """Tests for the ATLAS rubric surface (`rubric.py`): deterministic, reward-free, dspy-free.
 
-Fixtures are SYNTHETIC in-code event lists (the export-test pattern), never the gitignored `output/traces/`
-artifacts, so the suite runs on a fresh clone / in CI. The facts are driven through the ASSEMBLED verdict
-(indicator UNION from the trace + the derived signal), exactly as `run_labels`/`run_metrics` read them.
+Fixtures are SYNTHETIC in-code event lists (the export-test pattern), never the gitignored `output/traces/` artifacts, so the suite runs on a fresh clone / in CI. The facts are driven through the ASSEMBLED verdict (indicator UNION from the trace + the derived signal), exactly as `run_labels`/`run_metrics` read them.
 """
 
 from __future__ import annotations

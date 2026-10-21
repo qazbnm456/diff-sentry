@@ -1,5 +1,4 @@
-"""Scoring a run: reconstruct judge inputs from the trace, and the three unscored paths (never-finalized,
-no-usable-verdict, judge-failed), each a reason, never a fake 0."""
+"""Scoring a run: reconstruct judge inputs from the trace, and the three unscored paths (never-finalized, no-usable-verdict, judge-failed), each a reason, never a fake 0."""
 
 from __future__ import annotations
 

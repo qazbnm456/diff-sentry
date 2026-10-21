@@ -1,5 +1,4 @@
-"""The forensic archive: immutable, content-addressed, append-only. What matters is that a later capture can
-add history but never replace an earlier one, and that tampering with the archive is detectable."""
+"""The forensic archive: immutable, content-addressed, append-only. What matters is that a later capture can add history but never replace an earlier one, and that tampering with the archive is detectable."""
 
 from __future__ import annotations
 

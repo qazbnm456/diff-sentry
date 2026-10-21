@@ -1,10 +1,6 @@
 """L2: offline INTEGRATION through the REAL dspy.RLM.aforward loop (no live model, no Deno, no network).
 
-Uses rlm-harness's `rlm_harness.testing` seam: a scripted DummyLM drives the planner, a `ScriptedInterpreter`
-runs each turn's step (dispatching the REAL injected tools, so their tracing runs) and SUBMITs. This is
-the layer the unit tests can't reach: it exercises `planner → scan_indicators → (deep_classify) →
-verdict → assemble → response → emit` on a trace the real loop produced. It also pins the
-`scan_indicators` registered name end-to-end (a wrong name would KeyError in the `call(...)` step).
+Uses rlm-harness's `rlm_harness.testing` seam: a scripted DummyLM drives the planner, a `ScriptedInterpreter` runs each turn's step (dispatching the REAL injected tools, so their tracing runs) and SUBMITs. This is the layer the unit tests can't reach: it exercises `planner → scan_indicators → (deep_classify) → verdict → assemble → response → emit` on a trace the real loop produced. It also pins the `scan_indicators` registered name end-to-end (a wrong name would KeyError in the `call(...)` step).
 """
 
 from __future__ import annotations
@@ -54,8 +50,7 @@ def _run_scripted(tmp_path, event, steps, planner_turns, *, chat_fn=None, run_id
 
 
 def test_malicious_change_full_flow_offline(tmp_path):
-    """The whole chain through the real loop: the planner scans, SUBMITs malicious, the assembled signal
-    fires, and the host-side emitter POSTs; the wiring holds end-to-end."""
+    """The whole chain through the real loop: the planner scans, SUBMITs malicious, the assembled signal fires, and the host-side emitter POSTs; the wiring holds end-to-end."""
     region = raw_content(MALICIOUS_EVENT)
     verdict, events = _run_scripted(
         tmp_path, MALICIOUS_EVENT,
@@ -82,8 +77,7 @@ def test_malicious_change_full_flow_offline(tmp_path):
 
 
 def test_scan_indicators_tool_is_callable_in_the_loop(tmp_path):
-    """The step calls the tool by the name the prompt uses; a mismatched registered name would KeyError
-    here."""
+    """The step calls the tool by the name the prompt uses; a mismatched registered name would KeyError here."""
     _verdict, events = _run_scripted(
         tmp_path, MALICIOUS_EVENT,
         steps=[call("scan_indicators", region=raw_content(MALICIOUS_EVENT)),
@@ -95,8 +89,7 @@ def test_scan_indicators_tool_is_callable_in_the_loop(tmp_path):
 
 
 def test_mf3_backstop_through_the_real_loop(tmp_path):
-    """A (wrong) benign SUBMIT over a malicious change, driven by the real loop: the deterministic
-    evidence still forces a signal: MF3 holds on a trace the loop actually wrote, not a hand-built one."""
+    """A (wrong) benign SUBMIT over a malicious change, driven by the real loop: the deterministic evidence still forces a signal: MF3 holds on a trace the loop actually wrote, not a hand-built one."""
     verdict, events = _run_scripted(
         tmp_path, MALICIOUS_EVENT,
         steps=[call("scan_indicators", region=raw_content(MALICIOUS_EVENT)),
@@ -110,8 +103,7 @@ def test_mf3_backstop_through_the_real_loop(tmp_path):
 
 
 def test_deep_classify_escalation_is_recorded(tmp_path):
-    """The planner consults the second-stage classifier through the loop; the tool_call lands in the
-    trace with the classifier's structured verdict (injected chat_fn, no network)."""
+    """The planner consults the second-stage classifier through the loop; the tool_call lands in the trace with the classifier's structured verdict (injected chat_fn, no network)."""
     def fake_chat(findings):
         return '{"verdict": "malicious", "confidence": 0.9, "rationale": "curl|bash", "techniques": ["x"]}'
 
@@ -133,8 +125,7 @@ def _main_outputs(events):
 
 
 def test_an_inconclusive_submit_on_a_real_change_is_refused_in_the_trajectory(tmp_path):
-    """An `inconclusive` SUBMIT on a change with content to read is refused: the loop hands the refusal back as the
-    step's output and the planner decides in the same trajectory."""
+    """An `inconclusive` SUBMIT on a change with content to read is refused: the loop hands the refusal back as the step's output and the planner decides in the same trajectory."""
     verdict, events = _run_scripted(
         tmp_path, MALICIOUS_EVENT, hand_over=True,
         steps=[submit({"verdict": _INCONCLUSIVE}), submit({"verdict": MALICIOUS_VERDICT})],
@@ -161,8 +152,7 @@ def test_an_inconclusive_submit_on_an_empty_change_stands(tmp_path):
 
 
 def test_an_inconclusive_at_the_iteration_cap_stands(tmp_path):
-    """dspy's extract fallback writes the verdict once the cap is reached; no planner turn is left to answer a
-    refusal, and refusing there would fail the run."""
+    """dspy's extract fallback writes the verdict once the cap is reached; no planner turn is left to answer a refusal, and refusing there would fail the run."""
     import json
 
     verdict, _events = _run_scripted(

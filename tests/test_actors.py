@@ -1,9 +1,6 @@
 """The actor store: cross-event memory that turns one repository's single attempt into a visible campaign.
 
-What is pinned: the facts `correlate` derives (burst, multi-repo, prior flags, payload-host reuse, an edit
-that scrubs evidence), that they become baseline hits through `scan_provenance` (no second signal
-derivation), the false-positive brakes (a benign verdict clears a prior flag; common hosts link nothing),
-and the dossier a human reads after the fact."""
+What is pinned: the facts `correlate` derives (burst, multi-repo, prior flags, payload-host reuse, an edit that scrubs evidence), that they become baseline hits through `scan_provenance` (no second signal derivation), the false-positive brakes (a benign verdict clears a prior flag; common hosts link nothing), and the dossier a human reads after the fact."""
 
 from __future__ import annotations
 
@@ -178,8 +175,7 @@ def test_reuse_needs_the_earlier_sighting_to_have_reached_the_floor(store):
 
 
 def test_no_verdict_removes_the_payload_link(store):
-    # The link is EVIDENCE (the same infrastructure used again). A local model has a real false-benign rate, and
-    # letting its verdict erase the link would let one missed payload launder a whole campaign.
+    # The link is EVIDENCE (the same infrastructure used again). A local model has a real false-benign rate, and letting its verdict erase the link would let one missed payload launder a whole campaign.
     _record(store, _ev(repo="x/three", number=3), [_hit()], run_id="three")
     store.finalize("three", verdict="benign", signal=True, max_severity="critical")
     facts, _ = store.correlate(_ev(repo="x/two", number=2), [_hit()])
@@ -210,8 +206,7 @@ def test_an_unchanged_re_check_is_a_revision_but_not_a_scrub(store):
 
 
 def test_a_payload_rewritten_below_the_floor_is_as_gone_as_a_deleted_one(store):
-    """The same rule in the same place, now `medium` (softened prose), no longer signals: the floor-level evidence is
-    gone even though a hit of that rule is still there."""
+    """The same rule in the same place, now `medium` (softened prose), no longer signals: the floor-level evidence is gone even though a hit of that rule is still there."""
     payload = _hit()
     _record(store, _ev(number=9, body=_PAYLOAD), [payload], run_id="r0")
     softened = _hit(sev="medium", evidence="curl https://sh.rustup.rs | sh")
@@ -524,8 +519,7 @@ def _drive_by(store, *, payload=_PAYLOAD, author_assoc="MEMBER"):
 
 
 def test_a_file_named_like_a_comment_is_not_a_comment(store):
-    # `location` is free-form: a PR that adds a file called `comment:alice` must not move its own payload onto
-    # alice's account, nor be treated as prose
+    # `location` is free-form: a PR that adds a file called `comment:alice` must not move its own payload onto alice's account, nor be treated as prose
     ev = {**_ev(login="mallory", uid=9, repo="org/a", number=1), "files": [
         {"filename": "comment:alice", "status": "added", "additions": 1, "deletions": 0, "patch": f"+{_PAYLOAD}\n"}]}
     content = scan_change(ev)
@@ -541,8 +535,7 @@ def test_the_commenter_is_named_by_the_segment_kind(store):
 
 
 def test_a_payload_host_in_someone_elses_comment_does_not_link_the_authors_next_change(store):
-    # an earlier flagged sighting used host P; a drive-by now quotes P on a maintainer's PR. The LINK belongs to
-    # the commenter's text, so the maintainer's change is not raised by it and is not charged the verdict.
+    # an earlier flagged sighting used host P; a drive-by now quotes P on a maintainer's PR. The LINK belongs to the commenter's text, so the maintainer's change is not raised by it and is not charged the verdict.
     _record(store, _ev(login="mallory", uid=9, repo="x/one"), [_hit()], run_id="early")
     ev = _drive_by(store)
     content = scan_change(ev)
@@ -623,8 +616,7 @@ def test_an_old_state_file_is_refused_not_misread(tmp_path):
 # ── operator edges ──────────────────────────────────────────────────────────────────────
 
 def test_a_sub_floor_remark_from_a_third_party_does_not_stop_the_verdict_reaching_the_author(store):
-    # mallory's own diff is clean at the floor, so the model alone judges her change malicious; an unrelated
-    # commenter's backtick or "the system prompt" remark must not make the sighting look "mixed" and drop it
+    # mallory's own diff is clean at the floor, so the model alone judges her change malicious; an unrelated commenter's backtick or "the system prompt" remark must not make the sighting look "mixed" and drop it
     for n, remark in enumerate(("try `cd $(pwd)/build`", "the system prompt is too long", "/retest")):
         ev = _ev(login="mallory", uid=9, repo="org/a", number=n + 1)
         ev["comments"] = [{"author": "chatty", "author_type": "User", "association": "NONE",
@@ -685,8 +677,7 @@ def test_a_read_only_store_changes_nothing_and_still_refuses_another_build(tmp_p
 # ── hostile input ──────────────────────────────────────────────────────────────────────
 
 def test_deleted_accounts_do_not_share_one_history(store):
-    # GitHub's `ghost` is a single identity for EVERY deleted account; treating it as an actor would let one
-    # malicious change taint every unrelated deleted-author thread for 30 days
+    # GitHub's `ghost` is a single identity for EVERY deleted account; treating it as an actor would let one malicious change taint every unrelated deleted-author thread for 30 days
     one = _ev(login="ghost", uid=10137, repo="org/a", number=1)
     _record(store, one, [_hit()], run_id="org-a-1")
     store.finalize("org-a-1", verdict="malicious", signal=True, max_severity="critical")

@@ -1,15 +1,13 @@
 """Replay of the hackerbot-claw CAMPAIGN through the same pipeline the watcher runs, in event order.
 
-`test_incident_hackerbot_claw.py` pins what the text rules catch in the quoted payloads. This pins what the
-watcher adds around them, against `tests/corpus/hackerbot_claw_campaign.json`:
+`test_incident_hackerbot_claw.py` pins what the text rules catch in the quoted payloads. This pins what the watcher adds around them, against `tests/corpus/hackerbot_claw_campaign.json`:
 
 * the account is measured as it was on the day (7 days old on Feb 27), not as it is today;
 * the self-described agent profile and the branch-name / comment channels are read;
 * a change whose own content is unremarkable is raised by what the account did before;
 * the dossier answers when, where and how quickly it moved.
 
-Every event is assembled under a NEUTRAL benign verdict, so the signal is driven by the evidence floor alone
-(MF3); the model's verdict on the earlier targets is simulated as `malicious`."""
+Every event is assembled under a NEUTRAL benign verdict, so the signal is driven by the evidence floor alone (MF3); the model's verdict on the earlier targets is simulated as `malicious`."""
 
 from __future__ import annotations
 
@@ -50,8 +48,7 @@ def _signal(baseline):
 
 
 def _replay(store):
-    """Run every entry, oldest first, the way `Watcher._examine` does: correlate, baseline, record, then the
-    model's verdict lands on the sighting. Returns {name: (rule set, signal)}."""
+    """Run every entry, oldest first, the way `Watcher._examine` does: correlate, baseline, record, then the model's verdict lands on the sighting. Returns {name: (rule set, signal)}."""
     out = {}
     for entry in sorted(_ENTRIES, key=lambda e: e["at"]):
         event = _payload(entry)
@@ -113,8 +110,7 @@ def test_age_is_measured_on_the_day_not_today():
     rustpy = _payload(next(e for e in _ENTRIES if e["name"].startswith("rustpython")))
     assert micro["provenance"]["author_account_age_days"] == 7
     assert rustpy["provenance"]["author_account_age_days"] == 10
-    # the same payload read WITHOUT its own timestamp falls back to the wall clock, and the account looks old:
-    # exactly the error a replay of a historical incident must not make
+    # the same payload read WITHOUT its own timestamp falls back to the wall clock, and the account looks old: exactly the error a replay of a historical incident must not make
     naive = _payload(next(e for e in _ENTRIES if e["name"].startswith("microsoft")), with_time=False)
     assert naive["provenance"]["author_account_age_days"] > 100
     assert "brand-new-account" not in {h["rule"] for h in _baseline_indicators(naive)}
@@ -134,9 +130,7 @@ def test_the_dossier_reconstructs_the_campaign(store):
 
 
 def test_a_benign_verdict_on_an_earlier_target_clears_the_account_flag_but_not_the_payload_link(store):
-    # The model calls the FIRST target benign. That clears the account-level inference (one false positive
-    # must not taint an account for good), but the payload host is evidence, so the link to the next target
-    # survives whatever the model said.
+    # The model calls the FIRST target benign. That clears the account-level inference (one false positive must not taint an account for good), but the payload host is evidence, so the link to the next target survives whatever the model said.
     first = min(_ENTRIES, key=lambda e: e["at"])
     event = _payload(first)
     content = scan_change(event)

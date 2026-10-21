@@ -1,14 +1,8 @@
 """Configuration for diff-sentry: model ROLES, never hardcoded model names.
 
-Three ROLES (the rlm-harness-consumer convention): the RLM PLANNER (root LM) drives the triage loop and
-holds the diff in the REPL; the ANALYST (sub LM, reached via `llm_query`) is an expensive brain for a
-subtle case the planner can't call alone; and the CLASSIFIER (reached through the `deep_classify` tool)
-is the swappable second-stage that returns a structured verdict on an ambiguous change. Referred to by
-ROLE in code, docs, and the prompt; set via env (`from_env`, `DS_*`). No dspy import.
+Three ROLES (the rlm-harness-consumer convention): the RLM PLANNER (root LM) drives the triage loop and holds the diff in the REPL; the ANALYST (sub LM, reached via `llm_query`) is an expensive brain for a subtle case the planner can't call alone; and the CLASSIFIER (reached through the `deep_classify` tool) is the swappable second-stage that returns a structured verdict on an ambiguous change. Referred to by ROLE in code, docs, and the prompt; set via env (`from_env`, `DS_*`). No dspy import.
 
-The classifier is a SEAM (see `deep_classify.make_deep_classify_tool`): `classify_backend="self"` means
-a general model returns the structured verdict; a dedicated backend swaps in with no change to the
-planner, schema, assemble, or export.
+The classifier is a SEAM (see `deep_classify.make_deep_classify_tool`): `classify_backend="self"` means a general model returns the structured verdict; a dedicated backend swaps in with no change to the planner, schema, assemble, or export.
 """
 
 from __future__ import annotations
@@ -20,15 +14,10 @@ from dataclasses import dataclass
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
-# The sentinel model-string prefix that routes a ROLE onto the user's Claude Pro/Max SUBSCRIPTION via
-# rlm-harness's ClaudeAgentLM (see detect._maybe_subscription_lm). A config-level naming convention, so
-# it lives in this dspy-free module; detect.py imports it for the actual (lazy, dspy-bearing) wiring.
+# The sentinel model-string prefix that routes a ROLE onto the user's Claude Pro/Max SUBSCRIPTION via rlm-harness's ClaudeAgentLM (see detect._maybe_subscription_lm). A config-level naming convention, so it lives in this dspy-free module; detect.py imports it for the actual (lazy, dspy-bearing) wiring.
 SUBSCRIPTION_PREFIX = "claude-agent-sdk/"
 
-# Enrichment fetch is ALLOWLISTED to GitHub hosts (MF2): the input is attacker-authored, and an
-# injected instruction could otherwise drive the SSRF-guarded fetcher to exfiltrate context to an
-# attacker-external URL. The kit's SSRF guard blocks INTERNAL targets; this allowlist blocks EXTERNAL
-# ones too, leaving only GitHub. Overridable, but every entry must be a host you trust to receive context.
+# Enrichment fetch is ALLOWLISTED to GitHub hosts (MF2): the input is attacker-authored, and an injected instruction could otherwise drive the SSRF-guarded fetcher to exfiltrate context to an attacker-external URL. The kit's SSRF guard blocks INTERNAL targets; this allowlist blocks EXTERNAL ones too, leaving only GitHub. Overridable, but every entry must be a host you trust to receive context.
 _DEFAULT_GITHUB_HOSTS = ("api.github.com", "github.com", "raw.githubusercontent.com",
                          "objects.githubusercontent.com", "codeload.github.com")
 
@@ -47,8 +36,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _env_lm_kwargs(name: str) -> dict | None:
-    """A role's extra request parameters, a JSON object (unset or blank -> None). Malformed input fails
-    here, naming the variable, rather than as a run that ignored it."""
+    """A role's extra request parameters, a JSON object (unset or blank -> None). Malformed input fails here, naming the variable, rather than as a run that ignored it."""
     raw = os.getenv(name)
     if raw is None or not raw.strip():
         return None
@@ -62,23 +50,19 @@ def _env_lm_kwargs(name: str) -> dict | None:
 
 
 def _role_lm_kwargs(alias: str, kit_name: str) -> tuple[str, dict | None]:
-    """A role's request parameters from the `DS_*` alias or rlm-harness's own variable (which `setup` would
-    otherwise never read, since it builds the kit's config itself). Both set to different values is refused
-    rather than one silently winning. Returns the name the value came from, for error messages."""
+    """A role's request parameters from the `DS_*` alias or rlm-harness's own variable (which `setup` would otherwise never read, since it builds the kit's config itself). Both set to different values is refused rather than one silently winning. Returns the name the value came from, for error messages."""
     ours, kits = _env_lm_kwargs(alias), _env_lm_kwargs(kit_name)
     if ours is not None and kits is not None and ours != kits:
         raise ValueError(f"{alias} and {kit_name} name the same setting with different values; set one")
     return (alias, ours) if ours is not None else (kit_name, kits)
 
 
-# The request keys the classifier's own settings own: the model and the messages it is sent, one reply that is not a stream
-# (`.choices[0]`), and the budget (`DS_CLASSIFIER_TIMEOUT`, `DS_CLASSIFIER_MAX_TOKENS`).
+# The request keys the classifier's own settings own: the model and the messages it is sent, one reply that is not a stream (`.choices[0]`), and the budget (`DS_CLASSIFIER_TIMEOUT`, `DS_CLASSIFIER_MAX_TOKENS`).
 _CLASSIFIER_OWNED_KEYS = ("model", "messages", "stream", "n", "timeout", "max_tokens", "max_completion_tokens")
 
 
 def _classifier_lm_kwargs() -> dict | None:
-    """`DS_CLASSIFIER_LM_KWARGS`: extra parameters of the classifier's request (`temperature`, a vLLM thinking budget under
-    `extra_body`). A key the classifier's own settings own is refused here, not at the first call mid-run."""
+    """`DS_CLASSIFIER_LM_KWARGS`: extra parameters of the classifier's request (`temperature`, a vLLM thinking budget under `extra_body`). A key the classifier's own settings own is refused here, not at the first call mid-run."""
     kw = _env_lm_kwargs("DS_CLASSIFIER_LM_KWARGS")
     if not kw:
         return kw
@@ -103,8 +87,7 @@ def _classifier_lm_kwargs() -> dict | None:
 
 @dataclass(frozen=True)
 class DetectConfig:
-    # Planner (main) + analyst (sub), sharing one OpenAI-compatible proxy. No model name is assumed:
-    # `from_env` requires them. Empty defaults are only for direct construction in tests.
+    # Planner (main) + analyst (sub), sharing one OpenAI-compatible proxy. No model name is assumed: `from_env` requires them. Empty defaults are only for direct construction in tests.
     main_model: str = ""   # planner: a cheap, injection-resistant orchestrator driving the REPL loop
     sub_model: str = ""    # analyst: an expensive brain for a subtle case (reached via llm_query)
     api_key: str | None = None
@@ -130,14 +113,10 @@ class DetectConfig:
     adapter: str = "json"
     # Generous, NOT None: a reasoning planner truncated before its answer returns empty content.
     planner_max_tokens: int | None = 16384
-    # Extra request parameters per role, passed to rlm-harness as-is (`main_lm_kwargs` / `sub_lm_kwargs`).
-    # A key under `extra_body` goes raw into the request, e.g. a vLLM `thinking_token_budget` that keeps a
-    # reasoning planner from thinking through the whole `planner_max_tokens` and answering nothing.
+    # Extra request parameters per role, passed to rlm-harness as-is (`main_lm_kwargs` / `sub_lm_kwargs`). A key under `extra_body` goes raw into the request, e.g. a vLLM `thinking_token_budget` that keeps a reasoning planner from thinking through the whole `planner_max_tokens` and answering nothing.
     planner_lm_kwargs: dict | None = None
     analyst_lm_kwargs: dict | None = None
-    # HARD ceiling on the single RLM episode. No outer multi-run loop (max_retries=1): one change =
-    # one trajectory, so the trace stays valid training data. A failed run is INFRA, not a schema bug:
-    # a non-retryable LM error escapes as the raw dspy.LMError, the rest as RLMTaskError.
+    # HARD ceiling on the single RLM episode. No outer multi-run loop (max_retries=1): one change = one trajectory, so the trace stays valid training data. A failed run is INFRA, not a schema bug: a non-retryable LM error escapes as the raw dspy.LMError, the rest as RLMTaskError.
     max_iterations: int = 25
     max_llm_calls: int = 8          # caps ONLY analyst (llm_query) escalations
     max_output_chars: int = 10_000  # head+tail char cap dspy.RLM applies to each REPL output
@@ -156,8 +135,7 @@ class DetectConfig:
     # ── Host-side SIEM emitter (opt-in; deterministic plumbing, POST after the run) ──────────────
     siem_webhook_url: str = ""
     siem_token: str = ""
-    # Verdicts (or a deterministic high/critical indicator) that emit a signal. A benign self-report
-    # cannot suppress a hard indicator; see assemble.assemble_verdict.
+    # Verdicts (or a deterministic high/critical indicator) that emit a signal. A benign self-report cannot suppress a hard indicator; see assemble.assemble_verdict.
     emit_on: tuple[str, ...] = ("suspicious", "malicious")
 
     @property
@@ -170,8 +148,7 @@ class DetectConfig:
 
     @classmethod
     def screen_from_env(cls) -> DetectConfig:
-        """A config with NO model roles, only the SIEM emitter and `emit_on`. For the deterministic screen
-        (`watch --screen-only`), which never runs the model and so must not require `DS_ROOT_LM`."""
+        """A config with NO model roles, only the SIEM emitter and `emit_on`. For the deterministic screen (`watch --screen-only`), which never runs the model and so must not require `DS_ROOT_LM`."""
         return cls(
             siem_webhook_url=os.getenv("DS_SIEM_WEBHOOK_URL", ""),
             siem_token=os.getenv("DS_SIEM_TOKEN", ""),
@@ -192,11 +169,7 @@ class DetectConfig:
         base_url = os.getenv("DS_BASE_URL")
         api_key = os.getenv("DS_API_KEY")
         classifier = os.getenv("DS_CLASSIFIER_LM") or analyst
-        # The classifier is a SEPARATE OpenAI-compatible client (deep_classify._selfclassify_chat →
-        # rlm-harness make_model_tool), not the subscription Agent SDK adapter, so its model can never be
-        # a `claude-agent-sdk/…` sentinel, whether set explicitly or inherited from DS_SUB_LM. Since
-        # `deep_classify` is always registered, a sentinel would otherwise fail mid-trajectory and burn
-        # the one hard-budget attempt; fail here, loud and actionable.
+        # The classifier is a SEPARATE OpenAI-compatible client (deep_classify._selfclassify_chat → rlm-harness make_model_tool), not the subscription Agent SDK adapter, so its model can never be a `claude-agent-sdk/…` sentinel, whether set explicitly or inherited from DS_SUB_LM. Since `deep_classify` is always registered, a sentinel would otherwise fail mid-trajectory and burn the one hard-budget attempt; fail here, loud and actionable.
         if classifier.startswith(SUBSCRIPTION_PREFIX):
             inherited = not os.getenv("DS_CLASSIFIER_LM")
             raise ValueError(
@@ -212,8 +185,7 @@ class DetectConfig:
         _pmt = os.getenv("DS_PLANNER_MAX_TOKENS")
         planner_var, planner_kw = _role_lm_kwargs("DS_ROOT_LM_KWARGS", "RLM_MAIN_LM_KWARGS")
         analyst_var, analyst_kw = _role_lm_kwargs("DS_SUB_LM_KWARGS", "RLM_SUB_LM_KWARGS")
-        # The kit refuses the keys it owns (model, endpoint, timeout) when `setup` builds its config; check
-        # here so a bad value stops the process instead of failing every run (dspy-free import).
+        # The kit refuses the keys it owns (model, endpoint, timeout) when `setup` builds its config; check here so a bad value stops the process instead of failing every run (dspy-free import).
         from rlm_harness.config import RLMConfig
 
         for name, field, kw in ((planner_var, "main_lm_kwargs", planner_kw),

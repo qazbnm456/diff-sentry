@@ -1,6 +1,4 @@
-"""A GitHub owner that imitates the repository's own: litellm 1.107.0's private release workflow was pointed at
-`Berri-AI/litellm` (the project is `BerriAI`) by a commit pushed past branch protection, and built the release from it.
-The Action scans a push as well as a pull request, so that commit is a diff it can read."""
+"""A GitHub owner that imitates the repository's own: litellm 1.107.0's private release workflow was pointed at `Berri-AI/litellm` (the project is `BerriAI`) by a commit pushed past branch protection, and built the release from it. The Action scans a push as well as a pull request, so that commit is a diff it can read."""
 
 from __future__ import annotations
 
@@ -195,8 +193,7 @@ def test_a_flow_mapping_and_a_parent_past_a_hunk_edge():
     ("    image: {repository: nodered/node-red}", "node-red"),
 ])
 def test_a_hyphen_lookalike_in_a_workflow_is_critical_whatever_the_yaml_around_it(line, owner):
-    # an accepted over-alert: no reading of the YAML around a reference decides it, since every such reading had a
-    # spelling that moved the checkout's own `repository:` below the floor
+    # an accepted over-alert: no reading of the YAML around a reference decides it, since every such reading had a spelling that moved the checkout's own `repository:` below the floor
     assert _rules(scan_diff(_workflow(line), files=True, owner=owner)) == {"lookalike-owner": "critical"}
 
 
@@ -232,7 +229,7 @@ def test_a_long_blank_run_after_a_key_stays_linear(key):
     diff = _diff(".github/workflows/r.yml", "x: 1", key + " " * 65_536 + "!")
     start = time.perf_counter()
     scan_diff(diff, files=True, owner="BerriAI")
-    assert time.perf_counter() - start < 2.0          # cubic before: minutes past a few thousand blanks
+    assert time.perf_counter() - start < 2.0          # a lead with adjacent blank runs takes minutes here
 
 
 def test_a_value_on_the_next_line_joins_only_the_line_truly_after_it():

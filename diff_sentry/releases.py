@@ -1,18 +1,10 @@
 """Release watch: each new file of a watched PyPI package, compared with the release before it.
 
-A compromised release need not pass through any pull request: litellm 1.107.0 was built from a lookalike fork and
-1.82.8 was uploaded with a stolen token, and in both the wheels held files the previous release did not (a `.pth`
-startup hook, a packed stealer). So the release itself is the change. Its artifacts are downloaded as DATA (never
-installed, never unpacked to disk), their members are compared with the previous release's, and every new or
-changed member becomes a file of a change event (`kind="release"`) whose patch is the unified diff. That event goes
-through the same deterministic screen as a pull request (`cli.screen`), so every text and file-structure rule reads
-it, and the facts only the release shows join the baseline through `scan_release`.
+A compromised release need not pass through any pull request: litellm 1.107.0 was built from a lookalike fork and 1.82.8 was uploaded with a stolen token, and in both the wheels held files the previous release did not (a `.pth` startup hook, a packed stealer). So the release itself is the change. Its artifacts are downloaded as DATA (never installed, never unpacked to disk), their members are compared with the previous release's, and every new or changed member becomes a file of a change event (`kind="release"`) whose patch is the unified diff. That event goes through the same deterministic screen as a pull request (`cli.screen`), so every text and file-structure rule reads it, and the facts only the release shows join the baseline through `scan_release`.
 
-What cannot be read is evidence, never a silence: a member that would run (Python source, a `.pth`, a script) and
-could not be shown as text, two members that install to one path, and an artifact not read to its end are `high`.
+What cannot be read is evidence, never a silence: a member that would run (Python source, a `.pth`, a script) and could not be shown as text, two members that install to one path, and an artifact not read to its end are `high`.
 
-Host-side plumbing, like `ingest` and `watch`: it fetches only from PyPI's own hosts, with every download, every
-decompressed byte and all text kept bounded. Pure stdlib + httpx (+ `packaging` for version order); no dspy.
+Host-side plumbing, like `ingest` and `watch`: it fetches only from PyPI's own hosts, with every download, every decompressed byte and all text kept bounded. Pure stdlib + httpx (+ `packaging` for version order); no dspy.
 """
 
 from __future__ import annotations
@@ -44,8 +36,7 @@ from .schema import IndicatorHit
 
 log = logging.getLogger(__name__)
 
-# A fetch maps (url, request headers, byte limit) to (status, response headers, body). Injectable, so tests and an
-# air-gapped mirror need no network; the default refuses any host but PyPI's own.
+# A fetch maps (url, request headers, byte limit) to (status, response headers, body). Injectable, so tests and an air-gapped mirror need no network; the default refuses any host but PyPI's own.
 Fetch = Callable[[str, dict, int], tuple[int, dict, bytes]]
 
 _SIMPLE_URL = "https://pypi.org/simple/{name}/"
@@ -53,8 +44,7 @@ _SIMPLE_ACCEPT = "application/vnd.pypi.simple.v1+json"
 _ALLOWED_HOSTS = frozenset({"pypi.org", "files.pythonhosted.org"})
 
 _MAX_INDEX_BYTES = 32 << 20        # a project's simple index (litellm's, with every release, is about 2 MiB)
-# One wheel or sdist; a package larger than this is not compared, which is `high` (`release-not-fully-read`), so a
-# watchlist with large packages raises it.
+# One wheel or sdist; a package larger than this is not compared, which is `high` (`release-not-fully-read`), so a watchlist with large packages raises it.
 _MAX_ARTIFACT_BYTES = int(os.getenv("DS_RELEASE_MAX_ARTIFACT_MB", "256") or "256") << 20
 _MAX_RELEASE_BYTES = max(1 << 30, 4 * _MAX_ARTIFACT_BYTES)   # every artifact of a release and the one before it
 _MAX_MEMBERS = 50_000              # members of one artifact
@@ -65,9 +55,7 @@ _MAX_TEXT_BYTES = 256 << 20        # text kept for one comparison, the new and t
 _MAX_PATCH_CHARS = 16 << 20        # the patches of one release event, in all
 _MAX_PATCH_LINES = 20_000          # one member's patch
 
-# Members derived from the rest, which change with every release and say nothing of their own: the wheel's file list,
-# tag and metadata (whose long description is the README, read as its own file in the sdist), and the sdist's
-# `PKG-INFO` and `*.egg-info/`.
+# Members derived from the rest, which change with every release and say nothing of their own: the wheel's file list, tag and metadata (whose long description is the README, read as its own file in the sdist), and the sdist's `PKG-INFO` and `*.egg-info/`.
 _WHEEL_DERIVED = frozenset({"{dist-info}/RECORD", "{dist-info}/WHEEL", "{dist-info}/METADATA"})
 _REQUIRES_RE = re.compile(r"^Requires-Dist:[ \t]*([A-Za-z0-9][A-Za-z0-9._-]{0,99})", re.MULTILINE)
 _WHEEL_DATA_RE = re.compile(r"^[^/]+\.data/(purelib|platlib|scripts|headers|data)/(.*)$")
@@ -75,13 +63,11 @@ _DIST_INFO_RE = re.compile(r"^[^/]+\.dist-info/(.*)$")
 # Members that run, or decide what a build runs: unreadable, they are `high` rather than a note.
 _CODE_SUFFIXES = (".py", ".pyw", ".pth", ".pyc", ".pyo", ".sh", ".bat", ".cmd", ".ps1", ".js", ".cjs", ".mjs")
 _BUILD_FILES = frozenset({"pyproject.toml", "setup.cfg", "setup.py"})
-# Compiled code: never text, so a new or changed one is not read (`.pyc` runs without its source, and Python may load
-# a cached one over it). A native module counts only when the release before had no module of that name.
+# Compiled code: never text, so a new or changed one is not read (`.pyc` runs without its source, and Python may load a cached one over it). A native module counts only when the release before had no module of that name.
 _BYTECODE_SUFFIXES = (".pyc", ".pyo")
 _NATIVE_SUFFIXES = (".so", ".pyd", ".dll", ".dylib")
 _SO_VERSION_RE = re.compile(r"\.so\.[0-9.]{1,40}$")         # `libfoo.so.1.2`
-# A PEP 263 coding declaration, looked for anywhere on a source file's first two lines: CPython's own rule (a comment,
-# line 2 only after a blank or comment line 1) is not reproduced, so a file that declares one is read both ways.
+# A PEP 263 coding declaration, looked for anywhere on a source file's first two lines: CPython's own rule (a comment, line 2 only after a blank or comment line 1) is not reproduced, so a file that declares one is read both ways.
 _CODING_RE = re.compile(r"coding[:=][ \t]*([-\w.]{1,200})([-\w.])?")
 _MAX_CODING_NAME = 200      # a longer name is not resolved: it is `release-code-not-read`
 _UTF8_CODECS = frozenset({"utf-8", "utf-8-sig"})
@@ -152,8 +138,7 @@ class Artifact:
 
 
 class _Budget:
-    """The text one comparison may keep, shared by every artifact it reads, and which members it keeps text for
-    (`keep(path, digest)`): a first pass keeps none, to learn what changed; the second keeps only that."""
+    """The text one comparison may keep, shared by every artifact it reads, and which members it keeps text for (`keep(path, digest)`): a first pass keeps none, to learn what changed; the second keeps only that."""
 
     def __init__(self, text: int = _MAX_TEXT_BYTES, keep: Callable[[str, str], bool] | None = None):
         self.text = text
@@ -177,9 +162,7 @@ class _Budget:
 
 
 def _install_path(path: str) -> str | None:
-    """Where a wheel member lands relative to site-packages: `x.data/purelib/cook.pth` is `cook.pth` (its root),
-    `x.dist-info/RECORD` is `{dist-info}/RECORD` (its directory carries the version), `x.data/scripts/y` is
-    `{scripts}/y`. None for a directory entry."""
+    """Where a wheel member lands relative to site-packages: `x.data/purelib/cook.pth` is `cook.pth` (its root), `x.dist-info/RECORD` is `{dist-info}/RECORD` (its directory carries the version), `x.data/scripts/y` is `{scripts}/y`. None for a directory entry."""
     if not path or path.endswith("/"):
         return None
     data = _WHEEL_DATA_RE.match(path)
@@ -190,8 +173,7 @@ def _install_path(path: str) -> str | None:
 
 
 def _source_path(path: str) -> str | None:
-    """An sdist member without its top directory (`litellm-1.107.0/pyproject.toml` is `pyproject.toml`). A member at the
-    root stays where it is: pip builds from the root when the members share no top directory."""
+    """An sdist member without its top directory (`litellm-1.107.0/pyproject.toml` is `pyproject.toml`). A member at the root stays where it is: pip builds from the root when the members share no top directory."""
     if not path or path.endswith("/"):
         return None
     _, sep, rest = path.partition("/")
@@ -216,8 +198,7 @@ def _member(path: str, size: int, data: bytes | None, checksum: str, budget: _Bu
         text = data.decode("utf-8", "replace") if code else None
     coding = _declared_coding(data) if path.lower().endswith((".py", ".pyw")) else None
     if coding is not None:
-        # read as declared too (`coding: utf-7` hides code from a UTF-8 read), and keep both readings: which one
-        # Python takes depends on where the declaration sits, and the union leaves neither to the author
+        # read as declared too (`coding: utf-7` hides code from a UTF-8 read), and keep both readings: which one Python takes depends on where the declaration sits, and the union leaves neither to the author
         try:
             declared = data.decode(coding, "replace")
         except (LookupError, UnicodeError, ValueError, TypeError):
@@ -250,8 +231,7 @@ class _Spent(Exception):
 
 
 def read_artifact(filename: str, data: bytes, budget: _Budget | None = None) -> Artifact:
-    """The members of a wheel or an sdist, read from memory with every size bounded. Never raises on a malformed
-    archive: what could not be read is a note, and a note is `high` evidence (`release-not-fully-read`)."""
+    """The members of a wheel or an sdist, read from memory with every size bounded. Never raises on a malformed archive: what could not be read is a note, and a note is `high` evidence (`release-not-fully-read`)."""
     budget = budget or _Budget()
     found = artifact_version(filename)
     art = Artifact(filename, found[1] if found else "sdist")
@@ -268,8 +248,7 @@ def read_artifact(filename: str, data: bytes, budget: _Budget | None = None) -> 
 
 
 def _zip_directory(data: bytes) -> int | None:
-    """The size in bytes of a zip's central directory, as its end record (or zip64 end record) states it: what zipfile
-    reads and parses whole, whatever member count the record claims. None when the record cannot be found."""
+    """The size in bytes of a zip's central directory, as its end record (or zip64 end record) states it: what zipfile reads and parses whole, whatever member count the record claims. None when the record cannot be found."""
     end = data.rfind(b"PK\x05\x06", max(0, len(data) - 65_557))
     if end < 0 or end + 22 > len(data):
         return None
@@ -279,8 +258,7 @@ def _zip_directory(data: bytes) -> int | None:
     locator = end - 20 if end >= 20 and data[end - 20:end - 16] == b"PK\x06\x07" else -1
     if locator < 0:
         return None if marked else size
-    # zipfile reads the zip64 record right before the locator and ignores the locator's offset; take the larger of
-    # that record, the one the offset names, and an unmarked classic size, so no record can understate the directory
+    # zipfile reads the zip64 record right before the locator and ignores the locator's offset; take the larger of that record, the one the offset names, and an unmarked classic size, so no record can understate the directory
     sizes = [] if marked else [size]
     for offset in (locator - 56, int.from_bytes(data[locator + 8:locator + 16], "little")):
         if 0 <= offset and data[offset:offset + 4] == b"PK\x06\x06":
@@ -316,8 +294,7 @@ def _read_zip(art: Artifact, data: bytes, budget: _Budget) -> None:
 
 
 class _Capped(io.RawIOBase):
-    """A decompressed stream that raises `_Spent` past `limit` bytes, headers included: tarfile reads a pax header
-    whole before any member, so a bound on member sizes alone does not bound what it holds in memory."""
+    """A decompressed stream that raises `_Spent` past `limit` bytes, headers included: tarfile reads a pax header whole before any member, so a bound on member sizes alone does not bound what it holds in memory."""
 
     def __init__(self, stream, limit: int):
         self._stream = stream
@@ -366,8 +343,7 @@ def _read_tar(art: Artifact, data: bytes, budget: _Budget) -> None:
 # ── the change between two releases ──────────────────────────────────────────────────────────────────────
 
 def _patch(old: str, new: str) -> tuple[str, int, int, bool]:
-    """A GitHub-style patch (hunks only) from `old` to `new`: its text, added and removed line counts, and whether it
-    was cut at `_MAX_PATCH_LINES`."""
+    """A GitHub-style patch (hunks only) from `old` to `new`: its text, added and removed line counts, and whether it was cut at `_MAX_PATCH_LINES`."""
     lines = list(difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=3))[2:]
     cut = len(lines) > _MAX_PATCH_LINES
     lines = lines[:_MAX_PATCH_LINES]
@@ -377,8 +353,7 @@ def _patch(old: str, new: str) -> tuple[str, int, int, bool]:
 
 
 def _native_module(path: str) -> str | None:
-    """A native extension's module path without its ABI tag (`pkg/_core.cpython-313-x86_64-linux-gnu.so` is
-    `pkg/_core`), so a release that only adds a wheel for a new Python does not read as a new module."""
+    """A native extension's module path without its ABI tag (`pkg/_core.cpython-313-x86_64-linux-gnu.so` is `pkg/_core`), so a release that only adds a wheel for a new Python does not read as a new module."""
     if not path.lower().endswith(_NATIVE_SUFFIXES) and not _SO_VERSION_RE.search(path):
         return None
     head, _, name = path.rpartition("/")
@@ -393,10 +368,7 @@ def _derived(kind: str, path: str) -> bool:
 
 
 def release_files(new: list[Artifact], old: list[Artifact]) -> tuple[list[dict], list[str]]:
-    """The files of the release's change event: every member of the new artifacts whose content no artifact of the same
-    kind in the old release has at that path, as an event file (`added` or `modified`) labelled `<kind>/<path>` (a
-    second variant of a path gets its wheel's tag, a second member at one path `shadow-n`). Also returns the members
-    that run but were not shown as text, each with why (`release-code-not-read`)."""
+    """The files of the release's change event: every member of the new artifacts whose content no artifact of the same kind in the old release has at that path, as an event file (`added` or `modified`) labelled `<kind>/<path>` (a second variant of a path gets its wheel's tag, a second member at one path `shadow-n`). Also returns the members that run but were not shown as text, each with why (`release-code-not-read`)."""
     old_by: dict[tuple[str, str], dict[str, Member]] = {}
     for art in old:
         for m in art.members.values():
@@ -460,10 +432,7 @@ def _roots(arts: list[Artifact]) -> set[str]:
 # ── facts only a release shows ───────────────────────────────────────────────────────────────────────────
 
 def scan_release(facts: dict) -> list[IndicatorHit]:
-    """The release's own facts as indicators, host-side like `scan_provenance`. What was not read is `high`: a member
-    that runs and was not shown as text, two members at one install path, an artifact not read to its end. A name the
-    wheels newly install at the root of site-packages is `medium`, a new dependency `low`. Text and file-structure
-    rules read the release's files through the ordinary screen."""
+    """The release's own facts as indicators, host-side like `scan_provenance`. What was not read is `high`: a member that runs and was not shown as text, two members at one install path, an artifact not read to its end. A name the wheels newly install at the root of site-packages is `medium`, a new dependency `low`. Text and file-structure rules read the release's files through the ordinary screen."""
     from .indicators import _hit
 
     if not isinstance(facts, dict) or not facts:
@@ -499,9 +468,7 @@ def scan_release(facts: dict) -> list[IndicatorHit]:
 
 
 def release_scope(hits: list[IndicatorHit]) -> list[IndicatorHit]:
-    """The kind of a release changes one rule: a `prompt-injection` in a package's files is read by the programs that
-    import it, not by a reviewer of a pull request, and an LLM library's own code talks about its prompts on every
-    release. It stays in the evidence at `medium`, below the floor; what runs code keeps its severity."""
+    """The kind of a release changes one rule: a `prompt-injection` in a package's files is read by the programs that import it, not by a reviewer of a pull request, and an LLM library's own code talks about its prompts on every release. It stays in the evidence at `medium`, below the floor; what runs code keeps its severity."""
     return [h.model_copy(update={"severity": "medium",
                                  "title": f"{h.title} (in a released package's files, below the floor)"})
             if h.rule == "prompt-injection" and h.severity in ("high", "critical") else h for h in hits]
@@ -560,8 +527,7 @@ def parse_index(body: bytes) -> list[ReleaseFile]:
 
 
 def previous_version(version: str, files: list[ReleaseFile]) -> str | None:
-    """The highest version below `version` with a file that is not yanked; a pre-release is compared only with a
-    release when `version` is not one itself."""
+    """The highest version below `version` with a file that is not yanked; a pre-release is compared only with a release when `version` is not one itself."""
     key = _version_key(version)
     if key is None:
         return None
@@ -591,8 +557,7 @@ def _download(fetch: Fetch, f: ReleaseFile, budget: list[int], notes: list[str])
 
 def release_event(package: str, version: str, files: list[ReleaseFile], fetch: Fetch,
                   only: set[str] | None = None) -> dict:
-    """The change event of a release, or of the files in `only` (a wheel uploaded after the rest): its artifacts
-    against the previous release's, as files whose patches are the diff, with the release's facts in `release`."""
+    """The change event of a release, or of the files in `only` (a wheel uploaded after the rest): its artifacts against the previous release's, as files whose patches are the diff, with the release's facts in `release`."""
     name = normalize_name(package)
     prev = previous_version(version, files)
     notes: list[str] = []
@@ -611,8 +576,7 @@ def release_event(package: str, version: str, files: list[ReleaseFile], fetch: F
 
     new_bodies = download(version, only)
     old_bodies = download(prev, None) if prev else []
-    # first pass: digests only, to learn which members changed; the second keeps text for those alone (and the
-    # metadata the dependency fact reads), so a release of many platform wheels does not spend the text budget
+    # first pass: digests only, to learn which members changed; the second keeps text for those alone (and the metadata the dependency fact reads), so a release of many platform wheels does not spend the text budget
     skim = _Budget(keep=lambda path, digest: False)
     old_digests = {(art.kind, m.path, m.digest) for art in read(old_bodies, skim) for m in art.members.values()}
     first = read(new_bodies, skim)
@@ -654,8 +618,7 @@ def release_event(package: str, version: str, files: list[ReleaseFile], fetch: F
 
 
 def run_id_for(package: str, version: str, revision: int = 0) -> str:
-    """`pypi__<name>-<version>`, `-r<n>` for a later look at files added to the same release. A version string comes
-    from PyPI, so anything but `[A-Za-z0-9._-]` is replaced and the id is never a path."""
+    """`pypi__<name>-<version>`, `-r<n>` for a later look at files added to the same release. A version string comes from PyPI, so anything but `[A-Za-z0-9._-]` is replaced and the id is never a path."""
     rid = re.sub(r"[^A-Za-z0-9._-]", "_", f"pypi__{normalize_name(package)}-{version}")[:200]
     return f"{rid}-r{revision}" if revision else rid
 
@@ -694,10 +657,7 @@ def parse_packages(texts: list[str]) -> list[str]:
 
 
 class ReleaseWatcher:
-    """Polls the simple index of each package. On first sight of a package, every file it already has is the baseline
-    and is not judged; each file that appears after that is, grouped by release and compared with the release before.
-    A file is recorded only once its comparison is screened, and the index's ETag only once every file of it is, so a
-    watcher stopped mid-comparison judges the same files on its next pass."""
+    """Polls the simple index of each package. On first sight of a package, every file it already has is the baseline and is not judged; each file that appears after that is, grouped by release and compared with the release before. A file is recorded only once its comparison is screened, and the index's ETag only once every file of it is, so a watcher stopped mid-comparison judges the same files on its next pass."""
 
     def __init__(self, packages: list[str], *, state_dir: str, out_dir: str, fetch: Fetch | None = None,
                  emit: bool = True, poster=None, config=None, archive: bool = True,
@@ -732,8 +692,7 @@ class ReleaseWatcher:
         return parse_index(body), {k.lower(): v for k, v in resp_headers.items()}.get("etag")
 
     def poll_once(self) -> list[dict]:
-        """One pass over the packages: returns a summary per comparison screened. A package that fails is logged and
-        tried again on the next pass; it never stops the others."""
+        """One pass over the packages: returns a summary per comparison screened. A package that fails is logged and tried again on the next pass; it never stops the others."""
         self._retry_alerts()
         results = []
         for package in self.packages:
@@ -763,8 +722,7 @@ class ReleaseWatcher:
         for f in files:
             if f.filename not in known:
                 fresh.setdefault(f.version, set()).add(f.filename)
-        # a pending error over a set of files that is no longer the set to judge (a file added or removed since) is
-        # superseded: the current set is judged instead, and the old row no longer holds the index's ETag back
+        # a pending error over a set of files that is no longer the set to judge (a file added or removed since) is superseded: the current set is judged instead, and the old row no longer holds the index's ETag back
         current = [json.dumps(sorted(names)) for names in fresh.values()]
         self.db.execute(f"UPDATE judgments SET state='superseded' WHERE package=? AND state='error' AND fail_count<? "
                         f"AND files NOT IN ({','.join('?' * len(current))})", (package, _MAX_FAILS, *current))
@@ -782,9 +740,7 @@ class ReleaseWatcher:
 
     def judge(self, package: str, version: str, files: list[ReleaseFile], *, only: set[str] | None = None,
               record: bool = False, run_id: str | None = None) -> dict:
-        """Compare a release (or its files in `only`) with the release before it, archive the comparison, and screen it
-        (the early SIEM alert when its evidence reaches the floor). With `record`, the files are marked judged once it
-        is screened, and a comparison that fails is retried on later passes and kept as `error` after five. Never raises."""
+        """Compare a release (or its files in `only`) with the release before it, archive the comparison, and screen it (the early SIEM alert when its evidence reaches the floor). With `record`, the files are marked judged once it is screened, and a comparison that fails is retried on later passes and kept as `error` after five. Never raises."""
         from .cli import screen
 
         names = sorted(only) if only is not None else sorted(f.filename for f in files if f.version == version)
@@ -836,8 +792,7 @@ class ReleaseWatcher:
                 "path": art.path, "indicators": [(h.rule, h.severity, h.location) for h in resp.indicators]}
 
     def _give_up(self, package: str, version: str, names: list[str], run_id: str, error: str) -> None:
-        """A comparison that failed `_MAX_FAILS` times is screened as a release that could not be read (`high`), so the
-        files it held back still raise an alert rather than going quiet."""
+        """A comparison that failed `_MAX_FAILS` times is screened as a release that could not be read (`high`), so the files it held back still raise an alert rather than going quiet."""
         from .cli import screen
 
         name = normalize_name(package)
@@ -856,8 +811,7 @@ class ReleaseWatcher:
                         (art.response.floor_indicator_severity, pending, run_id))
 
     def _retry_alerts(self) -> None:
-        """Send again, a few per poll, the early alerts the SIEM did not accept (a refusal or an outage), from the
-        screened response on disk; an alert counts once the SIEM answered 2xx."""
+        """Send again, a few per poll, the early alerts the SIEM did not accept (a refusal or an outage), from the screened response on disk; an alert counts once the SIEM answered 2xx."""
         if not self.emit:
             return
         from .config import DetectConfig
@@ -880,8 +834,7 @@ class ReleaseWatcher:
         self.db.commit()
 
     def check(self, package: str, version: str) -> dict:
-        """Judge one release now against the one before it, whatever the state says, under its own run id
-        (`...-check`): a one-off look never stands in for the watcher's judgment."""
+        """Judge one release now against the one before it, whatever the state says, under its own run id (`...-check`): a one-off look never stands in for the watcher's judgment."""
         status, _, body = self.fetch(_SIMPLE_URL.format(name=package), {"Accept": _SIMPLE_ACCEPT}, _MAX_INDEX_BYTES)
         if status != 200:
             raise RuntimeError(f"the index of {package} answered HTTP {status}")

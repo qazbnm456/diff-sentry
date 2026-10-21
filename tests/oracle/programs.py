@@ -1,8 +1,6 @@
 """Shell-like programs from a small grammar, cut short: the texts the lexer is held to bash and dash on.
 
-A program is a few lines of words (plain, single and double quoted, `$'…'`, parameter expansions, command and process substitutions,
-backticks), pipelines, comments, line continuations and here-documents (quoted or not, with bodies that open constructs). Every prefix
-that ends at a newline, and a few that end anywhere, is a text a document can start in the middle of."""
+A program is a few lines of words (plain, single and double quoted, `$'…'`, parameter expansions, command and process substitutions, backticks), pipelines, comments, line continuations and here-documents (quoted or not, with bodies that open constructs). Every prefix that ends at a newline, and a few that end anywhere, is a text a document can start in the middle of."""
 from __future__ import annotations
 
 import random
@@ -122,8 +120,7 @@ _TAILS = ["", "E\n", "EOF\n", "\n", ")\n", "}\n", "`\n", "'\n"]
 
 
 def contexts(rng: random.Random, count: int) -> list[str]:
-    """Texts that put up to three tokens inside each place a construct can be open in (and cut them off there), then end in one of a few
-    tails. Random atoms rarely build a `$(` that holds a here-document operator and closes on its line; this does."""
+    """Texts that put up to three tokens inside each place a construct can be open in (and cut them off there), then end in one of a few tails. Random atoms rarely build a `$(` that holds a here-document operator and closes on its line; this does."""
     texts: set[str] = set()
     for _ in range(count):
         before, after = rng.choice(_CONTEXTS)

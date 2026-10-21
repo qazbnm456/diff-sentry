@@ -63,9 +63,7 @@ def test_tool_surfaces_endpoint_error():
 
 
 def test_deep_classify_record_has_no_child_fields_today(tmp_path):
-    """The child_* harness-link fields are GUARDED: the `self` backend's ModelToolResult carries none, so
-    the recorded tool_call must NOT carry child_run_id/child_trace/child_meta. The guard exists for a
-    make_harness_tool backend, which would populate them."""
+    """The child_* harness-link fields are GUARDED: the `self` backend's ModelToolResult carries none, so the recorded tool_call must NOT carry child_run_id/child_trace/child_meta. The guard exists for a make_harness_tool backend, which would populate them."""
     from rlm_harness import TraceRecorder
     from rlm_harness.trace import load_events
 

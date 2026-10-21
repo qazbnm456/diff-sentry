@@ -1,8 +1,4 @@
-/* The RLM-run replay drawer (a bottom-sheet): a live tool timeline + iteration nav + a resumable,
-   speed-aware replay. Handed shared helpers + getters for the live currentRunId / busy state (READ only);
-   the pure replay-walk + timing math stays in ReplayCore (replay-core.js, unit-tested). Loaded as a plain
-   <script> before app.js, exposing a window.Trajectory factory. Tool families are diff-sentry's:
-   scan / classify / analyst / fetch / skill. */
+/* The RLM-run replay drawer (a bottom-sheet): a live tool timeline + iteration nav + a resumable, speed-aware replay. Handed shared helpers + getters for the live currentRunId / busy state (READ only); the pure replay-walk + timing math stays in ReplayCore (replay-core.js, unit-tested). Loaded as a plain <script> before app.js, exposing a window.Trajectory factory. Tool families are diff-sentry's: scan / classify / analyst / fetch / skill. */
 (function () {
   "use strict";
   window.Trajectory = function createTrajectory(deps) {
@@ -52,8 +48,7 @@
     clearTimeout(closeTimer);   // a re-open inside the close window must not be re-hidden by the stale timer
     trajEl.backdrop.hidden = false; trajEl.drawer.hidden = false;
     trajEl.handle.setAttribute("aria-expanded", "true");
-    // Flush the unhide before animating: rAF alone fires BEFORE the next style recalc, so coming from
-    // display:none the .open/.show transitions would have no start frame and jump straight to the end.
+    // Flush the unhide before animating: rAF alone fires BEFORE the next style recalc, so coming from display:none the .open/.show transitions would have no start frame and jump straight to the end.
     void trajEl.drawer.offsetHeight;
     trajEl.steps.scrollTop = 0; trajEl.timeline.scrollLeft = 0;   // render-time scrollIntoView no-ops while hidden
     trajEl.backdrop.classList.add("show"); trajEl.drawer.classList.add("open");
@@ -267,8 +262,7 @@
         (failed && t.note ? `<div class="det-bad">${esc(t.note)}</div>` : "") +
         (t.content ? `<div class="block"><div class="block-head">${failed ? "response" : "fetched (head)"}</div><pre class="src-well">${esc(t.content)}</pre></div>` : "");
     }
-    // Generic fallback (an unrecognized tool): render ok + the short scalar fields as kv rows, so an
-    // unknown tool_call is never a bare "no detail recorded" when the payload carried fields.
+    // Generic fallback (an unrecognized tool): render ok + the short scalar fields as kv rows, so an unknown tool_call is never a bare "no detail recorded" when the payload carried fields.
     const rows = [];
     if (t.ok != null) rows.push(kv("ok", esc(t.ok)));
     const fields = t.fields || {};

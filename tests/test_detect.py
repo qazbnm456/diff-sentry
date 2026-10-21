@@ -1,7 +1,6 @@
 """The RLM task declaration: MISSION frame, skills wiring, tools, and a real dspy.RLM build.
 
-Uses configure_dummy (DummyLM + mock interpreter): builds through the real dspy.RLM constructor with no
-network/Deno. No forward() call (that needs a live model + classifier endpoint)."""
+Uses configure_dummy (DummyLM + mock interpreter): builds through the real dspy.RLM constructor with no network/Deno. No forward() call (that needs a live model + classifier endpoint)."""
 
 from __future__ import annotations
 
@@ -122,9 +121,7 @@ def test_setup_turns_sandbox_sub_agents_off():
 
 
 def test_program_offers_no_sub_agents():
-    """The behaviour behind the flag: on the interpreter the program runs on, dspy's sub-agent facade fails to
-    install, so its host tools are dropped and the prompt gets no sub-agent paragraph. Reaches into dspy's
-    RLM internals on purpose: if they move, this must be re-checked, not deleted."""
+    """The behaviour behind the flag: on the interpreter the program runs on, dspy's sub-agent facade fails to install, so its host tools are dropped and the prompt gets no sub-agent paragraph. Reaches into dspy's RLM internals on purpose: if they move, this must be re-checked, not deleted."""
     from dspy.predict.rlm import _LLMCallBudget
 
     from diff_sentry.detect import setup
@@ -154,8 +151,7 @@ def test_setup_refuses_a_kit_owned_key():
 def test_from_env_reads_roles_and_knobs(monkeypatch):
     from tests.test_config import _DS_ENV
 
-    # Scrub the FULL DS_* set first (the test_config convention): importing dspy pulls litellm, whose
-    # import-time load_dotenv() injects the developer's repo `.env` into this very process.
+    # Scrub the FULL DS_* set first (the test_config convention): importing dspy pulls litellm, whose import-time load_dotenv() injects the developer's repo `.env` into this very process.
     for name in _DS_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("DS_ROOT_LM", "planner-x")

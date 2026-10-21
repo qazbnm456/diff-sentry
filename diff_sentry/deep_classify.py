@@ -1,17 +1,11 @@
 """The second-stage classifier tool: the SEAM designed to be swapped to a stronger/dedicated backend.
 
-`make_deep_classify_tool` builds the `deep_classify` tool from a `chat_fn` via rlm-harness's `make_model_tool`
-(chat + transient-retry + validate + circuit-breaker). The planner CHOOSES to consult it on an ambiguous
-change, so the call lands in the trajectory as a `tool_call`, the correct rlm-harness shape for a second
-model-JUDGEMENT (it must be a tool, not the sub-LM: a model grading the change is an agentic decision).
+`make_deep_classify_tool` builds the `deep_classify` tool from a `chat_fn` via rlm-harness's `make_model_tool` (chat + transient-retry + validate + circuit-breaker). The planner CHOOSES to consult it on an ambiguous change, so the call lands in the trajectory as a `tool_call`, the correct rlm-harness shape for a second model-JUDGEMENT (it must be a tool, not the sub-LM: a model grading the change is an agentic decision).
 
-- `classify_backend="self"` (the default and only wired backend): a general model returns a structured
-  verdict as JSON.
-- A dedicated/stronger backend replaces only `_selfclassify_chat`; the planner, schema, assemble, and
-  export stay untouched. Routing stage-2 through one `chat_fn` is what keeps that swap local.
+- `classify_backend="self"` (the default and only wired backend): a general model returns a structured verdict as JSON.
+- A dedicated/stronger backend replaces only `_selfclassify_chat`; the planner, schema, assemble, and export stay untouched. Routing stage-2 through one `chat_fn` is what keeps that swap local.
 
-The chat call is injectable (`chat_fn`) so the pipeline is testable without a live endpoint. Sync: dspy
-invokes tools synchronously.
+The chat call is injectable (`chat_fn`) so the pipeline is testable without a live endpoint. Sync: dspy invokes tools synchronously.
 """
 
 from __future__ import annotations
@@ -28,17 +22,14 @@ from .schema import SUBMIT_VERDICTS
 
 
 class _CutReply(str):
-    """The classifier's reply when it stopped at `max_tokens` (`finish_reason == "length"`). A str, so rlm-harness's
-    `make_model_tool` hands it to the validator as it is, which names the cut: as an unusable reply it is not re-sent (the
-    same request is cut the same way) and it counts toward the circuit breaker."""
+    """The classifier's reply when it stopped at `max_tokens` (`finish_reason == "length"`). A str, so rlm-harness's `make_model_tool` hands it to the validator as it is, which names the cut: as an unusable reply it is not re-sent (the same request is cut the same way) and it counts toward the circuit breaker."""
 
     limit: int = 0
 
 
 @dataclass
 class ClassifyValidation:
-    """The validator's verdict over the classifier's raw output: `.ok` / `.errors` for make_model_tool,
-    plus the parsed structured fields the caller surfaces to the planner."""
+    """The validator's verdict over the classifier's raw output: `.ok` / `.errors` for make_model_tool, plus the parsed structured fields the caller surfaces to the planner."""
 
     ok: bool
     errors: list[str] = field(default_factory=list)
@@ -49,9 +40,7 @@ class ClassifyValidation:
 
 
 def _parse_classifier_json(raw: str) -> ClassifyValidation:
-    """Deterministically validate the classifier's structured output: it must be JSON with a known
-    `verdict`. A malformed/off-schema reply is `ok=False` so the planner re-asks or falls back, never
-    a silent bad verdict. One cut at `max_tokens` (`_CutReply`) says so, whatever it holds."""
+    """Deterministically validate the classifier's structured output: it must be JSON with a known `verdict`. A malformed/off-schema reply is `ok=False` so the planner re-asks or falls back, never a silent bad verdict. One cut at `max_tokens` (`_CutReply`) says so, whatever it holds."""
     v = _parse_reply(raw)
     if v.ok or not isinstance(raw, _CutReply):
         return v
@@ -74,8 +63,7 @@ def _parse_reply(raw: str) -> ClassifyValidation:
     except ValueError as exc:
         return ClassifyValidation(ok=False, errors=[f"invalid JSON: {exc}"])
     verdict = str(obj.get("verdict", "")).strip().lower()
-    # SUBMIT_VERDICTS = the 3 decisive verdicts + the sanctioned `inconclusive` outcome, so a deep
-    # escalation on a content-free / ungroundable change can also decline to a confident call.
+    # SUBMIT_VERDICTS = the 3 decisive verdicts + the sanctioned `inconclusive` outcome, so a deep escalation on a content-free / ungroundable change can also decline to a confident call.
     if verdict not in SUBMIT_VERDICTS:
         return ClassifyValidation(ok=False, errors=[f"verdict {verdict!r} not in {SUBMIT_VERDICTS}"])
     try:
@@ -89,15 +77,12 @@ def _parse_reply(raw: str) -> ClassifyValidation:
                               rationale=str(obj.get("rationale", "")), techniques=[str(t) for t in techniques])
 
 
-# The HTTP statuses an OpenAI-compatible endpoint answers the same way to the same request: a malformed or oversized
-# request, a wrong key, a model or route that does not exist. A 408, a 409, a 429 and every 5xx can pass.
+# The HTTP statuses an OpenAI-compatible endpoint answers the same way to the same request: a malformed or oversized request, a wrong key, a model or route that does not exist. A 408, a 409, a 429 and every 5xx can pass.
 _REPEATING_STATUSES = frozenset({400, 401, 403, 404, 422})
 
 
 def is_fast_fail_http(exc: BaseException) -> bool:
-    """`make_model_tool`'s `is_fast_fail` for a chat on the openai client: an error status that repeats on the same
-    request is not re-sent, and it counts toward the circuit breaker, so a misconfigured endpoint stops being called.
-    Anything else (a timeout, a transport error, an exception of another client) keeps the transient retry."""
+    """`make_model_tool`'s `is_fast_fail` for a chat on the openai client: an error status that repeats on the same request is not re-sent, and it counts toward the circuit breaker, so a misconfigured endpoint stops being called. Anything else (a timeout, a transport error, an exception of another client) keeps the transient retry."""
     try:
         from openai import APIStatusError
     except ImportError:
@@ -106,8 +91,7 @@ def is_fast_fail_http(exc: BaseException) -> bool:
 
 
 def _selfclassify_chat(config: DetectConfig) -> Callable[[str], str]:
-    """The `classify_backend="self"` chat: a general model returns a structured verdict on its
-    OpenAI-compatible API. Lazy openai import so tests need not install it."""
+    """The `classify_backend="self"` chat: a general model returns a structured verdict on its OpenAI-compatible API. Lazy openai import so tests need not install it."""
 
     def chat(findings: str) -> str:
         from openai import OpenAI
@@ -140,9 +124,7 @@ def _selfclassify_chat(config: DetectConfig) -> Callable[[str], str]:
 
 def make_deep_classify_tool(config: DetectConfig, chat_fn: Callable[[str], str] | None = None
                             ) -> Callable[[str], str]:
-    """Build the `deep_classify` tool. The generic chat→retry→validate→circuit-break loop is rlm-harness's
-    `make_model_tool`; this wrapper plugs in the backend, the JSON validator, the result message, and
-    the tracing."""
+    """Build the `deep_classify` tool. The generic chat→retry→validate→circuit-break loop is rlm-harness's `make_model_tool`; this wrapper plugs in the backend, the JSON validator, the result message, and the tracing."""
     chat = chat_fn if chat_fn is not None else _selfclassify_chat(config)
     cb = config.classifier_circuit_break
     call = make_model_tool(
@@ -153,9 +135,7 @@ def make_deep_classify_tool(config: DetectConfig, chat_fn: Callable[[str], str] 
     )
 
     def deep_classify(findings: str) -> str:
-        """Get a SECOND-STAGE structured verdict on an ambiguous change. Pass a DISTILLED description of
-        the change + the indicators found (never the whole diff). Returns the classifier's verdict +
-        rationale; weigh it into your own judgement — it is an input, not a rubber stamp."""
+        """Get a SECOND-STAGE structured verdict on an ambiguous change. Pass a DISTILLED description of the change + the indicators found (never the whole diff). Returns the classifier's verdict + rationale; weigh it into your own judgement — it is an input, not a rubber stamp."""
         r = call(findings)
         if r.circuit_broken:
             record_tool_call("deep_classify", args={"findings": findings[:400]}, ok=False,
@@ -167,9 +147,7 @@ def make_deep_classify_tool(config: DetectConfig, chat_fn: Callable[[str], str] 
             return f"DEEP_CLASSIFY ENDPOINT ERROR: {r.endpoint_error}. Decide from the indicators yourself."
         v: ClassifyValidation = r.validated
         # SEAM: a delegated rlm-harness HARNESS backend (make_harness_tool) returns
-        # child_run_id/child_trace/child_meta linking THIS parent run to the child's OWN rollout. Attach
-        # them IFF present so the link survives recording. The `self` backend's ModelToolResult carries
-        # none, so `child` is empty.
+        # child_run_id/child_trace/child_meta linking THIS parent run to the child's OWN rollout. Attach them IFF present so the link survives recording. The `self` backend's ModelToolResult carries none, so `child` is empty.
         child = {k: getattr(r, k) for k in ("child_run_id", "child_trace", "child_meta")
                  if getattr(r, k, None) is not None}
         record_tool_call("deep_classify", args={"findings": findings[:400]}, ok=v.ok, raw=r.raw,

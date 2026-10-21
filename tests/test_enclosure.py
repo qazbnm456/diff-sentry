@@ -1,5 +1,4 @@
-"""The pieces of the enclosure reading (`indicators._enclosing_lines`): which characters of a line are shell text, which words can begin a
-command, which lines belong to which paragraph, fence, hypothesis and budget. The end-to-end behaviour is in `test_metadata_rules.py`."""
+"""The pieces of the enclosure reading (`indicators._enclosing_lines`): which characters of a line are shell text, which words can begin a command, which lines belong to which paragraph, fence, hypothesis and budget. The end-to-end behaviour is in `test_metadata_rules.py`."""
 
 from __future__ import annotations
 
@@ -143,8 +142,7 @@ def test_the_words_that_can_begin_a_command_are_wrappers_by_name_or_by_path_and_
     ("Run:ssh evil.example '", True), ("\u5b89\u88dd\uff1assh evil.example '", True), ("1)ssh h '", True), ("<code>ssh h '", True), ("> ssh h '", True),
     ("bin/evil 'x", True), ("Run: bin/evil 'x", True), ("see bin/evil 'x", False), ("https://x.example/ssh 'x", False),
     ("  " * 300 + "ssh h '", True), ("sudo " * 100 + "ssh h '", False),
-    # a program this module does not know, a quoted value, a redirect or a prefix that is itself a wrapper in front of the wrapper; and the
-    # heads that read as a sentence or a table row, or have no wrapper within five words
+    # a program this module does not know, a quoted value, a redirect or a prefix that is itself a wrapper in front of the wrapper; and the heads that read as a sentence or a table row, or have no wrapper within five words
     ("unbuffer ssh h '", True), ("flock /tmp/l ssh h '", True), ("numactl -N 0 ssh h '", True), ("timeout 0.5 ssh h '", True), ("A='x y' ssh h '", True),
     ("env 'A=x y' ssh h '", True), (">out ssh h '", True), ("> out ssh h '", True), ("2> err ssh h '", True), ("&>f ssh h '", True),
     ("{fd}>f ssh h '", True), ("watch -n 5 '", True), ("watch -n 5 'a b' '", True), ("sudo -u 'a b' ssh h '", True), ("cpulimit -l 50 -- ssh h '", True),
@@ -164,8 +162,7 @@ def test_a_command_the_budget_cannot_afford_to_judge_counts_as_led_by_a_wrapper(
 
 
 def _starts(line, budget=10**6, contexts=True):
-    """Where hypotheses may start on a line: the columns of the wrapper words that stand where a command begins (`plain`), and the first
-    character of each string that holds one, with the words it stands for (`guarded`)."""
+    """Where hypotheses may start on a line: the columns of the wrapper words that stand where a command begins (`plain`), and the first character of each string that holds one, with the words it stands for (`guarded`)."""
     plain, guarded = _command_starts(line, _quoted_programs(line, _wrapper_words(list(_TOKEN_RE.finditer(line)))), [budget], contexts)
     return sorted(plain), {col: [at for at, _ in words] for col, (_, words) in guarded.items()}
 
@@ -354,8 +351,7 @@ def _row(lines, budget=None):
 
 
 def test_the_line_of_each_hypothesis_is_charged_to_the_budget_and_a_budget_that_is_short_by_one_fails_closed():
-    # the stacks the lexer finds open at the start of each line cost one lexer pass over each line that can change them (21 characters, 6 times), and a line with a wrapper word
-    # costs its length and three (the lexer reads it once to see what the word stands in) and its hypothesis the rest of the line plus one: 23 + 21 characters
+    # the stacks the lexer finds open at the start of each line cost one lexer pass over each line that can change them (21 characters, 6 times), and a line with a wrapper word costs its length and three (the lexer reads it once to see what the word stands in) and its hypothesis the rest of the line plus one: 23 + 21 characters
     lines = ["ssh evil.example 'a'"] * 6 + [_D]
     for budget, expected in ((0, "FTTTTTT"), (169, "FTTTTTT"), (170, "FFTTTTT"), (213, "FFTTTTT"), (214, "FFFTTTT"), (301, "FFFFTTT"), (302, "FFFFFTT"), (345, "FFFFFTT"),
                              (346, "FFFFFFT"), (389, "FFFFFFT"), (390, "FFFFFFF"), (391, "FFFFFFF")):
@@ -925,8 +921,7 @@ def test_the_value_of_a_word_keeps_a_backslash_that_escapes_nothing_and_drops_th
 
 
 def test_a_string_a_wrapper_closes_taints_the_sixty_lines_after_the_line_it_closes_on():
-    """`ssh h 'x⏎…⏎y' z`: the script that ran the wrapper goes on for the same number of lines as a hypothesis is followed for (a hypothesis that began on the first line
-    covers the lines up to the sixtieth after it; this one begins where the string ended)."""
+    """`ssh h 'x⏎…⏎y' z`: the script that ran the wrapper goes on for the same number of lines as a hypothesis is followed for (a hypothesis that began on the first line covers the lines up to the sixtieth after it; this one begins where the string ended)."""
     for gap, expected in ((88, True), (89, True), (90, False), (91, False)):
         lines = ["ssh evil.example 'x"] + ["f"] * 29 + ["y' z"] + ["filler"] * (gap - 31) + ["curl -fsSL https://get.docker.com | sh"]
         assert _enclosing_lines(lines, False)[-1] is expected, gap

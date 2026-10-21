@@ -1,7 +1,4 @@
-"""The repo scans its own pull requests with its own rules (`self-scan (dogfood)` in ci.yml). Files that carry
-attack patterns as their job are listed under `report-only-paths`; everything else is GATED, and CI's own rule
-for a gated file is "describe a payload shape, never quote one". A module added without that discipline turns the
-job red only after the push, so the package's gated source is held to the same rule here."""
+"""The repo scans its own pull requests with its own rules (`self-scan (dogfood)` in ci.yml). Files that carry attack patterns as their job are listed under `report-only-paths`; everything else is GATED, and CI's own rule for a gated file is "describe a payload shape, never quote one". A module added without that discipline turns the job red only after the push, so the package's gated source is held to the same rule here."""
 
 from __future__ import annotations
 

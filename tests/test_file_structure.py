@@ -1,5 +1,4 @@
-"""The file-structure rules (`indicators.scan_files`) and the two text rules written with them
-(`obfuscated-string-array`, `asset-run-as-code`): the shape of a dev-machine loader pushed with ordinary work.
+"""The file-structure rules (`indicators.scan_files`) and the two text rules written with them (`obfuscated-string-array`, `asset-run-as-code`): the shape of a dev-machine loader pushed with ordinary work.
 
 Every positive case is synthetic and inert (no real payload): the rules read structure, not behaviour."""
 
@@ -343,8 +342,7 @@ def test_the_live_shape_still_reads():
 
 
 def test_no_module_level_name_is_bound_twice():
-    # A rule's constant named like an existing one silently rebinds it for every rule above: the shell rules and the
-    # run-entry reader both want names such as `_WRAPPERS` and `_SEGMENT_SPLIT_RE`.
+    # A rule's constant named like an existing one silently rebinds it for every rule above: the shell rules and the run-entry reader both want names such as `_WRAPPERS` and `_SEGMENT_SPLIT_RE`.
     import ast
     import collections
     from pathlib import Path

@@ -1,5 +1,4 @@
-"""`diff_sentry.shelllex`: what is still open where each line of a text begins. Without Docker; `tests/test_oracle.py` (opt-in)
-holds the lexer to what real `bash -n` and `dash -n` say about thousands of generated fragments."""
+"""`diff_sentry.shelllex`: what is still open where each line of a text begins. Without Docker; `tests/test_oracle.py` (opt-in) holds the lexer to what real `bash -n` and `dash -n` say about thousands of generated fragments."""
 
 from __future__ import annotations
 
@@ -144,8 +143,7 @@ def test_a_long_word_is_skipped_in_one_step():
 
 
 def test_the_body_of_a_backtick_substitution_is_read_as_commands():
-    """A Markdown code span is a backtick substitution to a shell: the body is cut at the first backtick that is not escaped and read
-    as commands, so a string a wrapper opens inside it is open on the lines inside, and closed after it."""
+    """A Markdown code span is a backtick substitution to a shell: the body is cut at the first backtick that is not escaped and read as commands, so a string a wrapper opens inside it is open on the lines inside, and closed after it."""
     text = "Run `docker run x sh -c '\nset -e\ncurl X\n'` now\nafter"
     assert kinds(text) == [(), ("BQ", "SQ"), ("BQ", "SQ"), ("BQ", "SQ"), ()]
     heredoc = "With `ssh h <<'EOF'\nbody\nEOF` | sudo sh\nafter"
@@ -842,9 +840,7 @@ def test_a_workflow_expression_ends_where_its_double_braces_close_and_not_at_a_d
 
 
 @pytest.mark.parametrize("text,unknown_flags,open_at_end,closed", [
-    # texts on which a one-character change to one of the lexer's rules was seen: the unknown flag at the start of each line (T or F), the
-    # constructs open at the end as (kind, offset, where their command began), and the constructs that closed as (line, kind, offset, where their
-    # command began)
+    # texts on which a one-character change to one of the lexer's rules was seen: the unknown flag at the start of each line (T or F), the constructs open at the end as (kind, offset, where their command began), and the constructs that closed as (line, kind, offset, where their command began)
     ('a=\\\na[\n', 'FFT', (), []),
     ('extglob\\\n@(a\nb)\nz\n', 'FFTTT', (), [(2, 'SUB', 10, 0)]),
     ('\\\nextglob\n@(a\n]b)\nz\n', 'FFFTTT', (), [(3, 'SUB', 11, 10)]),
@@ -901,8 +897,7 @@ def test_a_workflow_expression_ends_where_its_double_braces_close_and_not_at_a_d
     ('<\\\n(\n', 'FTT', (('SUB', 3, 0),), []),
     ("ssh h $@(a) '\n", 'FF', (('SQ', 12, 0),), []),
     ("ssh h$ ?(a) '\n", 'FF', (('SQ', 12, 0),), []),
-    # the states of the shortest texts on which a mutant of one of the lexer's tables, sets or classes (a set element, a character of a regular expression or of a
-    # string) read differently
+    # the states of the shortest texts on which a mutant of one of the lexer's tables, sets or classes (a set element, a character of a regular expression or of a string) read differently
     ('$\\\n(\n', 'FTT', (('SUB', 3, 0),), []),
     ('>\\\n(\n', 'FTT', (('SUB', 3, 0),), []),
     ('$($${(a', 'F', (), []),
@@ -1301,8 +1296,7 @@ _PROBED_TEXTS = [
 
 @pytest.mark.parametrize("text", _PROBED_TEXTS)
 def test_a_probe_at_an_offset_is_the_state_that_lexing_the_text_up_to_it_ends_in(text):
-    """Between two tokens, and inside a string, the constructs open before a character are the ones open at the end of the text that stops there (a probe
-    at a closing backtick, or in a here-document body, is not asked for; neither is one inside a two-character token)."""
+    """Between two tokens, and inside a string, the constructs open before a character are the ones open at the end of the text that stops there (a probe at a closing backtick, or in a here-document body, is not asked for; neither is one inside a two-character token)."""
     offsets = tuple(range(len(text) + 1))
     probed = line_states(text, probes=offsets).probed
     multi = {"$(", "<<", "<(", ">(", "${", "$'", "$[", "\\\n", "((", "))", "$((", "=(", "[[", "=~", "]]", "f("}
@@ -1369,8 +1363,7 @@ def test_a_line_continuation_between_an_ampersand_and_a_redirect_is_unknown(text
 
 
 def _snapshot(text, start):
-    """Everything the lexer says of a text: the unknown flag at the start of each line, the constructs open at the end (kind, offset, where their command began),
-    whether the end is undecided, the constructs that closed (line, kind, offset, command), and a probe at every offset."""
+    """Everything the lexer says of a text: the unknown flag at the start of each line, the constructs open at the end (kind, offset, where their command began), whether the end is undecided, the constructs that closed (line, kind, offset, command), and a probe at every offset."""
     lexed = line_states(text, start=tuple(Opener(kind, 0, 0) for kind in start), probes=tuple(range(len(text) + 1)))
     return ("".join("T" if s.unknown else "F" for s in lexed), tuple((o.kind, o.offset, o.command_at) for o in lexed[-1].openers), lexed.unknown_at_end,
             tuple((line, o.kind, o.offset, o.command_at) for line, o in lexed.closed),

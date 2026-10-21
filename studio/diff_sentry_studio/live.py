@@ -1,18 +1,8 @@
 """Live-run event capture: turn a running diff-sentry classification into the public SSE stream.
 
-diff-sentry's `cli.run` exposes an `on_event` observer (the `TraceRecorder`'s per-record hook) and an
-`outdir` param, so the studio streams the run's ACTIONS live and writes artifacts where the GET endpoints
-read them, WITHOUT any change to the harness (a consumer extends, it never forks). The one honest gap:
-`main_step` reasoning flushes post-hoc (as a trailing burst through the SAME `on_event`), so the live
-feed carries the tool/analyst ACTION stream (scan / classify / analyst / fetch / skill), not live
-reasoning. Reasoning is available in the Trajectory drawer (replay over the stored trace). Streaming live
-reasoning would need a rlm-harness change (forward the main-step preview to `on_event` as each turn parses),
-promoted into the kit for every consumer, NOT a consumer-side callbacks passthrough.
+diff-sentry's `cli.run` exposes an `on_event` observer (the `TraceRecorder`'s per-record hook) and an `outdir` param, so the studio streams the run's ACTIONS live and writes artifacts where the GET endpoints read them, WITHOUT any change to the harness (a consumer extends, it never forks). The one honest gap: `main_step` reasoning flushes post-hoc (as a trailing burst through the SAME `on_event`), so the live feed carries the tool/analyst ACTION stream (scan / classify / analyst / fetch / skill), not live reasoning. Reasoning is available in the Trajectory drawer (replay over the stored trace). Streaming live reasoning would need a rlm-harness change (forward the main-step preview to `on_event` as each turn parses), promoted into the kit for every consumer, NOT a consumer-side callbacks passthrough.
 
-`run_live` is SYNCHRONOUS: call it in a worker thread; the FastAPI layer wires `sink`/`on_done` to a
-thread-safe queue. `on_done` is ALWAYS called exactly once, even if importing diff_sentry fails (the
-`live` extra was not installed), so the SSE stream completes with an informative `failed` response
-instead of the worker thread dying silently and leaving the client hung.
+`run_live` is SYNCHRONOUS: call it in a worker thread; the FastAPI layer wires `sink`/`on_done` to a thread-safe queue. `on_done` is ALWAYS called exactly once, even if importing diff_sentry fails (the `live` extra was not installed), so the SSE stream completes with an informative `failed` response instead of the worker thread dying silently and leaving the client hung.
 """
 
 from __future__ import annotations
@@ -26,10 +16,7 @@ from .mapper import to_event
 
 
 def trace_event_sink(sink: Callable[[dict], None]) -> Callable[[dict], None]:
-    """Build a `TraceRecorder` `on_event` observer that maps `tool_call`/`sub_call` trace events →
-    public SSE events (via the shared `mapper.to_event`) and pushes them to `sink`, live. Skips
-    `main_step` (it flushes post-hoc as a trailing burst; surfacing it would misrepresent the timeline)
-    and run_start/run_end/result (the endpoint owns `created`/`completed`)."""
+    """Build a `TraceRecorder` `on_event` observer that maps `tool_call`/`sub_call` trace events → public SSE events (via the shared `mapper.to_event`) and pushes them to `sink`, live. Skips `main_step` (it flushes post-hoc as a trailing burst; surfacing it would misrepresent the timeline) and run_start/run_end/result (the endpoint owns `created`/`completed`)."""
 
     def on_event(event: dict) -> None:
         if event.get("type") in ("tool_call", "sub_call"):
@@ -41,11 +28,7 @@ def trace_event_sink(sink: Callable[[dict], None]) -> Callable[[dict], None]:
 
 
 def _quiet_litellm_aiohttp() -> None:
-    """litellm (dspy's LM backend, via rlm-harness) defaults to an aiohttp transport whose pooled
-    ClientSession is bound to the per-run `asyncio.run` loop; when that loop closes (run finished), aiohttp
-    logs a noisy "Unclosed connector" through the loop's exception handler. Force litellm onto httpx: no
-    aiohttp session is created, so nothing dangles. One process-global flag, best-effort: a replay-only
-    install has no litellm, and a flag rename just no-ops."""
+    """litellm (dspy's LM backend, via rlm-harness) defaults to an aiohttp transport whose pooled ClientSession is bound to the per-run `asyncio.run` loop; when that loop closes (run finished), aiohttp logs a noisy "Unclosed connector" through the loop's exception handler. Force litellm onto httpx: no aiohttp session is created, so nothing dangles. One process-global flag, best-effort: a replay-only install has no litellm, and a flag rename just no-ops."""
     try:
         import litellm
         litellm.disable_aiohttp_transport = True
@@ -54,9 +37,7 @@ def _quiet_litellm_aiohttp() -> None:
 
 
 def _build_event(request: dict, *, ingest=None) -> dict:
-    """Build the diff-sentry change-event dict this run classifies, from the studio request. `mode`:
-    `classify` (a pasted `payload` → `event_from_payload`), `pr`/`issue` (`repo`+`number` → host-side
-    `gh` ingest). `ingest` is injectable so tests skip the diff_sentry import / the `gh` shell-out."""
+    """Build the diff-sentry change-event dict this run classifies, from the studio request. `mode`: `classify` (a pasted `payload` → `event_from_payload`), `pr`/`issue` (`repo`+`number` → host-side `gh` ingest). `ingest` is injectable so tests skip the diff_sentry import / the `gh` shell-out."""
     mode = request.get("mode") or "classify"
     if ingest is None:
         from diff_sentry import ingest as ingest  # noqa: PLC0414 (lazy; absent on a replay-only install)
@@ -78,18 +59,12 @@ def run_live(
     ingest=None,
     build_failed_response: Callable | None = None,
 ) -> None:
-    """Run ONE classification with the live ACTION stream attached: `sink(event)` fires for each
-    tool/analyst call as it is recorded, then `on_done(response_dict)` with the durable response (or a
-    `status=failed` refusal on error). `request` is the studio's classify request (`mode` + payload or
-    repo/number). `cli_run`/`ingest`/`build_failed_response` are injected for tests; default to
-    diff-sentry's `cli.run` (THE programmatic entry, never a fork) and `response.build_failed_response`.
+    """Run ONE classification with the live ACTION stream attached: `sink(event)` fires for each tool/analyst call as it is recorded, then `on_done(response_dict)` with the durable response (or a `status=failed` refusal on error). `request` is the studio's classify request (`mode` + payload or repo/number). `cli_run`/`ingest`/`build_failed_response` are injected for tests; default to diff-sentry's `cli.run` (THE programmatic entry, never a fork) and `response.build_failed_response`.
 
-    SIEM emission is OFF (`emit=False`): the console SHOWS the signal decision, but a viewer must not POST
-    to a real SIEM as a side effect. `on_done` is ALWAYS called once (see module docstring)."""
+    SIEM emission is OFF (`emit=False`): the console SHOWS the signal decision, but a viewer must not POST to a real SIEM as a side effect. `on_done` is ALWAYS called once (see module docstring)."""
     try:
         _quiet_litellm_aiohttp()   # process-global: keep litellm off aiohttp so no connector dangles
-        # diff_sentry imports stay INSIDE the try: a missing `live` extra (no diff_sentry) must become a
-        # `failed` response, not an uncaught exception that kills the thread before `on_done`.
+        # diff_sentry imports stay INSIDE the try: a missing `live` extra (no diff_sentry) must become a `failed` response, not an uncaught exception that kills the thread before `on_done`.
         event = _build_event(request, ingest=ingest)
         _cli_run = cli_run
         if _cli_run is None:
@@ -103,10 +78,7 @@ def run_live(
 
 
 def _final_response(arts, run_id: str, build_failed_response) -> dict:
-    """The durable response dict for a finished run. diff-sentry writes `responses/{run_id}.json` for
-    EVERY outcome (classified, inconclusive, failed), so PREFER that on-disk artifact: it is exactly what
-    a later GET-replay serves. Fall back to a failed dict when no file was written (a test's fake
-    cli_run that writes nothing, or a run that produced no artifacts)."""
+    """The durable response dict for a finished run. diff-sentry writes `responses/{run_id}.json` for EVERY outcome (classified, inconclusive, failed), so PREFER that on-disk artifact: it is exactly what a later GET-replay serves. Fall back to a failed dict when no file was written (a test's fake cli_run that writes nothing, or a run that produced no artifacts)."""
     path = getattr(arts, "response_path", None)
     if path and os.path.exists(path):
         try:
@@ -118,12 +90,7 @@ def _final_response(arts, run_id: str, build_failed_response) -> dict:
 
 
 def _describe_exc(exc: BaseException) -> str:
-    """One line describing a run failure, INCLUDING its underlying cause. `RLMTaskError` reports the
-    opaque "Failed to produce a valid 'result' after N attempts"; the real reason (a planner-endpoint
-    error, an adapter parse failure) is on `__cause__`. Surfacing it stops an infra hiccup from reading
-    like a content/schema problem (diff-sentry's own AGENTS.md: a failed run is infra before it is a
-    schema bug). A non-retryable LM error arrives unwrapped as the raw `dspy.LMError` subclass, so its
-    own class name already says "fix the credential"."""
+    """One line describing a run failure, INCLUDING its underlying cause. `RLMTaskError` reports the opaque "Failed to produce a valid 'result' after N attempts"; the real reason (a planner-endpoint error, an adapter parse failure) is on `__cause__`. Surfacing it stops an infra hiccup from reading like a content/schema problem (diff-sentry's own AGENTS.md: a failed run is infra before it is a schema bug). A non-retryable LM error arrives unwrapped as the raw `dspy.LMError` subclass, so its own class name already says "fix the credential"."""
     out = f"{type(exc).__name__}: {exc}"
     cause = exc.__cause__ or exc.__context__
     if cause is not None and cause is not exc:
@@ -132,9 +99,7 @@ def _describe_exc(exc: BaseException) -> str:
 
 
 def _failed_dict(run_id: str, detail: str, build_failed_response: Callable | None) -> dict:
-    """Build a `status=failed` response dict. Prefer diff-sentry's `build_failed_response` (it still
-    carries any deterministic indicators gathered + the derived signal), but fall back to a minimal
-    literal when diff_sentry itself is unavailable (the import that just failed) so the stream completes."""
+    """Build a `status=failed` response dict. Prefer diff-sentry's `build_failed_response` (it still carries any deterministic indicators gathered + the derived signal), but fall back to a minimal literal when diff_sentry itself is unavailable (the import that just failed) so the stream completes."""
     try:
         bfr = build_failed_response
         if bfr is None:

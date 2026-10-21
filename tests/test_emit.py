@@ -55,8 +55,7 @@ def test_transport_error_never_raises():
 
 
 def test_non_2xx_status_is_still_emitted():
-    """A SIEM 5xx is transport-succeeded: the POST left the host, the SIEM's rejection is its problem.
-    `emitted` stays True, the code is surfaced verbatim, and no transport error is recorded."""
+    """A SIEM 5xx is transport-succeeded: the POST left the host, the SIEM's rejection is its problem. `emitted` stays True, the code is surfaced verbatim, and no transport error is recorded."""
     r = emit_signal(_resp(signal=True), _cfg(), poster=lambda *a: 500)
     assert r.emitted is True and r.status_code == 500 and r.error is None and r.skipped_reason is None
 

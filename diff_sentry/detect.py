@@ -3,12 +3,9 @@
 A BewAIre-style detector re-expressed as an rlm-harness declaration. Model roles (configured, not fixed):
 - planner (main): a cheap, injection-resistant orchestrator that holds the diff in the REPL and triages.
 - analyst (sub_lm, via llm_query): an expensive brain for a subtle case; short distilled questions only.
-- deep_classify tool: the swappable SECOND-STAGE classifier (a model the planner CHOOSES to consult on
-  an ambiguous change; recorded as a tool_call so the decision is in the trajectory).
+- deep_classify tool: the swappable SECOND-STAGE classifier (a model the planner CHOOSES to consult on an ambiguous change; recorded as a tool_call so the decision is in the trajectory).
 
-The prompt is DELIBERATELY TERSE: the MISSION frame (this is a DETECTOR of prompt injection, so it must
-not fall to one), the tool cost-model, the triage loop, and the judgement-only SUBMIT contract. Attack
-taxonomy lives in the skills KB, pulled JIT via read_skill (catalog injected at startup).
+The prompt is DELIBERATELY TERSE: the MISSION frame (this is a DETECTOR of prompt injection, so it must not fall to one), the tool cost-model, the triage loop, and the judgement-only SUBMIT contract. Attack taxonomy lives in the skills KB, pulled JIT via read_skill (catalog injected at startup).
 """
 
 from __future__ import annotations
@@ -117,12 +114,7 @@ HARD RULES — do not violate:
 def _maybe_subscription_lm(model: str):
     """A `ClaudeAgentLM` when a role's model uses the `claude-agent-sdk/` sentinel, else None.
 
-    Imports rlm-harness's `ClaudeAgentLM` LAZILY, inside the sentinel branch ONLY, so `import diff_sentry`
-    stays dspy-free and a proxy-only install (no sentinel) never touches it. `claude-agent-sdk` is the
-    optional `[subscription]` extra; the kit defers that import to construction, so a missing SDK
-    surfaces as an `ImportError` at build time HERE, re-raised as our uv-workflow-specific actionable
-    message. The stripped remainder is the Claude model; prefer a full id (`claude-sonnet-5` /
-    `claude-fable-5`) over an alias, which drifts over time.
+    Imports rlm-harness's `ClaudeAgentLM` LAZILY, inside the sentinel branch ONLY, so `import diff_sentry` stays dspy-free and a proxy-only install (no sentinel) never touches it. `claude-agent-sdk` is the optional `[subscription]` extra; the kit defers that import to construction, so a missing SDK surfaces as an `ImportError` at build time HERE, re-raised as our uv-workflow-specific actionable message. The stripped remainder is the Claude model; prefer a full id (`claude-sonnet-5` / `claude-fable-5`) over an alias, which drifts over time.
     """
     if not model.startswith(SUBSCRIPTION_PREFIX):
         return None
@@ -143,18 +135,14 @@ def _maybe_subscription_lm(model: str):
 def setup(config: DetectConfig) -> DetectConfig:
     """Configure rlm-harness (planner + analyst) for this process.
 
-    A role whose model is `claude-agent-sdk/<id>` runs on the user's Claude Pro/Max SUBSCRIPTION
-    (rlm-harness's `ClaudeAgentLM`, injected through configure's public seam); every other role is built from
-    the DS_* proxy. Mixed auth is by design: the classifier (a separate tool)
-    always stays on its own OpenAI-compatible endpoint, never routed through the subscription.
+    A role whose model is `claude-agent-sdk/<id>` runs on the user's Claude Pro/Max SUBSCRIPTION (rlm-harness's `ClaudeAgentLM`, injected through configure's public seam); every other role is built from the DS_* proxy. Mixed auth is by design: the classifier (a separate tool) always stays on its own OpenAI-compatible endpoint, never routed through the subscription.
     """
     # None → configure builds a dspy.LM from the proxy config.
     main_lm = _maybe_subscription_lm(config.main_model)
     sub_lm = _maybe_subscription_lm(config.sub_model)
     rlm_harness.configure(
         RLMConfig(
-            # Inert once an LM is injected (configure builds from config ONLY for un-supplied seats),
-            # but still labels the trace + log; on the proxy path it is the real model built.
+            # Inert once an LM is injected (configure builds from config ONLY for un-supplied seats), but still labels the trace + log; on the proxy path it is the real model built.
             main_model=config.main_model,
             sub_model=config.sub_model,
             api_key=config.api_key,
@@ -170,9 +158,7 @@ def setup(config: DetectConfig) -> DetectConfig:
             max_output_chars=config.max_output_chars,
             # ONE attempt, no whole-RLM retry: max_iterations is a HARD budget, never multiplied.
             max_retries=1,
-            # Sandboxed code never builds dspy sub-agents (dspy >= 3.4.1 offers it): they run on the host,
-            # call the analyst with the task's tools, and record as one sub_call with no inner turns, which
-            # would break one change = one trajectory and the second judgement being a TOOL.
+            # Sandboxed code never builds dspy sub-agents (dspy >= 3.4.1 offers it): they run on the host, call the analyst with the task's tools, and record as one sub_call with no inner turns, which would break one change = one trajectory and the second judgement being a TOOL.
             sandbox_sub_agents=False,
         ),
         main_lm=main_lm,
@@ -182,8 +168,7 @@ def setup(config: DetectConfig) -> DetectConfig:
 
 
 def _withheld(event: dict) -> bool:
-    """GitHub sent part of the change without its text: a file with changed lines and no patch, or a file list cut at
-    its cap."""
+    """GitHub sent part of the change without its text: a file with changed lines and no patch, or a file list cut at its cap."""
     provenance = event.get("provenance")
     return (isinstance(provenance, dict) and bool(provenance.get("files_truncated"))) or any(
         not f["patch"] and (f["additions"] or f["deletions"]) for f in _files(event))
@@ -213,16 +198,14 @@ class ClassifyChange(RLMTask):
 
         # The change itself, so the scanner can tell a region taken from it from text the planner wrote.
         self.tools = [make_indicator_tool(event), make_deep_classify_tool(config, chat_fn=chat_fn)]
-        # A change with content to read gets a decisive verdict: an `inconclusive` SUBMIT comes back refused. Not when
-        # GitHub withheld part of it (a file's patch, or files past its list cap): what is unseen may carry the intent.
+        # A change with content to read gets a decisive verdict: an `inconclusive` SUBMIT comes back refused. Not when GitHub withheld part of it (a file's patch, or files past its list cap): what is unseen may carry the intent.
         files = len(_files(event)) if event is not None else 0
         if event is not None and not _withheld(event) and has_groundable_content(text := normalize_event(event)):
             self.output_model = decisive_verdict_model(
                 (f"{files} file{'s' * (files != 1)}, " if files else "") + f"{len(text):,} characters in `event`")
         if config.enable_fetch:
             self.tools = self.tools + [make_github_fetch_tool(config)]
-        # A general extension seam: a consumer MAY pass extra sync tools. (SIEM emission is NOT here: it
-        # runs host-side after the run; see emit.py; so the planner needs no SIEM credentials.)
+        # A general extension seam: a consumer MAY pass extra sync tools. (SIEM emission is NOT here: it runs host-side after the run; see emit.py; so the planner needs no SIEM credentials.)
         self.tools = self.tools + list(extra_tools)
         if config.enable_skills:
             skills_dir = os.path.join(os.path.dirname(__file__), "skills")
@@ -236,8 +219,7 @@ class ClassifyChange(RLMTask):
                 + "\n\n"
                 + INSTRUCTIONS
             )
-        # Intercept the analyst (tracing only, zero transforms) so every llm_query escalation is a
-        # sub_call in the trace.
+        # Intercept the analyst (tracing only, zero transforms) so every llm_query escalation is a sub_call in the trace.
         kw.setdefault("sub_lm", intercept_sub_lm(get_sub_lm(), name="analyst"))
         super().__init__(**kw)
 

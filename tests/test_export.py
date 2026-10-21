@@ -35,8 +35,7 @@ def test_labels_none_when_no_result(make_trace):
 
 
 def test_inconclusive_label_is_a_reward_free_fact(make_trace):
-    """The `inconclusive` OUTCOME label: True when a content-free change reached the insufficient-evidence
-    outcome (mirrors the response backstop), False on a normal malicious run. A reward-free FACT."""
+    """The `inconclusive` OUTCOME label: True when a content-free change reached the insufficient-evidence outcome (mirrors the response backstop), False on a normal malicious run. A reward-free FACT."""
     from diff_sentry.ingest import event_from_payload
 
     empty = event_from_payload({})
@@ -49,8 +48,7 @@ def test_inconclusive_label_is_a_reward_free_fact(make_trace):
 
 
 def test_export_carries_the_reward_free_rubric_signal(make_trace):
-    """The ATLAS rubric surface rides beside the trajectory as LABELS: the fixed 4-category skeleton +
-    deterministic per-criterion facts, never a score."""
+    """The ATLAS rubric surface rides beside the trajectory as LABELS: the fixed 4-category skeleton + deterministic per-criterion facts, never a score."""
     bundle = export_dataset(load_runs(make_trace(run_id="pr-7")))
     sig = bundle["rubric_signal"]["pr-7"]
     assert {c["category"] for c in sig["rubric"]} == {"TF", "TA", "TG", "PA"}
@@ -60,8 +58,7 @@ def test_export_carries_the_reward_free_rubric_signal(make_trace):
 
 
 def test_run_metrics_carries_effort_fields(make_trace):
-    """The reward-free effort metrics a trainer shapes into a reward: the fields must be present and the
-    deterministic ones correct (a 2-step trace is far below the 25-iteration cap, no circuit breaks)."""
+    """The reward-free effort metrics a trainer shapes into a reward: the fields must be present and the deterministic ones correct (a 2-step trace is far below the 25-iteration cap, no circuit breaks)."""
     runs = load_runs(make_trace(run_id="pr-11"))
     metrics = export_dataset(runs)["metrics"]["pr-11"]
     for key in ("steps", "scan_calls", "deep_classify_calls", "deep_classify_circuit_breaks",
@@ -82,8 +79,7 @@ def _escalations(kit: str | None) -> list[dict]:
 
 
 def test_analyst_counts_keep_one_meaning_across_kit_versions():
-    """`analyst_calls` counts escalations that got a response on every kit version; failures are counted
-    only where the writing kit records them (1.13.0+), and are None (unknown) before that."""
+    """`analyst_calls` counts escalations that got a response on every kit version; failures are counted only where the writing kit records them (1.13.0+), and are None (unknown) before that."""
     assert analyst_counts(_escalations("1.14.0")) == (1, 1)
     old = _escalations("1.11.2")[:2]
     assert analyst_counts(old) == (1, None)

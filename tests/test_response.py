@@ -45,9 +45,7 @@ def test_inconclusive_when_no_result(make_trace):
 # ---- inconclusive: an ungroundable input must not ship a CONFIDENT verdict ----
 
 def test_empty_payload_yields_inconclusive_not_a_confident_verdict(make_trace):
-    """A content-free change (empty payload → '(no textual content)') must NOT ship a
-    confident verdict. Even a confident benign SUBMIT is DOWNGRADED to status=inconclusive (the
-    defense-in-depth backstop), never a 'benign, confidence 0.9'."""
+    """A content-free change (empty payload → '(no textual content)') must NOT ship a confident verdict. Even a confident benign SUBMIT is DOWNGRADED to status=inconclusive (the defense-in-depth backstop), never a 'benign, confidence 0.9'."""
     empty = event_from_payload({})
     confident_benign = {**MALICIOUS_VERDICT, "verdict": "benign", "confidence": 0.9,
                         "techniques": [], "suspect_files": [], "indicator_ids": []}
@@ -60,8 +58,7 @@ def test_empty_payload_yields_inconclusive_not_a_confident_verdict(make_trace):
 
 
 def test_inconclusive_verdict_maps_to_refusal(make_trace):
-    """The sanctioned `inconclusive` SUBMIT over a GROUNDABLE change maps to status=inconclusive +
-    RefusalInfo(reason='insufficient_evidence')."""
+    """The sanctioned `inconclusive` SUBMIT over a GROUNDABLE change maps to status=inconclusive + RefusalInfo(reason='insufficient_evidence')."""
     inc = {**MALICIOUS_VERDICT, "verdict": "inconclusive", "techniques": [], "suspect_files": [],
            "indicator_ids": []}
     events = load_events(make_trace(event=BENIGN_EVENT, verdict=inc, run_id="inc-1"))
@@ -72,9 +69,7 @@ def test_inconclusive_verdict_maps_to_refusal(make_trace):
 
 
 def test_inconclusive_verdict_cannot_suppress_hard_evidence(make_trace):
-    """The load-bearing property: an `inconclusive` verdict over a change with a REAL high/critical
-    indicator must STILL force the deterministic signal; the status downgrade never touches the SIEM
-    half (`inconclusive` is not in `emit_on`; hard evidence signals on its own, the MF3 backstop)."""
+    """The load-bearing property: an `inconclusive` verdict over a change with a REAL high/critical indicator must STILL force the deterministic signal; the status downgrade never touches the SIEM half (`inconclusive` is not in `emit_on`; hard evidence signals on its own, the MF3 backstop)."""
     inc = {**MALICIOUS_VERDICT, "verdict": "inconclusive", "techniques": [], "suspect_files": [],
            "indicator_ids": []}
     events = load_events(make_trace(event=MALICIOUS_EVENT, verdict=inc, run_id="inc-2"))

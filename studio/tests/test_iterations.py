@@ -43,8 +43,7 @@ def test_scan_hits_carry_evidence_and_decoded_for_the_indicators_view():
 
 
 def test_cited_unknown_ids_flags_only_uncorroborated_citations():
-    # the planner cited ind-a (baseline), ind-b (a scan hit), and ind-ghost (no recorded hit). Only the
-    # ghost is a fabrication tell, re-derived from the trace because DetectionResponse omits it.
+    # the planner cited ind-a (baseline), ind-b (a scan hit), and ind-ghost (no recorded hit). Only the ghost is a fabrication tell, re-derived from the trace because DetectionResponse omits it.
     assert cited_unknown_ids(_trace()) == ["ind-ghost"]
 
 
@@ -75,8 +74,7 @@ def test_per_turn_timing_off_when_main_steps_cluster():
 
 
 def test_tool_duration_prefers_the_kits_measured_time_over_the_gap():
-    # rlm-harness times every call (`duration_s`): a 0.3 ms scan must not be shown as the 2 s planner turn
-    # before it (the gap since the previous live event). A trace without the field keeps the gap.
+    # rlm-harness times every call (`duration_s`): a 0.3 ms scan must not be shown as the 2 s planner turn before it (the gap since the previous live event). A trace without the field keeps the gap.
     base = [{"type": "run_start", "step_id": 0, "ts": 1.0, "payload": {"meta": {}}}]
     timed = base + [{"type": "tool_call", "step_id": 1, "ts": 3.0, "payload": {
         "tool": "scan_indicators", "args": {"region": "r"}, "hits": [], "duration_s": 0.000258}}]

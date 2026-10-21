@@ -1,7 +1,4 @@
-/* Pure replay logic for the Trajectory drawer: NO DOM, NO module state. Everything the replay state
-   machine decides (how long to dwell, how to accrue elapsed time, which stops exist, where to start,
-   what's next) lives here as pure functions of explicit inputs, so it's unit-testable in isolation
-   (the DOM + timer orchestration stays in app.js and calls these). UMD: a browser global + node require. */
+/* Pure replay logic for the Trajectory drawer: NO DOM, NO module state. Everything the replay state machine decides (how long to dwell, how to accrue elapsed time, which stops exist, where to start, what's next) lives here as pure functions of explicit inputs, so it's unit-testable in isolation (the DOM + timer orchestration stays in app.js and calls these). UMD: a browser global + node require. */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
   else root.ReplayCore = factory();
@@ -11,22 +8,19 @@
   const DWELL_FLOOR_MS = 50;        // a stop never dwells less than this (so a tiny turn still shows)
   const NOMINAL_REAL_MS = 1500;     // Init / no-live-timing stop's nominal "real" length (also speed-scaled)
 
-  // the FAITHFUL real duration (ms) a stop represents: a turn → its real duration (when the trace has
-  // live per-turn timing); otherwise a brief nominal length.
+  // the FAITHFUL real duration (ms) a stop represents: a turn → its real duration (when the trace has live per-turn timing); otherwise a brief nominal length.
   function realMsFor(stop, iterations, perTurnTiming) {
     if (stop && stop.kind === "turn" && perTurnTiming)
       return Math.max(0, ((iterations || [])[stop.index] || {}).duration_s || 0) * 1000;
     return NOMINAL_REAL_MS;
   }
 
-  // replay-ms to dwell on the REMAINING of a stop at `speed`, faithful: (real − elapsed) ÷ speed,
-  // floored. Never negative (an over-consumed stop → the floor).
+  // replay-ms to dwell on the REMAINING of a stop at `speed`, faithful: (real − elapsed) ÷ speed, floored. Never negative (an over-consumed stop → the floor).
   function dwellMs(realMs, elapsed, speed) {
     return Math.max(DWELL_FLOOR_MS, Math.max(0, realMs - elapsed) / Math.max(1e-9, speed));
   }
 
-  // real-ms consumed when `replayMs` of wall-clock elapses at `speed` (real = replay × speed), added to
-  // the running elapsed. So a speed change / pause continues the REMAINING instead of restarting.
+  // real-ms consumed when `replayMs` of wall-clock elapses at `speed` (real = replay × speed), added to the running elapsed. So a speed change / pause continues the REMAINING instead of restarting.
   function accrue(elapsed, replayMs, speed) {
     return elapsed + Math.max(0, replayMs) * speed;
   }
@@ -42,8 +36,7 @@
     return stops.findIndex(function (s) { return sel && s.kind === sel.kind && s.index === sel.index; });
   }
 
-  // where play should START from the current selection: the selection itself if walkable; a TOOL → its
-  // turn (so play still advances the whole run); else Init.
+  // where play should START from the current selection: the selection itself if walkable; a TOOL → its turn (so play still advances the whole run); else Init.
   function resolveStart(sel, timeline) {
     if (sel && sel.kind !== "tool") return { kind: sel.kind, index: sel.index };
     if (sel && sel.kind === "tool") {

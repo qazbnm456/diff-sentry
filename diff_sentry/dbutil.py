@@ -1,8 +1,6 @@
 """One place to open a versioned SQLite state file, so an older build's file fails loudly at startup.
 
-`CREATE TABLE IF NOT EXISTS` never alters an existing table, so a state directory written by a different build
-would otherwise crash later with `no such column`, or silently mis-read. Each store stamps `PRAGMA user_version`
-and refuses a file that has tables but a different (or no) stamp.
+`CREATE TABLE IF NOT EXISTS` never alters an existing table, so a state directory written by a different build would otherwise crash later with `no such column`, or silently mis-read. Each store stamps `PRAGMA user_version` and refuses a file that has tables but a different (or no) stamp.
 
 Pure stdlib; no dspy.
 """
@@ -15,8 +13,7 @@ from urllib.parse import quote
 
 def open_versioned(path: str, schema: str, version: int, marker_table: str, *,
                    read_only: bool = False) -> sqlite3.Connection:
-    """Open a state file, creating and stamping it unless `read_only`, which opens it `mode=ro` and changes
-    nothing (a peek at the state must not create tables, stamp a version, or fail on a read-only file)."""
+    """Open a state file, creating and stamping it unless `read_only`, which opens it `mode=ro` and changes nothing (a peek at the state must not create tables, stamp a version, or fail on a read-only file)."""
     if read_only:
         db = sqlite3.connect(f"file:{quote(path)}?mode=ro", uri=True, check_same_thread=False)
     else:

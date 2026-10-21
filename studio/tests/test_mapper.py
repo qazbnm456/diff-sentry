@@ -14,8 +14,7 @@ def test_run_start_carries_models_source_and_baseline_count():
 
 
 def test_run_start_surfaces_the_atlas_rubric_hint():
-    # the run_start meta carries the ATLAS rubric skeleton; the created event surfaces a cheap hint
-    # (the full per-criterion facts arrive via the GET response, never streamed).
+    # the run_start meta carries the ATLAS rubric skeleton; the created event surfaces a cheap hint (the full per-criterion facts arrive via the GET response, never streamed).
     created = to_event({"type": "run_start", "payload": {"meta": {"rubric": [
         {"name": "verdict_resolves_change", "category": "TF", "weight": 1.0, "description": "d"},
         {"name": "tools_used_appropriately", "category": "TA", "weight": 1.0, "description": "d"},
@@ -73,8 +72,7 @@ def test_deep_classify_circuit_break_variant():
 
 
 def test_deep_classify_endpoint_error_variant_has_no_ok_key():
-    # the endpoint-error shape records ONLY `error`; no `ok` key. `ok` must default to False, and the
-    # error must surface (regression guard on the mapper's payload tolerance).
+    # the endpoint-error shape records ONLY `error`; no `ok` key. `ok` must default to False, and the error must surface (regression guard on the mapper's payload tolerance).
     ev = to_event({"type": "tool_call", "payload": {
         "tool": "deep_classify", "args": {"findings": "…"}, "error": "ConnectTimeout"}})
     assert ev["data"]["ok"] is False and ev["data"]["error"] == "ConnectTimeout"
@@ -97,8 +95,7 @@ def test_skill_reads():
 def test_result_and_run_end_and_final():
     assert to_event({"type": "result", "payload": {}}) == {"event": "detection.result.done", "data": {}}
     assert to_event({"type": "run_end", "payload": {}})["event"] == "detection.run.completed"
-    # `final` is SKIPPED: a real trace holds both `final` and `run_end`, so mapping both would emit the
-    # terminal event twice (and the `final` copy before `result`). `run_end` is the sole terminal.
+    # `final` is SKIPPED: a real trace holds both `final` and `run_end`, so mapping both would emit the terminal event twice (and the `final` copy before `result`). `run_end` is the sole terminal.
     assert to_event({"type": "final", "payload": {}}) is None
 
 
@@ -107,8 +104,7 @@ def test_unknown_event_type_is_skipped():
 
 
 def test_unrecognized_tool_is_surfaced_with_its_scalar_fields():
-    # a rare/future tool must NOT be dropped from the feed; it surfaces as a generic `detection.tool`
-    # event carrying its short scalar fields (bulky raw/preview/spec/hits dropped).
+    # a rare/future tool must NOT be dropped from the feed; it surfaces as a generic `detection.tool` event carrying its short scalar fields (bulky raw/preview/spec/hits dropped).
     ev = to_event({"type": "tool_call", "payload": {
         "tool": "mystery_tool", "ok": True, "count": 3, "note": "did a thing",
         "raw": "x" * 5000, "hits": [{"id": "a"}], "args": {"region": "r"}}})

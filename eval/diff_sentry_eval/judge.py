@@ -1,22 +1,13 @@
-"""The external eval judge: ATLAS's 4-category 0-10 LLM-as-judge of the assembled VERDICT, on
-`rlm_harness.tools.make_model_tool`.
+"""The external eval judge: ATLAS's 4-category 0-10 LLM-as-judge of the assembled VERDICT, on `rlm_harness.tools.make_model_tool`.
 
-Same base/wrap split as diff-sentry's `deep_classify`: rlm-harness owns the
-generic chat → transient-retry → validate → circuit-breaker core; this module supplies the chat closure,
-the generic ATLAS change-analysis-eval prompt, and the strict 0-10 validator. Properties that keep the
-measure honest and separate from any training reward:
+Same base/wrap split as diff-sentry's `deep_classify`: rlm-harness owns the generic chat → transient-retry → validate → circuit-breaker core; this module supplies the chat closure, the generic ATLAS change-analysis-eval prompt, and the strict 0-10 validator. Properties that keep the measure honest and separate from any training reward:
 
 - HOST-SIDE and offline: never a planner tool, never registered with dspy, never in a trace;
-- GENERIC prompt (no per-run rubric): the fixed-external-judge property that keeps the measure unbiased
-  (it also never reads the in-run planner's self-judgement as truth);
-- four 0-10 category scores that stay a REPORT: a failed/off-schema judge yields an `unscored` verdict,
-  never a fake 0, and nothing here composes a reward;
-- READ-NEVER-EXECUTE: the judge assesses the classification STATICALLY (it is prompted not to run/build
-  the change and to treat the diff as untrusted data), the same invariant the rest of diff-sentry holds.
+- GENERIC prompt (no per-run rubric): the fixed-external-judge property that keeps the measure unbiased (it also never reads the in-run planner's self-judgement as truth);
+- four 0-10 category scores that stay a REPORT: a failed/off-schema judge yields an `unscored` verdict, never a fake 0, and nothing here composes a reward;
+- READ-NEVER-EXECUTE: the judge assesses the classification STATICALLY (it is prompted not to run/build the change and to treat the diff as untrusted data), the same invariant the rest of diff-sentry holds.
 
-The judge model is swappable via `DSEVAL_*` env (role-based, o4-mini-class per the paper; no model name
-hardcoded). `openai` is imported LAZILY inside the chat closure, so the stub path needs nothing installed.
-`stub_judge` is the deterministic offline double for tests/CI.
+The judge model is swappable via `DSEVAL_*` env (role-based, o4-mini-class per the paper; no model name hardcoded). `openai` is imported LAZILY inside the chat closure, so the stub path needs nothing installed. `stub_judge` is the deterministic offline double for tests/CI.
 """
 
 from __future__ import annotations
@@ -40,8 +31,7 @@ EVAL_SYSTEM = (
     "from the change, and return strict JSON only."
 )
 
-# The generic ATLAS-style evaluator template. The full instruction block rides in the user prompt so an
-# injected chat_fn (a different provider, a test double) still receives complete instructions.
+# The generic ATLAS-style evaluator template. The full instruction block rides in the user prompt so an injected chat_fn (a different provider, a test double) still receives complete instructions.
 EVAL_TEMPLATE = """\
 You are a STRICT, INDEPENDENT external evaluator of one malicious-change CLASSIFICATION an agent produced
 from a GitHub change (a pull request, an issue, or a push). The agent read the change as UNTRUSTED DATA and
@@ -141,9 +131,7 @@ def _clamp(value: float) -> float:
 
 
 def parse_eval_json(raw: str) -> _EvalValidation:
-    """Strictly validate the judge's output: JSON with a `scores` object carrying ALL FOUR categories as
-    numbers, each clamped to [0, 10]. Extra fields are tolerated and ignored. Anything off-schema →
-    ok=False (the run lands `unscored`, never a guessed score)."""
+    """Strictly validate the judge's output: JSON with a `scores` object carrying ALL FOUR categories as numbers, each clamped to [0, 10]. Extra fields are tolerated and ignored. Anything off-schema → ok=False (the run lands `unscored`, never a guessed score)."""
     text = (raw or "").strip()
     if text.startswith("```"):
         text = text.strip("`")
@@ -172,17 +160,12 @@ def parse_eval_json(raw: str) -> _EvalValidation:
     return _EvalValidation(ok=True, scores=scores, notes=str(obj.get("notes", ""))[:2000])
 
 
-# The HTTP statuses an OpenAI-compatible endpoint answers the same way to EVERY request: a wrong key, a model or route that
-# does not exist. One judge's breaker spans the whole batch, so a status one input earns (a 400 or 422 for a change past
-# the context window, a content filter) is not here: it would leave the batch's later runs unscored. A 408, a 409, a 429
-# and every 5xx can pass.
+# The HTTP statuses an OpenAI-compatible endpoint answers the same way to EVERY request: a wrong key, a model or route that does not exist. One judge's breaker spans the whole batch, so a status one input earns (a 400 or 422 for a change past the context window, a content filter) is not here: it would leave the batch's later runs unscored. A 408, a 409, a 429 and every 5xx can pass.
 _REPEATING_STATUSES = frozenset({401, 403, 404})
 
 
 def is_fast_fail_http(exc: BaseException) -> bool:
-    """`make_model_tool`'s `is_fast_fail` for the judge's openai client: an error status that repeats on every request
-    is not re-sent and counts toward the circuit breaker, so a misconfigured judge stops being called. Anything else keeps
-    the transient retry."""
+    """`make_model_tool`'s `is_fast_fail` for the judge's openai client: an error status that repeats on every request is not re-sent and counts toward the circuit breaker, so a misconfigured judge stops being called. Anything else keeps the transient retry."""
     try:
         from openai import APIStatusError
     except ImportError:
@@ -191,8 +174,7 @@ def is_fast_fail_http(exc: BaseException) -> bool:
 
 
 def _judge_chat(config: EvalJudgeConfig) -> Callable[[str], str]:
-    """The judge's chat on an OpenAI-compatible endpoint. Lazy openai import so the stub path (tests, CI,
-    score-only installs without the `judge` extra) never needs it."""
+    """The judge's chat on an OpenAI-compatible endpoint. Lazy openai import so the stub path (tests, CI, score-only installs without the `judge` extra) never needs it."""
 
     def chat(prompt: str) -> str:
         from openai import OpenAI
@@ -221,10 +203,7 @@ def make_eval_judge(config: EvalJudgeConfig | None = None, *,
                     chat_fn: Callable[[str], Any] | None = None) -> Callable[[dict], JudgeVerdict]:
     """Build the batch judge: `judge(inputs) -> JudgeVerdict` over `make_model_tool`.
 
-    `inputs` is the dict `score.build_judge_inputs` produces (change / reference / verdict / indicators /
-    execution_summary / total_rounds). `chat_fn` is injectable (tests, another provider); default is the
-    DSEVAL_* OpenAI-compatible endpoint. Build ONE judge per batch: the circuit breaker is scoped to the
-    closure, so a systematically off-schema judge stops burning calls across the taskset.
+    `inputs` is the dict `score.build_judge_inputs` produces (change / reference / verdict / indicators / execution_summary / total_rounds). `chat_fn` is injectable (tests, another provider); default is the DSEVAL_* OpenAI-compatible endpoint. Build ONE judge per batch: the circuit breaker is scoped to the closure, so a systematically off-schema judge stops burning calls across the taskset.
     """
     config = config or EvalJudgeConfig.from_env()
     chat = chat_fn if chat_fn is not None else _judge_chat(config)
@@ -252,8 +231,7 @@ def make_eval_judge(config: EvalJudgeConfig | None = None, *,
 def stub_judge(inputs: dict) -> JudgeVerdict:
     """The deterministic OFFLINE judge double for tests/CI: fixed mid-scale scores, no model, no creds.
 
-    Same callable contract as `make_eval_judge`'s judge, so the whole pipeline (score → aggregate →
-    report) runs end-to-end with zero network. Its notes state plainly that it is not a model verdict.
+    Same callable contract as `make_eval_judge`'s judge, so the whole pipeline (score → aggregate → report) runs end-to-end with zero network. Its notes state plainly that it is not a model verdict.
     """
     del inputs  # deterministic by construction; the stub does not read the run
     return JudgeVerdict(ok=True, score=EvalScore(

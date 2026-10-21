@@ -1,15 +1,8 @@
 """Payload hosts: which hosts a change's indicators point at, and which of them mean something.
 
-Two consumers share this. `actors` links campaigns by the payload infrastructure their flagged changes reuse, so
-it needs a token worth linking on; `indicators` needs to know when a download piped into a shell, written in
-prose, is the ordinary installer everyone quotes (rustup, nvm, Docker) and not a payload.
+Two consumers share this. `actors` links campaigns by the payload infrastructure their flagged changes reuse, so it needs a token worth linking on; `indicators` needs to know when a download piped into a shell, written in prose, is the ordinary installer everyone quotes (rustup, nvm, Docker) and not a payload.
 
-The lists are curated and short on purpose. A host missing from `COMMON_HOSTS` costs a noisy link; an entry
-wrongly in `KNOWN_INSTALLERS` hides a download-and-execute, so that list is exact hosts with an exact path
-pattern for anything shared, never a whole platform. And `installer_only` is STRICT: it accepts a command only
-when every argument parses cleanly as an installer URL (no userinfo, no dot segments, no encoding tricks, no
-extra target), and anything it does not understand keeps the hit at full severity. `fetch_targets`, which feeds
-IOC extraction, is the opposite: permissive, and it reads the host curl would actually connect to.
+The lists are curated and short on purpose. A host missing from `COMMON_HOSTS` costs a noisy link; an entry wrongly in `KNOWN_INSTALLERS` hides a download-and-execute, so that list is exact hosts with an exact path pattern for anything shared, never a whole platform. And `installer_only` is STRICT: it accepts a command only when every argument parses cleanly as an installer URL (no userinfo, no dot segments, no encoding tricks, no extra target), and anything it does not understand keeps the hit at full severity. `fetch_targets`, which feeds IOC extraction, is the opposite: permissive, and it reads the host curl would actually connect to.
 
 Pure stdlib; no dspy.
 """
@@ -75,14 +68,12 @@ _FILE_TLDS = frozenset({"txt", "sh", "json", "zip", "tar", "gz", "tgz", "bz2", "
                         "rs", "go", "rb", "pl", "ps1", "bat", "cmd", "dll", "so", "deb", "rpm", "pkg", "dmg", "iso", "toml",
                         "jsonl", "csv", "pdf", "jar", "whl", "zst", "ini", "lock", "sql", "xml", "svg", "png", "jpg",
                         "gif", "ico", "css", "ts", "tsx", "jsx", "c", "h", "cpp", "hpp", "cs", "java", "kt"})
-# The flags `installer_only` accepts. An ALLOWLIST: any other flag may add a target, change where bytes come from
-# (`--proxy`, `--config`, `--input-file`, `--next`), or turn a boolean into a value, so it keeps the hit's severity.
+# The flags `installer_only` accepts. An ALLOWLIST: any other flag may add a target, change where bytes come from (`--proxy`, `--config`, `--input-file`, `--next`), or turn a boolean into a value, so it keeps the hit's severity.
 _PLAIN_FLAGS = frozenset({"--fail", "--silent", "--show-error", "--location", "--quiet", "--tlsv1.2", "--tlsv1.3",
                           "--http1.1", "--http2"})
 _CLUSTER_FLAG = re.compile(r"-[sSfLq]{1,6}")          # curl -sSfL / -fsSL, wget -q
 _STDOUT_FLAG = re.compile(r"-[sSfLq]*[oO]-")          # curl -o- / wget -qO-
-# `-m` is curl's max-time but wget's mirror mode (a boolean), so it is not accepted for either: the next token could
-# be a target.
+# `-m` is curl's max-time but wget's mirror mode (a boolean), so it is not accepted for either: the next token could be a target.
 _NUMERIC_FLAGS = frozenset({"--retry", "--retry-delay", "--connect-timeout", "--max-time"})
 _DEVNULL = re.compile(r"\d?>/dev/null")
 _PLACEHOLDER = re.compile(r"\.{2,}|\u2026|<(?![^<>\s]*://)[^<>\s]{0,30}>|\[[^\[\]\s]{0,30}\]|(?i:url|<?url>?)")
@@ -90,8 +81,7 @@ _SHELLISH = re.compile(r"[$`(){}*;&|<>!\s\[\]\\]")
 
 
 def _authority_host(authority: str) -> str | None:
-    """The host curl would connect to for `authority` (`user@host:port`): after the LAST `@`, port stripped.
-    None when it is not a plain DNS name or IPv4 address."""
+    """The host curl would connect to for `authority` (`user@host:port`): after the LAST `@`, port stripped. None when it is not a plain DNS name or IPv4 address."""
     host = authority.rsplit("@", 1)[-1]
     if host.count(":") == 1:
         host = host.split(":", 1)[0]
@@ -118,20 +108,15 @@ def _normal_path(path: str) -> str:
 
 
 def fetch_targets(text: str) -> list[tuple[str, str]]:
-    """`(host, path)` for every URL in `text` and every `curl`/`wget` target, in order, unfiltered. The host is
-    the one curl connects to (a URL whose userinfo names an installer still connects to the host after the `@`).
-    The shell's field-separator variable and brace lists are how a command is spelled without spaces, so they
-    read as the spaces they stand for. Permissive by design: this feeds IOC extraction, where a wrong guess is a missed link, not a hidden
-    payload."""
+    """`(host, path)` for every URL in `text` and every `curl`/`wget` target, in order, unfiltered. The host is the one curl connects to (a URL whose userinfo names an installer still connects to the host after the `@`).
+    The shell's field-separator variable and brace lists are how a command is spelled without spaces, so they read as the spaces they stand for. Permissive by design: this feeds IOC extraction, where a wrong guess is a missed link, not a hidden payload."""
     found: dict[tuple[str, str], None] = {}
     for m in _URL_RE.finditer(text or ""):
         host = _authority_host(m.group(1))
         if host:
             found.setdefault((host, m.group(2) or ""), None)
     for m in _FETCH_RE.finditer(text or ""):
-        # Every non-flag token is a candidate, whatever flag precedes it: a value flag differs between curl and
-        # wget (`-c`, `-m`, `-d`), and guessing wrong would swallow the payload host. A bare `out.txt` is not a
-        # host, so file-name look-alikes with no path are dropped instead.
+        # Every non-flag token is a candidate, whatever flag precedes it: a value flag differs between curl and wget (`-c`, `-m`, `-d`), and guessing wrong would swallow the payload host. A bare `out.txt` is not a host, so file-name look-alikes with no path are dropped instead.
         for tok in _SPACES_RE.sub(" ", m.group(1)).split():
             if tok.startswith("-"):
                 continue
@@ -145,9 +130,7 @@ def fetch_targets(text: str) -> list[tuple[str, str]]:
 
 
 def _strict_target(tok: str) -> tuple[str, str] | None:
-    """`(host, normalized path)` when `tok` is a clean http(s) target and nothing else, else None. Rejects
-    userinfo, non-default ports, queries and fragments, percent-encoding, backslashes, empty and dot segments,
-    and any non-ASCII: each of those is a way to make a URL read as one host while fetching another."""
+    """`(host, normalized path)` when `tok` is a clean http(s) target and nothing else, else None. Rejects userinfo, non-default ports, queries and fragments, percent-encoding, backslashes, empty and dot segments, and any non-ASCII: each of those is a way to make a URL read as one host while fetching another."""
     tok = tok.strip("'\"")
     if _SHELLISH.search(tok):                            # `$(id)`, a backtick, a glob, a pipe: not a plain URL
         return None
@@ -196,8 +179,7 @@ def _flag_extra(tok: str, nxt: str | None) -> int | None:
 
 
 def _walk(text: str):
-    """For each `curl`/`wget` in `text`: `(flags_ok, positional tokens)`. `flags_ok` is False as soon as a flag is
-    not on the allowlist."""
+    """For each `curl`/`wget` in `text`: `(flags_ok, positional tokens)`. `flags_ok` is False as soon as a flag is not on the allowlist."""
     for m in _FETCH_RE.finditer(text or ""):
         toks = _SPACES_RE.sub(" ", m.group(1)).split()
         positional: list[str] = []
@@ -224,10 +206,7 @@ def _walk(text: str):
 def installer_only(text: str) -> bool:
     """True when every `curl`/`wget` in `text` names only known installers, and at least one is named.
 
-    STRICT on both counts. Every argument must be a clean installer URL (no userinfo, dot segments, encoding, or
-    shell syntax) and every FLAG must be on the allowlist (`-sSfL`, `-o-`, `--proto '=https'`, `--retry N`, …):
-    `--proxy`, `--config`, `--input-file`, `--next`, or an attached `-xURL` can all change where the bytes come
-    from, so any flag the check does not understand makes the answer False and the hit keeps its severity."""
+    STRICT on both counts. Every argument must be a clean installer URL (no userinfo, dot segments, encoding, or shell syntax) and every FLAG must be on the allowlist (`-sSfL`, `-o-`, `--proto '=https'`, `--retry N`, …): `--proxy`, `--config`, `--input-file`, `--next`, or an attached `-xURL` can all change where the bytes come from, so any flag the check does not understand makes the answer False and the hit keeps its severity."""
     targets = 0
     for ok, positional in _walk(text):
         if not ok:
@@ -242,19 +221,14 @@ def installer_only(text: str) -> bool:
 
 _ANY_URL_RE = re.compile(r"https?://[^\s\"'()<>|,;`]{1,300}", re.IGNORECASE)
 _BARE_URL = re.compile(r"(?<![\w./@:-])((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}/[^\s\"'()<>|,;`]{1,300})")
-# What a PowerShell download-and-execute may consist of besides its URL: the cmdlets and aliases, the pipe, and the
-# two parameters every installer one-liner uses. `-Proxy`, `-SkipCertificateCheck`, `-Headers` and anything else
-# can change where the bytes come from, so they keep the hit's severity.
+# What a PowerShell download-and-execute may consist of besides its URL: the cmdlets and aliases, the pipe, and the two parameters every installer one-liner uses. `-Proxy`, `-SkipCertificateCheck`, `-Headers` and anything else can change where the bytes come from, so they keep the hit's severity.
 _PS_WORDS = frozenset({"iwr", "irm", "invoke-webrequest", "invoke-restmethod", "iex", "invoke-expression", "|",
                        "-uri", "-usebasicparsing", "-useb"})
 
 
 def powershell_installer_only(text: str) -> bool:
-    """True when `text` is a PowerShell download-and-execute whose every URL is a clean, known installer and which
-    says nothing else (no proxy, no certificate switch, no other URL scheme). The counterpart of `installer_only` for
-    the form that has no `curl` to walk."""
-    # Spaced out the way it reads, and with the `https://` PowerShell 7 supplies when a URL has none (bun documents
-    # its Windows installer that way, with no spaces around the pipe).
+    """True when `text` is a PowerShell download-and-execute whose every URL is a clean, known installer and which says nothing else (no proxy, no certificate switch, no other URL scheme). The counterpart of `installer_only` for the form that has no `curl` to walk."""
+    # Spaced out the way it reads, and with the `https://` PowerShell 7 supplies when a URL has none (bun documents its Windows installer that way, with no spaces around the pipe).
     text = _BARE_URL.sub(r"https://\1", re.sub(r"\s*\|\s*", " | ", text or ""))
     found = _ANY_URL_RE.findall(text)
     if not found:
@@ -268,8 +242,7 @@ def powershell_installer_only(text: str) -> bool:
 
 
 def bare_command(text: str) -> bool:
-    """True when every `curl`/`wget` in `text` has allowed flags and NO argument at all: a sentence that mentions
-    a pipe into a shell with no download named. An argument the parser cannot read is NOT "no argument"; it stays a target."""
+    """True when every `curl`/`wget` in `text` has allowed flags and NO argument at all: a sentence that mentions a pipe into a shell with no download named. An argument the parser cannot read is NOT "no argument"; it stays a target."""
     seen = False
     for ok, positional in _walk(text):
         if not ok or positional:
@@ -293,10 +266,7 @@ def _safe(token: str) -> str:
 
 
 def ioc_of(host: str, path: str = "") -> str | None:
-    """The token two changes share when they use the same payload infrastructure, or None when the host links
-    nothing (a registry, a vendor, a known installer, a private address). A multi-tenant host contributes its
-    tenant (`raw.githubusercontent.com/attacker`), so a payload hosted on someone's GitHub is still a link. The
-    path is resolved first, so `…/nvm-sh/nvm/../../attacker/x` is the attacker's."""
+    """The token two changes share when they use the same payload infrastructure, or None when the host links nothing (a registry, a vendor, a known installer, a private address). A multi-tenant host contributes its tenant (`raw.githubusercontent.com/attacker`), so a payload hosted on someone's GitHub is still a link. The path is resolved first, so `…/nvm-sh/nvm/../../attacker/x` is the attacker's."""
     h = host.lower().rstrip(".")
     norm = _normal_path(path)
     if is_known_installer(h, path):

@@ -1,18 +1,8 @@
-"""Build a structured per-iteration breakdown of a run from its trace: the data behind the studio's
-Trajectory drawer, plus the read-time evidence derivations the response envelope omits. Pure functions
-(no web deps), unit-tested independently of the server.
+"""Build a structured per-iteration breakdown of a run from its trace: the data behind the studio's Trajectory drawer, plus the read-time evidence derivations the response envelope omits. Pure functions (no web deps), unit-tested independently of the server.
 
-An RLM run is a sequence of `main_step` REPL turns (the planner's reasoning + the Python code it ran +
-that code's output). The `tool_call` / `sub_call` events that follow a turn (scan / classify / fetch /
-skill / analyst) belong to that turn; its code invoked them. We GROUP them per turn, carry the
-`run_start` meta as the run's INITIAL state (the change / instructions / models / budgets), and attribute
-wall-clock time from the event `ts` deltas (no per-call instrumentation exists, so the gap between
-consecutive events is the only signal of where the time went).
+An RLM run is a sequence of `main_step` REPL turns (the planner's reasoning + the Python code it ran + that code's output). The `tool_call` / `sub_call` events that follow a turn (scan / classify / fetch / skill / analyst) belong to that turn; its code invoked them. We GROUP them per turn, carry the `run_start` meta as the run's INITIAL state (the change / instructions / models / budgets), and attribute wall-clock time from the event `ts` deltas (no per-call instrumentation exists, so the gap between consecutive events is the only signal of where the time went).
 
-`cited_unknown_ids` reconstructs the fabrication tell (indicator ids the planner CITED that match no
-recorded hit) from the trace. `assemble.AssembledVerdict` carries it, but `DetectionResponse` does not,
-so the studio re-derives it here (pure over the trace contract, v1 or v2; works replay-only, no
-diff_sentry import). This mirrors `assemble.assemble_verdict` (the union is baseline ∪ scan hits).
+`cited_unknown_ids` reconstructs the fabrication tell (indicator ids the planner CITED that match no recorded hit) from the trace. `assemble.AssembledVerdict` carries it, but `DetectionResponse` does not, so the studio re-derives it here (pure over the trace contract, v1 or v2; works replay-only, no diff_sentry import). This mirrors `assemble.assemble_verdict` (the union is baseline ∪ scan hits).
 """
 
 from __future__ import annotations
@@ -22,16 +12,13 @@ from typing import Any
 _CAP = 16000   # per-field char cap: generous (rarely hit); bounds a pathological output/blob
 _MAX_SCALAR = 200   # a payload scalar longer than this is treated as bulky and dropped from `fields`
 
-# Payload keys a bespoke tool renderer already surfaces (or that are bulky), dropped from the generic
-# `fields` fallback so an unrecognized tool_call surfaces its SHORT scalar fields, never a raw blob.
+# Payload keys a bespoke tool renderer already surfaces (or that are bulky), dropped from the generic `fields` fallback so an unrecognized tool_call surfaces its SHORT scalar fields, never a raw blob.
 _SCALAR_DROP = frozenset({"tool", "ok", "raw", "preview", "spec", "hits", "args", "result",
                           "output", "findings", "content", "errors", "reasoning"})
 
 
 def _scalar_fields(p: dict) -> dict:
-    """The payload's SHORT scalar fields (str/int/float/bool) for a tool with no bespoke renderer; the
-    already-surfaced tool/ok and every bulky key (raw/preview/spec/hits/args/…) are dropped. Keeps an
-    unrecognized tool_call from rendering as an empty step."""
+    """The payload's SHORT scalar fields (str/int/float/bool) for a tool with no bespoke renderer; the already-surfaced tool/ok and every bulky key (raw/preview/spec/hits/args/…) are dropped. Keeps an unrecognized tool_call from rendering as an empty step."""
     out: dict = {}
     for k, v in (p or {}).items():
         if k in _SCALAR_DROP:
@@ -58,9 +45,7 @@ def _gap(ts: float | None, prev: float | None) -> float | None:
 
 
 def _took(p: dict, gap: float | None) -> float | None:
-    """How long a tool / analyst call took. rlm-harness measures every call into `payload.duration_s`;
-    prefer that. The gap since the previous live event is only a FALLBACK for a trace without the field;
-    it charges the whole preceding planner turn to a sub-millisecond scan."""
+    """How long a tool / analyst call took. rlm-harness measures every call into `payload.duration_s`; prefer that. The gap since the previous live event is only a FALLBACK for a trace without the field; it charges the whole preceding planner turn to a sub-millisecond scan."""
     d = p.get("duration_s")
     return round(float(d), 6) if isinstance(d, (int, float)) and not isinstance(d, bool) else gap
 
@@ -91,8 +76,7 @@ def _tool_entry(p: dict, gap: float | None) -> dict:
     elif tool == "list_skills":
         e.update(label="skill", target="(catalog)", content=_preview(p.get("result")))
     else:
-        # An UNRECOGNIZED tool: surface its short scalar fields (tool + ok ride on `e` already) so the
-        # drawer renders meaningful kv rows instead of a bare `str(args)` blob / "no detail recorded".
+        # An UNRECOGNIZED tool: surface its short scalar fields (tool + ok ride on `e` already) so the drawer renders meaningful kv rows instead of a bare `str(args)` blob / "no detail recorded".
         e.update(label=tool or "tool", fields=_scalar_fields(p))
     return e
 
@@ -105,8 +89,7 @@ def _sub_entry(p: dict, gap: float | None) -> dict:
 
 
 def _hit_ids_from_trace(events: list[dict]) -> set:
-    """The UNION of every recorded deterministic hit id: run_start meta `baseline_indicators` ∪ every
-    `scan_indicators` tool_call's `hits`. Mirrors `diff_sentry.indicators.hits_from_events` (pure)."""
+    """The UNION of every recorded deterministic hit id: run_start meta `baseline_indicators` ∪ every `scan_indicators` tool_call's `hits`. Mirrors `diff_sentry.indicators.hits_from_events` (pure)."""
     ids: set = set()
 
     def _absorb(raw) -> None:
@@ -124,8 +107,7 @@ def _hit_ids_from_trace(events: list[dict]) -> set:
 
 
 def cited_unknown_ids(events: list[dict]) -> list[str]:
-    """The planner's cited `indicator_ids` that match NO recorded hit: a fabrication tell. Re-derived
-    from the trace because `DetectionResponse` omits it (see module docstring). Empty when no result."""
+    """The planner's cited `indicator_ids` that match NO recorded hit: a fabrication tell. Re-derived from the trace because `DetectionResponse` omits it (see module docstring). Empty when no result."""
     cited: list[str] = []
     for e in reversed(events):
         if e.get("type") == "result":
@@ -138,20 +120,11 @@ def cited_unknown_ids(events: list[dict]) -> list[str]:
 
 
 def build_iterations(events: list[dict]) -> dict:
-    """Decompose a run's trace into the Trajectory data. Returns
-    `{started_at, total_s, timing_note, per_turn_timing, initial:{…}, iterations:[…], timeline:[…]}`.
+    """Decompose a run's trace into the Trajectory data. Returns `{started_at, total_s, timing_note, per_turn_timing, initial:{…}, iterations:[…], timeline:[…]}`.
 
     TWO views:
-    - `iterations`: the planner's REPL turns (reasoning + code + its output), in turn order. CONTENT is
-      always reliable; each turn's `output` already contains its tools' results inline. Per-turn timing
-      (`rel_s`/`duration_s`) is attached WHEN the trace carries live `main_step` ts (rlm-harness backfills
-      them as each turn is parsed → `per_turn_timing=True`). A trace whose `main_step`s were all flushed
-      at finalize has their ts clustered at one instant; that is detected, `per_turn_timing=False`, and
-      per-turn durations are skipped rather than faked.
-    - `timeline`: the `tool_call`/`sub_call` events, ALWAYS recorded LIVE with real `ts`. Each entry
-      carries `rel_s` (since run start) and `duration_s` (the kit's measured call time, else the gap
-      since the previous live event). It is the accurate "where did the time go" signal either way, and
-      the headline for debugging a slow run.
+    - `iterations`: the planner's REPL turns (reasoning + code + its output), in turn order. CONTENT is always reliable; each turn's `output` already contains its tools' results inline. Per-turn timing (`rel_s`/`duration_s`) is attached WHEN the trace carries live `main_step` ts (rlm-harness backfills them as each turn is parsed → `per_turn_timing=True`). A trace whose `main_step`s were all flushed at finalize has their ts clustered at one instant; that is detected, `per_turn_timing=False`, and per-turn durations are skipped rather than faked.
+    - `timeline`: the `tool_call`/`sub_call` events, ALWAYS recorded LIVE with real `ts`. Each entry carries `rel_s` (since run start) and `duration_s` (the kit's measured call time, else the gap since the previous live event). It is the accurate "where did the time go" signal either way, and the headline for debugging a slow run.
     """
     evs = sorted(events, key=_step_key)
     meta: dict = {}
@@ -175,8 +148,7 @@ def build_iterations(events: list[dict]) -> dict:
                                "code": _preview(p.get("code")), "output": _preview(p.get("output")),
                                "_ts": e.get("ts")})
     iterations.sort(key=lambda it: it["turn"] if it["turn"] is not None else 1 << 30)
-    # Live main_step stamps iff a >1s span over ≥2 turns (an LM turn takes seconds); finalize-flushed
-    # stamps cluster at a ~0 span.
+    # Live main_step stamps iff a >1s span over ≥2 turns (an LM turn takes seconds); finalize-flushed stamps cluster at a ~0 span.
     step_ts = [it["_ts"] for it in iterations if isinstance(it["_ts"], (int, float))]
     per_turn = len(step_ts) >= 2 and (max(step_ts) - min(step_ts)) > 1.0
     for i, it in enumerate(iterations):
@@ -201,10 +173,7 @@ def build_iterations(events: list[dict]) -> dict:
         timeline.append(entry)
         prev = ts
 
-    # Map each tool/analyst call to the TURN whose code produced it, ONLY when per-turn timing is live
-    # (else main_step ts cluster at finalize and the mapping is meaningless). A turn's code runs AFTER its
-    # parse (the main_step rel_s) and before the next turn's, so a call belongs to the turn with the
-    # greatest main_step rel_s ≤ the call's rel_s. `turn_index` indexes `iterations`.
+    # Map each tool/analyst call to the TURN whose code produced it, ONLY when per-turn timing is live (else main_step ts cluster at finalize and the mapping is meaningless). A turn's code runs AFTER its parse (the main_step rel_s) and before the next turn's, so a call belongs to the turn with the greatest main_step rel_s ≤ the call's rel_s. `turn_index` indexes `iterations`.
     if per_turn:
         marks = sorted((it["rel_s"], it["index"]) for it in iterations
                        if isinstance(it.get("rel_s"), (int, float)))
@@ -220,8 +189,7 @@ def build_iterations(events: list[dict]) -> dict:
                     break
             entry["turn_index"] = assigned
 
-    # diff-sentry records the run's first input as `event` (the normalized untrusted change string); its
-    # derived summary is `source` (repo/kind/number/author/title). Surface both for the Init pane.
+    # diff-sentry records the run's first input as `event` (the normalized untrusted change string); its derived summary is `source` (repo/kind/number/author/title). Surface both for the Init pane.
     change = meta.get("event")
     initial = {
         "change": _preview(change),

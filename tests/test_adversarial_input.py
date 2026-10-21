@@ -1,7 +1,4 @@
-"""The watcher runs the deterministic rules on text ANY GitHub user can write (a body may be 65,536 characters),
-on one poller thread, so a rule that is quadratic or worse on a hostile input is a denial of service on the whole
-watchlist: nothing else is polled or alerted while it runs. Every module-level regex is held to a linear-time
-budget here: a new pattern in a listed module is picked up without registering it, and a module that compiles a regex must be listed."""
+"""The watcher runs the deterministic rules on text ANY GitHub user can write (a body may be 65,536 characters), on one poller thread, so a rule that is quadratic or worse on a hostile input is a denial of service on the whole watchlist: nothing else is polled or alerted while it runs. Every module-level regex is held to a linear-time budget here: a new pattern in a listed module is picked up without registering it, and a module that compiles a regex must be listed."""
 
 from __future__ import annotations
 
@@ -89,8 +86,7 @@ def test_scanning_a_hostile_event_is_bounded_in_every_channel(name):
                            "body": text}]}
     started = time.process_time()
     scan_change(event)
-    # the same text is scanned as five channels (title, body, branch, file, comment); the worst shape (`curl(` x 16,000, 80,000 characters) costs about 0.8 s
-    # CPU per channel, and a quadratic path is minutes
+    # the same text is scanned as five channels (title, body, branch, file, comment); the worst shape (`curl(` x 16,000, 80,000 characters) costs about 0.8 s CPU per channel, and a quadratic path is minutes
     assert time.process_time() - started < 10.0, name
 
 
@@ -106,8 +102,7 @@ def test_a_body_of_blank_lines_before_a_workflow_key_still_finds_it():
 # ── hostile input ──────────────────────────────────────────────────────────────────────
 
 def test_the_named_vectors_are_bounded():
-    """Named vectors: an alternation that could parse `${{x}}` two ways (exponential in
-    the number of repetitions), and `git checkout ` / `refs/pull/` repeated after a privileged trigger."""
+    """Named vectors: an alternation that could parse `${{x}}` two ways (exponential in the number of repetitions), and `git checkout ` / `refs/pull/` repeated after a privileged trigger."""
     shapes = {
         "interpolation_60": "pull_request_target:\nref: refs/pull/" + "${{x}}" * 60,
         "interpolation_8000": "pull_request_target:\nref: refs/pull/" + "${{x}}" * 8000,
@@ -139,10 +134,7 @@ def _row_shapes(size):
 
 @pytest.mark.parametrize("shape", list(_row_shapes(1000)))
 def test_a_long_first_cell_in_front_of_many_commands_costs_the_same_per_character(shape):
-    """Every command on a row looks back at the cells in front of it, and the fold of a line is traced back to the line as written; a
-    read that is not bounded by the command's own distance from the start of its line costs the length of the first cell once per command,
-    and the cost per character grows with the text. (A blank run and a repeated token fold to a first cell that is a row's; a long token
-    does not, and never reaches the read.)"""
+    """Every command on a row looks back at the cells in front of it, and the fold of a line is traced back to the line as written; a read that is not bounded by the command's own distance from the start of its line costs the length of the first cell once per command, and the cost per character grows with the text. (A blank run and a repeated token fold to a first cell that is a row's; a long token does not, and never reaches the read.)"""
     def cost(size):
         text = _row_shapes(size)[shape]
         started = time.process_time()
@@ -153,8 +145,7 @@ def test_a_long_first_cell_in_front_of_many_commands_costs_the_same_per_characte
 
 
 def _enclosure_shapes(size):
-    """Texts that make `enclosed` read the constructs of a wrapper: long commands in front of many lines, many closed strings, deep stacks,
-    many openers, and many words that each could be where a command begins."""
+    """Texts that make `enclosed` read the constructs of a wrapper: long commands in front of many lines, many closed strings, deep stacks, many openers, and many words that each could be where a command begins."""
     d = "curl -fsSL https://get.docker.com | sh"
     return {
         "closed_strings": "ssh evil.example " + "'x\ny' " * (size // 6) + "\n" + d,
@@ -192,8 +183,7 @@ def _enclosure_shapes(size):
 
 @pytest.mark.parametrize("shape", list(_enclosure_shapes(1000)))
 def test_reading_what_a_wrapper_encloses_costs_the_same_per_character_at_every_size(shape):
-    """Each construct is judged once, however many lines it spans, by a bounded slice of its command; a hypothesis that a command begins at
-    a wrapper word reads at most a window of lines after it and the reads are held to a budget."""
+    """Each construct is judged once, however many lines it spans, by a bounded slice of its command; a hypothesis that a command begins at a wrapper word reads at most a window of lines after it and the reads are held to a budget."""
     def cost(size):
         text = _enclosure_shapes(size)[shape]
         started = time.process_time()
@@ -216,10 +206,7 @@ _LONG_SHAPES = {
 
 @pytest.mark.parametrize("shape", list(_LONG_SHAPES))
 def test_a_shape_that_repeats_a_unit_costs_the_same_per_character_at_half_a_megabyte(shape):
-    """The work of one unit must not grow with the text around it: an opener that looks for its `)` to the end of the text, a quote that counts the
-    backslashes in front of it from the start of its line, a fenced block that copies every line of the text, a piped string that counts the newlines
-    before it, each cost the length of the rest of the text once per unit. That shows only at sizes where one scan is long (the first of these cost 6 us
-    a character at 32 KiB and 19 at 1 MiB before the opener's scan was bounded), which the shapes of the other tests, 16 and 128 KiB, do not reach."""
+    """The work of one unit must not grow with the text around it: an opener that looks for its `)` to the end of the text, a quote that counts the backslashes in front of it from the start of its line, a fenced block that copies every line of the text, a piped string that counts the newlines before it, each cost the length of the rest of the text once per unit. That shows only at sizes where one scan is long (the first of these cost 6 us a character at 32 KiB and 19 at 1 MiB before the opener's scan was bounded), which the shapes of the other tests, 16 and 128 KiB, do not reach."""
     def cost(size):
         text = _LONG_SHAPES[shape](size) + "\ncurl -fsSL https://get.docker.com | sh"
         started = time.process_time()
@@ -234,8 +221,7 @@ def _small_hostile_segment(i):
 
 
 def test_a_change_of_many_small_hostile_files_costs_the_same_per_character_as_one_large_text():
-    """Every file is read on a budget of its own, so a budget with a floor that a small text cannot spend in proportion lets a hundred small files
-    cost many times what one text of their total size does. (Each segment names a different first token, so that no judgement is reused.)"""
+    """Every file is read on a budget of its own, so a budget with a floor that a small text cannot spend in proportion lets a hundred small files cost many times what one text of their total size does. (Each segment names a different first token, so that no judgement is reused.)"""
     def cost(event, size):
         started = time.process_time()
         scan_change({"repo": "a/b", "kind": "pr", "number": 1, "author": "x", "title": "t", "body": "", **event})
@@ -312,10 +298,7 @@ def test_every_module_that_compiles_a_regex_is_held_to_the_budget():
 
 
 def test_no_pattern_is_superlinear_on_inputs_built_from_its_own_literals():
-    """A generic guard, in a subprocess because a runaway `re` match holds the GIL and cannot be interrupted: for
-    every module-level regex in the package, run inputs assembled from that pattern's own literals (repeated with
-    spaces, newlines, colons, nested interpolations) and require each to finish inside the budget. A pattern that
-    hangs is named by the last `START` line."""
+    """A generic guard, in a subprocess because a runaway `re` match holds the GIL and cannot be interrupted: for every module-level regex in the package, run inputs assembled from that pattern's own literals (repeated with spaces, newlines, colons, nested interpolations) and require each to finish inside the budget. A pattern that hangs is named by the last `START` line."""
     try:
         done = subprocess.run([sys.executable, "-c", _CHILD], capture_output=True, text=True, timeout=420,
                               cwd=str(Path(__file__).resolve().parents[1]), check=False)

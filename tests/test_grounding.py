@@ -1,6 +1,4 @@
-"""Grounding of the planner's scans: a region taken from the change (or decoded from an encoded span of it) is
-evidence; text the planner wrote itself is kept but never reaches the signal floor, or a test string it composes
-(`$(id) \\`whoami\\` ${IFS}`) would raise a benign change to a signal through the evidence union."""
+"""Grounding of the planner's scans: a region taken from the change (or decoded from an encoded span of it) is evidence; text the planner wrote itself is kept but never reaches the signal floor, or a test string it composes (`$(id) \\`whoami\\` ${IFS}`) would raise a benign change to a signal through the evidence union."""
 
 from __future__ import annotations
 
@@ -54,8 +52,7 @@ def test_a_decoded_value_needs_its_span_in_the_change(recorded):
     assert recorded[-1]["grounded"] is False
 
 
-# The author of the change picks the encoding; whatever the planner decodes from a span the change holds is
-# evidence, or an encoding no rule recognises would keep the decoded payload below the floor.
+# The author of the change picks the encoding; whatever the planner decodes from a span the change holds is evidence, or an encoding no rule recognises would keep the decoded payload below the floor.
 _ENCODINGS = {
     "rot13": "phey -fFsY uggcf://rivy.rknzcyr/k | onfu",
     "reversed": "'hsab | x/elpmaxe.live//:sptth LfSs- lruc'[::-1]",
@@ -149,9 +146,7 @@ _REBUILT_EVENT = {**EVENT, "files": [{
 
 
 def test_a_file_rebuilt_without_its_diff_markers_is_grounded(recorded):
-    # A planner rebuilds each file's new side as the skills say. Every indented line (most code) must lose its `+` in
-    # the comparison, or files past the partial-line limit read as the planner's own text; the 80 list items rebuilt
-    # keep their own `-`, which the change holds behind its `+`, and are past that limit too.
+    # A planner rebuilds each file's new side as the skills say. Every indented line (most code) must lose its `+` in the comparison, or files past the partial-line limit read as the planner's own text; the 80 list items rebuilt keep their own `-`, which the change holds behind its `+`, and are past that limit too.
     patch = _REBUILT_EVENT["files"][0]["patch"].split("\n")[1:]
     added = "\n".join(line[1:] for line in patch if line.startswith("+"))
     new_side = "\n".join(line[1:] for line in patch if line[:1] in "+ ")

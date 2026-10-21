@@ -1,9 +1,6 @@
-"""The watcher end to end against a fake GitHub: polling (ETag, watermark), ingest, the immutable archive,
-the actor store, the deterministic screen and its early SIEM alert, the priority queue, the model worker,
-edits and re-checks, and the caps.
+"""The watcher end to end against a fake GitHub: polling (ETag, watermark), ingest, the immutable archive, the actor store, the deterministic screen and its early SIEM alert, the priority queue, the model worker, edits and re-checks, and the caps.
 
-The model is a recorded stub and GitHub is a dict, so this pins the orchestration, not the classification:
-what runs, in what order, what is kept, and what is emitted."""
+The model is a recorded stub and GitHub is a dict, so this pins the orchestration, not the classification: what runs, in what order, what is kept, and what is emitted."""
 
 from __future__ import annotations
 
@@ -420,8 +417,7 @@ def test_the_verdict_lands_on_the_sighting(rig):
 
 
 def test_a_run_that_fails_is_retried_for_hours_then_kept_as_failed(rig):
-    # a local model that is down (a restart, a reload) is not a verdict: the change is tried again with backoff
-    # for about three hours, and only then parked as failed, with its event kept so it can be brought back
+    # a local model that is down (a restart, a reload) is not a verdict: the change is tried again with backoff for about three hours, and only then parked as failed, with its event kept so it can be brought back
     from diff_sentry.watch import _MAX_ATTEMPTS
 
     w = _start(rig)
@@ -589,8 +585,7 @@ def test_an_edit_is_a_new_revision_and_the_original_is_kept(rig):
 
 
 def test_scrubbing_the_payload_cannot_scrub_the_evidence(rig):
-    # the attacker edits the payload out after CI ran. The next revision still carries the original's hits,
-    # says the evidence was scrubbed, and still signals.
+    # the attacker edits the payload out after CI ran. The next revision still carries the original's hits, says the evidence was scrubbed, and still signals.
     w = _start(rig)
     rig.world.pr("acme/widgets", 7, body=_PAYLOAD)
     w.poll_once()
@@ -808,8 +803,7 @@ def test_a_drive_by_comment_neither_frames_the_author_nor_hides_from_the_dossier
 
 
 def test_unreadable_comments_on_a_recheck_are_not_an_edit(rig):
-    # reproduction: a rate-limited comments call made the thread "empty", which read as the
-    # author scrubbing evidence and paged the SIEM with a fake high-severity alert
+    # reproduction: a rate-limited comments call made the thread "empty", which read as the author scrubbing evidence and paged the SIEM with a fake high-severity alert
     w = _start(rig)
     rig.world.pr("acme/widgets", 7)
     rig.world.comment("acme/widgets", "pull_request", 7, author="mallory", assoc="NONE", body="/format")

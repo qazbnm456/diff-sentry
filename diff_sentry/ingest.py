@@ -1,17 +1,8 @@
 """Host-side ingestion: turn a GitHub PR/issue into the normalized change event diff-sentry classifies.
 
-This is PLUMBING that runs OUTSIDE the RLM (the planner never talks to GitHub). It shapes a webhook-style
-payload dict (`{repo, kind, number, author, title, body, files:[{filename,status,additions,deletions,
-patch}], provenance:{…}}`) that `normalize.normalize_event` renders into the untrusted `event: str`. The
-GitHub transport is injectable (`api`) so this is testable offline; the default shells out to `gh`.
+This is PLUMBING that runs OUTSIDE the RLM (the planner never talks to GitHub). It shapes a webhook-style payload dict (`{repo, kind, number, author, title, body, files:[{filename,status,additions,deletions, patch}], provenance:{…}}`) that `normalize.normalize_event` renders into the untrusted `event: str`. The GitHub transport is injectable (`api`) so this is testable offline; the default shells out to `gh`.
 
-`provenance` is host-side source/identity ENRICHMENT, fetched via extra best-effort `gh api` calls: author
-type/association, the account's absolute `created_at` and its age AS OF the event (so a replay of an old
-incident sees the account as it was, not as it is today), profile facts, the event's own timestamps, the
-head repo/fork, commit signatures, and the commit dates/timezone offsets. `indicators.scan_provenance`
-turns it into deterministic baseline hits, joining the evidence union. The event also carries the attacker-
-controlled channels beyond the body: the PR head branch name (`head_ref`, the branch-name injection vector)
-and the bounded comment thread (`comments`, the slash-command trigger vector); both are UNTRUSTED text.
+`provenance` is host-side source/identity ENRICHMENT, fetched via extra best-effort `gh api` calls: author type/association, the account's absolute `created_at` and its age AS OF the event (so a replay of an old incident sees the account as it was, not as it is today), profile facts, the event's own timestamps, the head repo/fork, commit signatures, and the commit dates/timezone offsets. `indicators.scan_provenance` turns it into deterministic baseline hits, joining the evidence union. The event also carries the attacker- controlled channels beyond the body: the PR head branch name (`head_ref`, the branch-name injection vector) and the bounded comment thread (`comments`, the slash-command trigger vector); both are UNTRUSTED text.
 
 Pure stdlib; no dspy. `event_from_payload` is the offline path (a payload you already have).
 """
@@ -27,8 +18,7 @@ from typing import Any
 
 # An `api` maps a `gh api <path>` argument to parsed JSON. Injectable for tests; default uses `gh`.
 GhApi = Callable[[str], Any]
-# A `raw` maps (path, Accept media type) to the response TEXT, for the one surface that is not JSON:
-# the `.patch` mbox, whose `Date:` headers keep the author's UTC offset (REST and GraphQL normalize it away).
+# A `raw` maps (path, Accept media type) to the response TEXT, for the one surface that is not JSON: the `.patch` mbox, whose `Date:` headers keep the author's UTC offset (REST and GraphQL normalize it away).
 GhRaw = Callable[[str, str], str]
 
 _PATCH_ACCEPT = "application/vnd.github.patch"
@@ -40,15 +30,12 @@ _MAX_COMMENT_CHARS = 2000
 _MAX_PROFILE_FIELD = 200
 _MAX_PATCH_TEXT = 2_000_000
 
-# GitHub commit `verification.reason` values where a signature WAS attached but does not bind to the
-# committer's GitHub identity (spoofing-shaped), distinct from a plain unsigned commit.
+# GitHub commit `verification.reason` values where a signature WAS attached but does not bind to the committer's GitHub identity (spoofing-shaped), distinct from a plain unsigned commit.
 _SIG_MISMATCH_REASONS = frozenset({"bad_email", "unknown_key", "no_user", "unverified_email"})
 
 
 class GhApiError(Exception):
-    """A `gh api` call failed. `status` is the HTTP status when the failure was an HTTP error the CLI
-    reported (a POSITIVELY-confirmed 404 vs a transient/network error, which leaves `status=None`), so an
-    enrichment caller can turn a real 404 into a fact while still omitting on any transient failure."""
+    """A `gh api` call failed. `status` is the HTTP status when the failure was an HTTP error the CLI reported (a POSITIVELY-confirmed 404 vs a transient/network error, which leaves `status=None`), so an enrichment caller can turn a real 404 into a fact while still omitting on any transient failure."""
 
     def __init__(self, message: str, *, status: int | None = None):
         super().__init__(message)
@@ -59,13 +46,11 @@ def _gh_cli_api(timeout: float = 30.0) -> GhApi:
     def call(path: str) -> Any:
         import subprocess  # host-side only; NEVER reached from inside the RLM
 
-        # check=False is the INTENT, stated rather than defaulted: the returncode is inspected
-        # below because `gh` prints the HTTP error body on failure, and raising would discard it.
+        # check=False is the INTENT, stated rather than defaulted: the returncode is inspected below because `gh` prints the HTTP error body on failure, and raising would discard it.
         out = subprocess.run(["gh", "api", path], capture_output=True, text=True,
                              timeout=timeout, check=False)
         if out.returncode != 0:
-            # gh prints the HTTP error BODY (JSON, with a `"status"`) to stdout on an HTTP failure; stdout is
-            # empty on a network/transport failure. So a confirmed 404 is distinguishable from a transient.
+            # gh prints the HTTP error BODY (JSON, with a `"status"`) to stdout on an HTTP failure; stdout is empty on a network/transport failure. So a confirmed 404 is distinguishable from a transient.
             status = None
             body = out.stdout.strip()
             if body:
@@ -75,8 +60,7 @@ def _gh_cli_api(timeout: float = 30.0) -> GhApi:
                     status = int(raw) if raw is not None and str(raw).isdigit() else None
                 except (ValueError, TypeError):
                     status = None
-            # gh puts the human-readable error ("gh: Not Found (HTTP 404)", auth hints) on stderr; carry a
-            # bounded slice so a host-side status=failed response is diagnosable, not just "exit 1".
+            # gh puts the human-readable error ("gh: Not Found (HTTP 404)", auth hints) on stderr; carry a bounded slice so a host-side status=failed response is diagnosable, not just "exit 1".
             detail = (out.stderr or "").strip()[:200]
             msg = f"gh api {path} failed (exit {out.returncode})" + (f": {detail}" if detail else "")
             raise GhApiError(msg, status=status)
@@ -117,9 +101,7 @@ def _iso(value: Any) -> str:
 
 
 def _age_days(created_at: Any, as_of: Any = None) -> int | None:
-    """Account age in whole days from an ISO-8601 `created_at`, measured AS OF `as_of` (the event's own
-    creation time). Without `as_of` it falls back to the wall clock, which is right for a live event and
-    wrong for a replay, hence the event time is passed whenever it is known. Host-side only."""
+    """Account age in whole days from an ISO-8601 `created_at`, measured AS OF `as_of` (the event's own creation time). Without `as_of` it falls back to the wall clock, which is right for a live event and wrong for a replay, hence the event time is passed whenever it is known. Host-side only."""
     created = _parse_ts(created_at)
     if created is None:
         return None
@@ -138,8 +120,7 @@ def _domain(email: Any) -> str:
 
 
 def _profile_facts(acct: dict) -> dict:
-    """Numeric account facts + the attacker-authored profile strings, from a `users/{id}` body. The strings
-    are bounded and stay OUT of the MF1 metadata sandwich (only `scan_provenance` reads them)."""
+    """Numeric account facts + the attacker-authored profile strings, from a `users/{id}` body. The strings are bounded and stay OUT of the MF1 metadata sandwich (only `scan_provenance` reads them)."""
     facts: dict = {}
     for src, dst in (("followers", "author_followers"), ("following", "author_following"),
                      ("public_repos", "author_public_repos"), ("public_gists", "author_public_gists")):
@@ -162,8 +143,7 @@ def _profile_facts(acct: dict) -> dict:
 def _mbox_offsets(text: str, limit: int = 100) -> dict[str, int]:
     """UTC offsets (`+0800`) of the commit author dates in a `.patch` mbox, counted per offset.
 
-    Only the header block of each message is read (from the `From <sha> …` separator to the first blank
-    line), so a `Date:` line inside a diff is never mistaken for a header."""
+    Only the header block of each message is read (from the `From <sha> …` separator to the first blank line), so a `Date:` line inside a diff is never mistaken for a header."""
     offsets: dict[str, int] = {}
     seen = 0
     in_header = False
@@ -191,11 +171,7 @@ def _mbox_offsets(text: str, limit: int = 100) -> dict[str, int]:
 def _provenance(repo: str, number: int | None, user: dict | None, association: Any,
                 call: GhApi, *, fetch_commits: bool, as_of: Any = None,
                 raw: GhRaw | None = None) -> dict:
-    """Best-effort HOST-SIDE source/provenance facts for a change: author identity/association, the
-    account's absolute `created_at` and its age as of the event, profile facts, and (PRs) commit signature
-    counts, commit dates and UTC offsets, from `gh api`. Every enrichment call is guarded: a `gh` hiccup or a
-    missing field just OMITS that key, never sinks the ingest. The `indicators.scan_provenance` detectors turn
-    these into deterministic hits at baseline."""
+    """Best-effort HOST-SIDE source/provenance facts for a change: author identity/association, the account's absolute `created_at` and its age as of the event, profile facts, and (PRs) commit signature counts, commit dates and UTC offsets, from `gh api`. Every enrichment call is guarded: a `gh` hiccup or a missing field just OMITS that key, never sinks the ingest. The `indicators.scan_provenance` detectors turn these into deterministic hits at baseline."""
     user = user if isinstance(user, dict) else {}
     login = str(user.get("login", "") or "")
     prov: dict = {"author_login": login, "author_type": str(user.get("type", "") or "")}
@@ -206,8 +182,7 @@ def _provenance(repo: str, number: int | None, user: dict | None, association: A
         prov["author_id"] = uid
     if _iso(as_of):
         prov["event_created_at"] = str(as_of)
-    # `ghost` is GitHub's reserved deleted-user attribution; no lookup needed (scan_provenance flags the
-    # login). Otherwise prefer the immutable numeric id (rename-proof) over the login.
+    # `ghost` is GitHub's reserved deleted-user attribution; no lookup needed (scan_provenance flags the login). Otherwise prefer the immutable numeric id (rename-proof) over the login.
     if login and login.strip().lower() != "ghost":
         try:
             acct = call(f"user/{uid}" if uid else f"users/{login}") or {}
@@ -228,9 +203,7 @@ def _provenance(repo: str, number: int | None, user: dict | None, association: A
         except Exception:  # noqa: BLE001 (best-effort; a failed lookup just omits the commit-signature facts)
             commits = None
         if isinstance(commits, list):
-            # Tally everything BEFORE assigning, so a malformed element can't leave a half-populated dict.
-            # Every nested field is isinstance-guarded (not just `or {}`): a TRUTHY non-dict such as
-            # `{"commit": "x"}` (a schema-broken 200) would otherwise raise on `.get` and sink the ingest.
+            # Tally everything BEFORE assigning, so a malformed element can't leave a half-populated dict. Every nested field is isinstance-guarded (not just `or {}`): a TRUTHY non-dict such as `{"commit": "x"}` (a schema-broken 200) would otherwise raise on `.get` and sink the ingest.
             unverified = mismatch = 0
             spoofed_authors: list[str] = []
             author_dates: list[str] = []
@@ -261,16 +234,14 @@ def _provenance(repo: str, number: int | None, user: dict | None, association: A
             if mismatch:
                 prov["commits_sig_identity_mismatch"] = mismatch
             if spoofed_authors:
-                # DEDUPE (order-preserving) before the bound so an attacker can't flood the list with copies
-                # of a plain name to push a bot-named commit past the cap. scan_provenance judges the names.
+                # DEDUPE (order-preserving) before the bound so an attacker can't flood the list with copies of a plain name to push a bot-named commit past the cap. scan_provenance judges the names.
                 prov["unverified_commit_authors"] = list(dict.fromkeys(spoofed_authors))[:20]
             if author_dates:
                 prov["commit_author_dates"] = sorted(author_dates)[:20]
             if email_domains:
                 prov["commit_email_domains"] = list(dict.fromkeys(email_domains))[:10]
         if raw is not None:
-            # REST and GraphQL return commit dates in UTC; only the `.patch` mbox keeps the author's own
-            # offset. It is the author's CLAIM (a committer can set any date), so it is soft evidence.
+            # REST and GraphQL return commit dates in UTC; only the `.patch` mbox keeps the author's own offset. It is the author's CLAIM (a committer can set any date), so it is soft evidence.
             try:
                 offsets = _mbox_offsets(raw(f"repos/{repo}/pulls/{number}", _PATCH_ACCEPT))
             except Exception:  # noqa: BLE001 (best-effort; the offsets are simply omitted)
@@ -281,8 +252,7 @@ def _provenance(repo: str, number: int | None, user: dict | None, association: A
 
 
 def _head_facts(pr: dict) -> dict:
-    """Where the PR's code comes from: the head repo/fork, its creation time, and the head sha. A `null`
-    head repo means the fork was deleted after the PR was opened: an author cleanup tell."""
+    """Where the PR's code comes from: the head repo/fork, its creation time, and the head sha. A `null` head repo means the fork was deleted after the PR was opened: an author cleanup tell."""
     head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
     facts: dict = {}
     if head.get("sha"):
@@ -312,9 +282,7 @@ def _timeline(obj: dict) -> dict:
 
 
 def _pages(call: GhApi, base: str, max_pages: int, *, start: int = 1) -> list:
-    """Items of a paginated list endpoint, 100 per page, from page `start` for up to `max_pages` pages. A failed
-    page raises. A server that ignores `page=` (the same first item twice) stops the loop instead of returning
-    duplicates for every page."""
+    """Items of a paginated list endpoint, 100 per page, from page `start` for up to `max_pages` pages. A failed page raises. A server that ignores `page=` (the same first item twice) stops the loop instead of returning duplicates for every page."""
     out: list = []
     previous_first = None
     for page in range(start, start + max_pages):
@@ -332,12 +300,7 @@ def _pages(call: GhApi, base: str, max_pages: int, *, start: int = 1) -> list:
 
 def _comments(call: GhApi, repo: str, number: int, *, review: bool, total: Any = None
               ) -> tuple[list[dict] | None, bool]:
-    """One thread of comments: the channel hackerbot used to fire `/format`-style workflow triggers. Comment
-    bodies are UNTRUSTED. Returns `(comments, truncated)`; `comments` is None when the lookup failed, so the
-    caller can tell "no comments" from "could not read them": the two must not both read as an empty thread, or a
-    transient error looks like an edit. When the thread is longer than `_MAX_COMMENT_PAGES` pages and the object
-    told us how long (`total`), the NEWEST pages are read, because a slash command fires on the latest comment;
-    `truncated` says older ones were not."""
+    """One thread of comments: the channel hackerbot used to fire `/format`-style workflow triggers. Comment bodies are UNTRUSTED. Returns `(comments, truncated)`; `comments` is None when the lookup failed, so the caller can tell "no comments" from "could not read them": the two must not both read as an empty thread, or a transient error looks like an edit. When the thread is longer than `_MAX_COMMENT_PAGES` pages and the object told us how long (`total`), the NEWEST pages are read, because a slash command fires on the latest comment; `truncated` says older ones were not."""
     base = (f"repos/{repo}/pulls/{number}/comments" if review else f"repos/{repo}/issues/{number}/comments")
     last = -(-total // 100) if isinstance(total, int) and not isinstance(total, bool) and total > 0 else None
     start = max(1, last - _MAX_COMMENT_PAGES + 1) if last else 1
@@ -367,8 +330,7 @@ def _comments(call: GhApi, repo: str, number: int, *, review: bool, total: Any =
 
 def _all_comments(call: GhApi, repo: str, number: int, *, pull: bool, conv_total: Any = None,
                   review_total: Any = None) -> tuple[list[dict], bool, bool]:
-    """The newest `_MAX_COMMENTS` comments of a change, whether every lookup succeeded, and whether older
-    comments were left unread. The newest are kept because a slash command fires on the latest comment."""
+    """The newest `_MAX_COMMENTS` comments of a change, whether every lookup succeeded, and whether older comments were left unread. The newest are kept because a slash command fires on the latest comment."""
     parts = [_comments(call, repo, number, review=False, total=conv_total)]
     if pull:
         parts.append(_comments(call, repo, number, review=True, total=review_total))
@@ -379,8 +341,7 @@ def _all_comments(call: GhApi, repo: str, number: int, *, pull: bool, conv_total
 
 
 def clean_comments(raw: Any) -> list[dict]:
-    """A defensive copy of a host-supplied `comments` list (offline payloads): dict entries only, every field
-    bounded, so a pasted event obeys the same limits a fetched one does."""
+    """A defensive copy of a host-supplied `comments` list (offline payloads): dict entries only, every field bounded, so a pasted event obeys the same limits a fetched one does."""
     out: list[dict] = []
     for c in raw if isinstance(raw, list) else []:
         if not isinstance(c, dict):
@@ -408,8 +369,7 @@ def _fill_age(prov: dict, event_created_at: str) -> dict:
 
 
 def event_from_payload(payload: dict) -> dict:
-    """Normalize a webhook-style payload we already hold into the canonical change-event dict. Tolerant of
-    missing keys: every field defaults to empty so a partial payload still classifies."""
+    """Normalize a webhook-style payload we already hold into the canonical change-event dict. Tolerant of missing keys: every field defaults to empty so a partial payload still classifies."""
     files = []
     for f in payload.get("files") or []:
         files.append({
@@ -448,8 +408,7 @@ def event_from_payload(payload: dict) -> dict:
 def pr_event(repo: str, number: int, *, api: GhApi | None = None, raw: GhRaw | None = None) -> dict:
     """Fetch a PR + its files, comments and provenance from GitHub (host-side) into a change-event dict.
 
-    `api` is injectable. The `.patch` fetch (commit UTC offsets) runs only on the real `gh` transport or an
-    explicitly injected `raw`, so a test that fakes `api` never reaches the network."""
+    `api` is injectable. The `.patch` fetch (commit UTC offsets) runs only on the real `gh` transport or an explicitly injected `raw`, so a test that fakes `api` never reaches the network."""
     call = api or _gh_cli_api()
     raw_call = raw if raw is not None else (_gh_cli_raw() if api is None else None)
     pr = call(f"repos/{repo}/pulls/{number}")
@@ -496,8 +455,7 @@ def pr_event(repo: str, number: int, *, api: GhApi | None = None, raw: GhRaw | N
 
 
 def issue_event(repo: str, number: int, *, api: GhApi | None = None) -> dict:
-    """Fetch an issue from GitHub (host-side) into a change-event dict; the issue body is the untrusted
-    content (the hackerbot-claw prompt-injection issues came in this shape)."""
+    """Fetch an issue from GitHub (host-side) into a change-event dict; the issue body is the untrusted content (the hackerbot-claw prompt-injection issues came in this shape)."""
     call = api or _gh_cli_api()
     issue = call(f"repos/{repo}/issues/{number}")
     timeline = _timeline(issue)
@@ -528,10 +486,7 @@ def issue_event(repo: str, number: int, *, api: GhApi | None = None) -> dict:
 
 
 def public_activity(login: str, *, api: GhApi | None = None, pages: int = 3) -> dict:
-    """A bounded summary of an account's recent PUBLIC activity (GitHub keeps the last 30 days / 300 events):
-    distinct repos, event types, and the UTC hour-of-day histogram. GitHub assigns the timestamps, so the
-    histogram is the timezone evidence to lean on, though the author still chooses when to act (commit-date
-    offsets are only a claim). Best-effort: an empty dict on any failure."""
+    """A bounded summary of an account's recent PUBLIC activity (GitHub keeps the last 30 days / 300 events): distinct repos, event types, and the UTC hour-of-day histogram. GitHub assigns the timestamps, so the histogram is the timezone evidence to lean on, though the author still chooses when to act (commit-date offsets are only a claim). Best-effort: an empty dict on any failure."""
     if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", login or ""):
         return {}      # a GitHub login, nothing that could alter the request path
     call = api or _gh_cli_api()

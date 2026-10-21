@@ -1,5 +1,4 @@
-"""What the kind of a file changes: shell syntax in source no shell reads, a fetch of a loopback address, the bare phrase
-"system prompt" in source code, and the files a coding agent reads as its instructions."""
+"""What the kind of a file changes: shell syntax in source no shell reads, a fetch of a loopback address, the bare phrase "system prompt" in source code, and the files a coding agent reads as its instructions."""
 
 import pytest
 
@@ -70,8 +69,7 @@ def test_branch_names_titles_and_the_planner_tool_keep_every_substitution():
     "'http://localhost:3000/api'", "`http://127.0.0.1:${AGENT_PORT}/json/list`", "'http://127.0.0.1:09222/json/list'", "url",
 ])
 def test_a_fetch_that_writes_to_disk_is_a_dropper_whatever_its_target(url):
-    # A loopback target is no exemption: an infostealer reads DevTools there, and every way to tell a local service from
-    # one (a port, an option that overrides the URL, a second client, a socket) can be spelled around.
+    # A loopback target is no exemption: an infostealer reads DevTools there, and every way to tell a local service from one (a port, an option that overrides the URL, a second client, a socket) can be spelled around.
     assert _found("a.ts", f"const r = await fetch({url});\nfs.writeFileSync(out, await r.text());") == {("remote-fetch-to-disk", "high")}
 
 
