@@ -2,6 +2,19 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.7.1
+
+Upgrade from 0.7.0: `rlm-harness==1.22.0`. The GitHub Action's scan is unchanged; the model pipeline (`pr`, `issue`, `classify`, `watch`) raises fewer false signals on documentation changes and stops calling a misconfigured classifier sooner. Nothing needs configuring.
+
+### Changed
+- **A classifier endpoint that answers 400, 401, 403, 404 or 422 is called once**, not retried, and counts toward the circuit breaker, so a wrong model name, key or request stops being called. Timeouts, 429 and 5xx are retried as before. The eval judge does the same for 401, 403 and 404.
+- **A planner run that fails on an unparseable reply quotes the reply as the model wrote it**, and says so when the reply carried only reasoning.
+- **`rlm-harness==1.22.0`.**
+- **The README covers using diff-sentry**; how it works, the watcher, the known limits and development moved to `docs/`.
+
+### Fixed
+- **A planner re-scan of a slice of a documentation patch is softened as the scan of that file is**, so a README change that adds a documented installer and removes an indented line no longer signals as `critical`.
+
 ## 0.7.0
 
 Upgrade from 0.6.0: `rlm-harness==1.20.0` and `dspy` 3.4.1. The signal now reads only the evidence the planner grounded in the change, and several rules read lower or higher than before, so a SIEM that alerts on severity sees fewer false signals and some new ones (see **Changed**). Nothing needs configuring; the new `DS_*` settings are optional.
