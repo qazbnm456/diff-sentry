@@ -2,6 +2,13 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.11.0
+
+Upgrade from 0.10.0: `release-watch` can now watch container images. The GitHub Action's scan is unchanged, nothing needs configuring, and `rlm-harness==1.22.0` is unchanged.
+
+### Added
+- **`release-watch --images` compares GHCR and Docker Hub images by their build provenance.** litellm's 1.107.0 images, and the `latest` and `main-stable` tags moved onto them, carried the same payload as the wheels. Each new tag, each move of a watched floating tag, and each re-push of a recent release is judged against the repositories and workflows the image is known to be built from and by. A source or building repository whose owner imitates a known one is `critical`. An unknown owner, a build from an unprotected ref by a workflow that used protected ones, or an image without the provenance the repository's images carry is `high`. Another workflow of a known owner, such as a nightly build, is `medium`. Images are read anonymously and never pulled; the provenance is unsigned, so only a mismatch is evidence, and a layer's content is not read. See [Container images](docs/release-watch.md#container-images).
+
 ## 0.10.0
 
 Upgrade from 0.9.0: the GitHub Action now flags a GitHub owner that imitates your repository's own, so a workflow change it passed before can fail it now, and `release-watch` compares who published each release. Nothing needs configuring: the Action reads the repository from `GITHUB_REPOSITORY`. `rlm-harness==1.22.0` is unchanged.
