@@ -2,6 +2,19 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.13.0
+
+Upgrade from 0.12.0: `release-watch` can watch npm packages. The GitHub Action's scan is unchanged, nothing needs configuring, and `rlm-harness==1.24.0` is unchanged.
+
+### Added
+- **`release-watch --npm` watches npm packages** (`DS_RELEASE_NPM`, or `--check npm:NAME VERSION` for one version). Each new version is compared with the version before it in semver order, as a PyPI release is: the tarball is read from `registry.npmjs.org` as data, checked against the registry's sha512, and every new or changed file is screened by the same rules. The npm worms of 2025 ran their payload from an install script, and a compromised version can also depend on a package published hours before, so it adds what only npm shows:
+  - `npm-install-script-added` (`high`): a `preinstall`, `install` or `postinstall` script, or the `node-gyp rebuild` a `binding.gyp` implies, that the previous version did not run, in the package or in a dependency it bundles. A script that changes command is `medium`.
+  - `npm-dependency-source` (`high`): a dependency newly installed from a git repository, a URL, a path or an `npm:` alias.
+  - `npm-dependency-runs-at-install` and `npm-dependency-young` (`high`): a dependency newly taken from the registry whose versions run a script at install, or that was created within 30 days of the version or is not on the registry.
+  - The publisher checks PyPI releases have, from the SLSA provenance the registry holds, which must name the tarball's own digest.
+
+  The manifests are read as npm extracts them, and one that cannot be read alerts. See [npm packages](docs/release-watch.md#npm-packages).
+
 ## 0.12.0
 
 Upgrade from 0.11.0: `release-watch` can compare each release with its git tag, and `rlm-harness` moves to 1.24.0. The GitHub Action's scan is unchanged, and nothing needs configuring.
