@@ -2,6 +2,18 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.14.0
+
+Upgrade from 0.13.0: `release-watch --images` now reads what each image changes, and checks compiled bytecode against its source. The GitHub Action's scan is unchanged, and `rlm-harness==1.24.0` is unchanged. For the bytecode check, install the Python version an image or wheel uses (`python3.N` on `PATH`) beside the watcher; without it, changed bytecode alerts that it could not be checked.
+
+### Added
+- **`release-watch --images` compares an image's files with the image it replaces.** A moved tag is compared with the image it pointed at, and a new tag with the newest release below it. Only the layers the two do not share are downloaded and checked against their digests, then applied as a runtime applies them, and the files that changed are screened by the same rules as a release, so a `.pth` startup hook in an image's site-packages alerts as it does in a wheel. A layer it cannot read, a new platform, and two images for one platform alert that the image was not fully read. A layer can be capped with `DS_RELEASE_MAX_LAYER_MB` (1024 by default).
+- **An image's run configuration is compared too**, even when every layer is reused: another entrypoint, command, shell, user, working directory, healthcheck or build trigger is `image-run-config-changed` (`high`), and an environment variable that loads code (`LD_PRELOAD`, `PYTHONPATH`, `PYTHONWARNINGS`, `NODE_OPTIONS`, `PATH` and the like) is `image-loader-env` (`high`).
+- **Compiled bytecode is checked against its source**, in images and wheels. Python can run a cached `.pyc` instead of the source beside it, so a changed `.pyc` is compared with its source compiled, in a separate, bounded interpreter of the same Python version that runs neither. Bytecode that is not its source compiled alerts.
+
+### Changed
+- **A `.pyc` is compared by its code, not its header**, which every rebuild rewrites, so a rebuilt image or wheel no longer alerts on unchanged bytecode.
+
 ## 0.13.0
 
 Upgrade from 0.12.0: `release-watch` can watch npm packages. The GitHub Action's scan is unchanged, nothing needs configuring, and `rlm-harness==1.24.0` is unchanged.
