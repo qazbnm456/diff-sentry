@@ -14,6 +14,7 @@ import json
 import math
 import os
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -77,6 +78,7 @@ async def detect_from_event(
 
 def _baseline_indicators(event: dict, *, content_hits: list[IndicatorHit] | None = None) -> list[dict]:
     """The host-side deterministic evidence recorded in run_start meta BEFORE the planner runs: the text detectors over the raw content ∪ the provenance detectors over the ingest facts. Both re-source into the evidence union on read (MF3), so a false-benign SUBMIT can skew the verdict but never suppress these."""
+    from .images import scan_image
     from .indicators import keep_worse, scan_change, scan_provenance
     from .releases import release_scope, scan_release, scan_release_change
 
@@ -84,7 +86,8 @@ def _baseline_indicators(event: dict, *, content_hits: list[IndicatorHit] | None
     release = event.get("kind") == "release"
     scan = scan_release_change if release else scan_change
     hits = (scan(event) if content_hits is None else release_scope(list(content_hits)) if release else list(content_hits)) \
-        + scan_provenance(event.get("provenance") or {}) + scan_release(event.get("release") or {})
+        + scan_provenance(event.get("provenance") or {}) + scan_release(event.get("release") or {}) \
+        + scan_image((event.get("release") or {}).get("image") or {})
     # Hits an EARLIER version of this same change raised ride along, so an edit that removes the payload cannot also remove the evidence (the watcher supplies them; a change scanned on its own has none).
     for raw in event.get("prior_indicators") or []:
         if isinstance(raw, IndicatorHit):
@@ -333,6 +336,7 @@ def _cmd_release_watch(args) -> int:
     import logging
     import signal
 
+    from .images import ImageWatcher
     from .releases import ReleaseWatcher, parse_packages
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -347,7 +351,15 @@ def _cmd_release_watch(args) -> int:
         packages = parse_packages(texts)
         if args.check:
             packages = parse_packages([args.check[0]])
-        watcher = ReleaseWatcher(packages, state_dir=args.state, out_dir=args.out, emit=not args.no_emit)
+        images = [i for text in [*args.images, os.getenv("DS_RELEASE_IMAGES", "")] for i in text.replace(",", " ").split()]
+        floating = tuple(args.image_tags or os.getenv("DS_RELEASE_IMAGE_TAGS", "latest").replace(",", " ").split())
+        image_watcher = ImageWatcher([] if args.check else images, state_dir=args.state, out_dir=args.out,
+                                     floating=floating, emit=not args.no_emit)
+        try:
+            watcher = ReleaseWatcher(packages, state_dir=args.state, out_dir=args.out, emit=not args.no_emit)
+        except BaseException:
+            image_watcher.close()
+            raise
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"release-watch: {exc}", file=sys.stderr)
         return 2
@@ -356,22 +368,29 @@ def _cmd_release_watch(args) -> int:
             result = watcher.check(packages[0], args.check[1])
             print(json.dumps(result, indent=2, default=str))
             return 1 if "error" in result else 0
-        if not packages:
-            print("release-watch: no packages (--packages, --packages-file or DS_RELEASE_PACKAGES)", file=sys.stderr)
+        if not packages and not images:
+            print("release-watch: nothing to watch (--packages, --packages-file, --images, or DS_RELEASE_PACKAGES / "
+                  "DS_RELEASE_IMAGES)", file=sys.stderr)
             return 2
         if args.once:
-            for result in watcher.poll_once():
+            for result in watcher.poll_once() + image_watcher.poll_once():
                 print(json.dumps(result, default=str))
             return 0
         stopping = []
         signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
         try:
-            watcher.run(args.interval, stop=lambda: bool(stopping))
+            while not stopping:
+                started = time.monotonic()
+                watcher.poll_once()
+                image_watcher.poll_once()
+                while not stopping and time.monotonic() - started < args.interval:
+                    time.sleep(min(1.0, args.interval))
         except KeyboardInterrupt:
             pass
         return 0
     finally:
         watcher.close()
+        image_watcher.close()
 
 
 def _cmd_render(args) -> int:
@@ -636,6 +655,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="compare each new release of watched PyPI packages with the one before it (no model)")
     rw.add_argument("--packages", nargs="+", default=[], help="PyPI project names (or set DS_RELEASE_PACKAGES)")
     rw.add_argument("--packages-file", help="a file of project names, one per line (# comments allowed)")
+    rw.add_argument("--images", nargs="+", default=[],
+                    help="container images (ghcr.io/owner/name, docker.io/owner/name) whose tags are compared by provenance "
+                         "(or set DS_RELEASE_IMAGES)")
+    rw.add_argument("--image-tags", nargs="+", default=None,
+                    help="floating tags whose moves are judged (DS_RELEASE_IMAGE_TAGS, default: latest)")
     rw.add_argument("--out", default="./output")
     rw.add_argument("--state", default=os.getenv("DS_WATCH_STATE_DIR", "./output/state"),
                     help="state directory: releases.db, snapshots/")

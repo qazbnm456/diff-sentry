@@ -18,6 +18,28 @@ It needs no model and no GitHub credentials. Set `DS_SIEM_WEBHOOK_URL` to receiv
 4. **Screens that change** like a pull request, so the startup-hook, packed-loader, download-and-run and every other rule read the new files. It adds the facts only a release shows: a top-level name the wheels newly install into site-packages, a new dependency, attestations the previous release had and this one lacks, and a Trusted Publisher the previous release's attestations did not name (another repository, workflow, environment or account; `critical` when the repository's owner imitates the previous one's, such as `Acme-Corp` for `AcmeCorp`). A publisher is the repository whose workflow uploaded the files, not the one it built from, and the check needs the previous release to be attested. Whatever it could not read alerts on its own: a changed file that runs but could not be read as text, two files that install to the same path, and an artifact that could not be downloaded or read to its end.
 5. **Alerts** when the evidence reaches the floor, and archives the comparison in `snapshots/`, so the evidence survives PyPI removing the release.
 
+## Container images
+
+```bash
+uv run diff-sentry release-watch --images ghcr.io/berriai/litellm docker.io/litellm/litellm --image-tags latest main-stable
+```
+
+litellm's 1.107.0 images, and the `latest` and `main-stable` tags moved onto them, carried the same payload as the wheels and stayed up longer. `release-watch --images` reads each image's build provenance (the SLSA attestation BuildKit attaches), never its layers. A repository holds images from several workflows (releases, nightlies, branch builds), so an image is judged against what the repository is known to be built from and by: on first sight, the provenance of the watched floating tags and the newest version tags; after that, every image judged clean. An image that raised an alert never becomes what is known.
+
+After first sight, it judges every new tag, every watched floating tag (`latest` by default) that moves to another image, and any of the ten newest plain release tags (not a `-nightly` or `-rc` build) that is pushed again. cosign's `.sig`, `.att` and `.sbom` tags are not images and are skipped.
+
+On GHCR, the namespace an image is published under is a GitHub owner and counts as known from the start.
+
+- **`image-source-lookalike`**, **`image-builder-lookalike`** (`critical`): the repository the image was built from (`vcs:source`), or the one whose workflow built it, has an owner that imitates a known owner, as the 1.107.0 images' `Berri-AI/litellm` did `BerriAI`.
+- **`image-source-changed`**, **`image-builder-changed`** (`high`): a source or a building repository of an owner the repository is not known to use. Another repository of a known owner is `medium`.
+- **`image-ref-unprotected`** (`high`): a workflow whose known builds ran from protected refs built the image from an unprotected one. litellm's attacker turned branch protection off before pushing the workflow change.
+- **`image-provenance-dropped`** (`high`): an image without the provenance the repository's images carry. A platform image no attestation names, an attestation that names an image outside its own index, and a provenance whose subject is not that image are alerts too (`release-not-fully-read`).
+- **`image-workflow-changed`** (`medium`, evidence below the floor): a workflow of a known owner the repository is not known to use, such as a branch build.
+
+If the images the watch starts from already come from owners that imitate each other, it cannot tell which is real: it alerts once (`image-source-lookalike`), learns neither, and alerts on every image of the repository (`image-owner-unresolved`, `high`) until you investigate and delete `images.db` to start again.
+
+It reads GHCR and Docker Hub only, with anonymous pull tokens. It checks digests with HEAD requests, which Docker Hub does not count toward its pull limit, and a rate-limited poll waits for the next one. The provenance is not signed: whoever controls the push can write any statement, so a provenance that matches proves nothing, and a payload in a layer is not read.
+
 ## What it does not do
 
 - It sees a release only while PyPI lists it. A release removed within minutes of upload can be gone before the next poll.
