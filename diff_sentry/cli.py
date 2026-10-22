@@ -78,13 +78,13 @@ async def detect_from_event(
 def _baseline_indicators(event: dict, *, content_hits: list[IndicatorHit] | None = None) -> list[dict]:
     """The host-side deterministic evidence recorded in run_start meta BEFORE the planner runs: the text detectors over the raw content ∪ the provenance detectors over the ingest facts. Both re-source into the evidence union on read (MF3), so a false-benign SUBMIT can skew the verdict but never suppress these."""
     from .indicators import keep_worse, scan_change, scan_provenance
-    from .releases import release_scope, scan_release
+    from .releases import release_scope, scan_release, scan_release_change
 
     # `content_hits` lets a caller that already scanned the change (the watcher, once per change) avoid scanning the same text again: the scan is the expensive part.
-    hits = (scan_change(event) if content_hits is None else list(content_hits)) \
+    release = event.get("kind") == "release"
+    scan = scan_release_change if release else scan_change
+    hits = (scan(event) if content_hits is None else release_scope(list(content_hits)) if release else list(content_hits)) \
         + scan_provenance(event.get("provenance") or {}) + scan_release(event.get("release") or {})
-    if event.get("kind") == "release":
-        hits = release_scope(hits)
     # Hits an EARLIER version of this same change raised ride along, so an edit that removes the payload cannot also remove the evidence (the watcher supplies them; a change scanned on its own has none).
     for raw in event.get("prior_indicators") or []:
         if isinstance(raw, IndicatorHit):
@@ -353,8 +353,9 @@ def _cmd_release_watch(args) -> int:
         return 2
     try:
         if args.check:
-            print(json.dumps(watcher.check(packages[0], args.check[1]), indent=2, default=str))
-            return 0
+            result = watcher.check(packages[0], args.check[1])
+            print(json.dumps(result, indent=2, default=str))
+            return 1 if "error" in result else 0
         if not packages:
             print("release-watch: no packages (--packages, --packages-file or DS_RELEASE_PACKAGES)", file=sys.stderr)
             return 2

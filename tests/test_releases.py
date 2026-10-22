@@ -56,6 +56,9 @@ def _sdist(version: str, extra: dict | None = None) -> bytes:
     return buf.getvalue()
 
 
+_PUBLISHER = {"kind": "GitHub", "repository": "BerriAI/litellm", "workflow": "release.yml", "environment": "pypi"}
+
+
 class _PyPI:
     """A fake fetch that serves a simple index and its artifacts, and counts what it was asked for."""
 
@@ -66,18 +69,20 @@ class _PyPI:
         self.etag = "1"
         self.calls: list[tuple[str, dict]] = []
         self.broken: set[str] = set()
+        self.publishers: dict[str, dict] = {}
 
-    def add(self, filename: str, data: bytes, *, attested: bool = False) -> None:
+    def add(self, filename: str, data: bytes, *, attested: bool = False, publisher: dict | None = None) -> None:
         self.artifacts[filename] = data
-        if attested:
+        if attested or publisher:
             self.attested.add(filename)
+            self.publishers[filename] = publisher or _PUBLISHER
         self.etag = str(int(self.etag) + 1)
 
     def index(self) -> bytes:
         return json.dumps({"files": [
             {"filename": n, "url": f"https://files.pythonhosted.org/x/{n}", "size": len(d),
              "hashes": {"sha256": hashlib.sha256(d).hexdigest()}, "upload-time": "2026-10-21T11:40:00Z",
-             "yanked": n in self.yanked, "provenance": f"https://pypi.org/integrity/{n}" if n in self.attested else None}
+             "yanked": n in self.yanked, "provenance": f"https://pypi.org/integrity/demo/x/{n}/provenance" if n in self.attested else None}
             for n, d in self.artifacts.items()]}).encode()
 
     def __call__(self, url: str, headers: dict, limit: int):
@@ -88,6 +93,10 @@ class _PyPI:
             if headers.get("If-None-Match") == self.etag:
                 return 304, {}, b""
             return 200, {"ETag": self.etag}, self.index()
+        if url.startswith("https://pypi.org/integrity/"):
+            name = url.split("/")[-2]
+            bundle = {"publisher": self.publishers[name], "attestations": []}
+            return 200, {}, json.dumps({"version": 1, "attestation_bundles": [bundle]}).encode()
         name = url.rsplit("/", 1)[1]
         return (200, {}, self.artifacts[name]) if name in self.artifacts else (404, {}, b"")
 
@@ -98,10 +107,11 @@ def _files(pypi: _PyPI) -> list[ReleaseFile]:
     return parse_index(pypi.index())
 
 
-def _release(v: str, pypi: _PyPI, *, payload: bool = False, attested: bool = False, requires=()) -> None:
+def _release(v: str, pypi: _PyPI, *, payload: bool = False, attested: bool = False, requires=(),
+             publisher: dict | None = None) -> None:
     extra = {k: val for k, val in _PAYLOAD.items()} if payload else None
-    pypi.add(f"demo-{v}-py3-none-any.whl", _wheel(v, extra, requires), attested=attested)
-    pypi.add(f"demo-{v}.tar.gz", _sdist(v), attested=attested)
+    pypi.add(f"demo-{v}-py3-none-any.whl", _wheel(v, extra, requires), attested=attested, publisher=publisher)
+    pypi.add(f"demo-{v}.tar.gz", _sdist(v), attested=attested, publisher=publisher)
 
 
 def _rules(event: dict, floor_only: bool = True) -> set[str]:
@@ -611,3 +621,143 @@ def test_the_zip64_record_zipfile_reads_bounds_the_directory():
     fake = data.find(b"PK\x06\x06")                 # inside the first member's data
     data[end - 20 + 8:end - 20 + 16] = fake.to_bytes(8, "little")   # the locator now names the fake record
     assert _zip_directory(bytes(data)) == true_size > 46
+
+
+def test_a_release_from_the_same_publisher_raises_nothing():
+    pypi = _PyPI()
+    _release("1.0", pypi, attested=True)
+    _release("1.1", pypi, attested=True)
+    event = release_event("demo", "1.1", _files(pypi), pypi)
+    assert event["release"]["publishers"] == ["github:berriai/litellm:release.yml:pypi:"]
+    assert not {"release-publisher-changed", "release-publisher-lookalike"} & _rules(event, floor_only=False)
+
+
+@pytest.mark.parametrize(("publisher", "rule"), [
+    ({**_PUBLISHER, "repository": "Berri-AI/litellm"}, "release-publisher-lookalike"),   # a stolen token, another owner
+    ({**_PUBLISHER, "repository": "someone/litellm"}, "release-publisher-changed"),
+    ({**_PUBLISHER, "workflow": "backport.yml"}, "release-publisher-changed"),
+    ({**_PUBLISHER, "environment": ""}, "release-publisher-changed"),
+])
+def test_a_release_from_another_publisher_signals(publisher, rule):
+    pypi = _PyPI()
+    _release("1.0", pypi, attested=True)
+    _release("1.1", pypi, publisher=publisher)
+    rules = _rules(release_event("demo", "1.1", _files(pypi), pypi))
+    assert rule in rules and len(rules & {"release-publisher-changed", "release-publisher-lookalike"}) == 1
+
+
+def test_case_is_no_change_of_publisher():
+    pypi = _PyPI()
+    _release("1.0", pypi, attested=True)
+    _release("1.1", pypi, publisher={**_PUBLISHER, "repository": "berriai/LiteLLM"})
+    assert "release-publisher-changed" not in _rules(release_event("demo", "1.1", _files(pypi), pypi), floor_only=False)
+
+
+def test_one_file_from_another_publisher_is_enough():
+    pypi = _PyPI()
+    _release("1.0", pypi, attested=True)
+    pypi.add("demo-1.1.tar.gz", _sdist("1.1"), attested=True)
+    pypi.add("demo-1.1-py3-none-any.whl", _wheel("1.1"), publisher={**_PUBLISHER, "repository": "Berri-AI/litellm"})
+    assert "release-publisher-lookalike" in _rules(release_event("demo", "1.1", _files(pypi), pypi))
+
+
+def test_attestations_pypi_does_not_serve_are_retried_and_unreadable_ones_are_a_note():
+    from diff_sentry.releases import DownloadError
+
+    pypi = _PyPI()
+    _release("1.0", pypi, attested=True)
+    _release("1.1", pypi, attested=True)
+    files = _files(pypi)
+    pypi.broken.add("/integrity/")
+    with pytest.raises(ConnectionError):
+        release_event("demo", "1.1", files, pypi)
+    pypi.broken.clear()
+    real = pypi.__call__
+
+    def missing(url, headers, limit):
+        return (404, {}, b"") if "/integrity/" in url else real(url, headers, limit)
+
+    with pytest.raises(DownloadError):
+        release_event("demo", "1.1", files, missing)
+
+    def garbled(url, headers, limit):
+        return (200, {}, b"not json") if "/integrity/" in url else real(url, headers, limit)
+
+    assert "release-not-fully-read" in _rules(release_event("demo", "1.1", files, garbled))
+
+
+def test_mention_rules_stay_below_the_floor_and_workflow_content_keeps_its_severity():
+    from diff_sentry.indicators import scan_indicators
+
+    hits = scan_indicators("# This file is protected via CODEOWNERS\npermissions: write-all\n")
+    assert {h.rule for h in hits if h.severity in ("high", "critical")} == {"codeowners-tamper", "workflow-permission-escalation"}
+    # write-all in any file of a package is a workflow its code or its build can push into someone's repository
+    assert {h.rule for h in release_scope(hits) if h.severity in ("high", "critical")} == {"workflow-permission-escalation"}
+
+
+def test_a_release_event_reads_a_mention_low_and_a_workflow_high_wherever_they_are():
+    from diff_sentry.cli import _baseline_indicators
+
+    def file(name: str, text: str) -> dict:
+        return {"filename": name, "status": "added", "additions": 2, "deletions": 0,
+                "patch": "@@ -0,0 +1,2 @@\n" + "".join(f"+{line}\n" for line in text.split("\n"))}
+
+    def strong(event):
+        return {h["rule"] for h in _baseline_indicators(event) if h["severity"] in ("high", "critical")}
+
+    event = {"repo": "pypi/demo", "kind": "release", "title": "demo 1.1", "body": "", "release": {},
+             "files": [file("sdist/pyproject.toml", "# protected via CODEOWNERS")]}
+    assert not strong(event)
+    workflow = ("on: pull_request_target\njobs:\n  x:\n    steps:\n      - uses: actions/checkout@v4\n        with:\n"
+                "          ref: ${{ github.event.pull_request.head.sha }}")
+    shipped = {**event, "files": [{**file("sdist/.github/workflows/ci.yml", workflow), "status": "modified"}]}
+    assert "pwn-request" in strong(shipped)
+    worm = {**event, "files": [file("wheel/demo/sync.js", "const wf = `\n" + workflow + "\n`;")]}
+    assert "pwn-request" in strong(worm)
+
+
+def test_a_release_with_no_attestations_after_a_partly_attested_one_is_high():
+    pypi = _PyPI()
+    pypi.add("demo-1.0-py3-none-any.whl", _wheel("1.0"), attested=True)
+    pypi.add("demo-1.0.tar.gz", _sdist("1.0"))                  # an sdist uploaded by hand beside CI wheels
+    _release("1.1", pypi)
+    assert "release-attestation-dropped" in _rules(release_event("demo", "1.1", _files(pypi), pypi))
+    for v in ("1.2", "1.3"):                                      # partly attested after partly attested: nothing
+        pypi.add(f"demo-{v}-py3-none-any.whl", _wheel(v), attested=True)
+        pypi.add(f"demo-{v}.tar.gz", _sdist(v))
+    assert not {"release-attestation-dropped", "release-publisher-changed"} & _rules(
+        release_event("demo", "1.3", _files(pypi), pypi), floor_only=False)
+
+
+def test_a_google_publisher_is_told_apart_by_its_email_and_odd_facts_do_not_crash():
+    pypi = _PyPI()
+    _release("1.0", pypi, publisher={"kind": "Google", "email": "good@proj.iam.gserviceaccount.com"})
+    _release("1.1", pypi, publisher={"kind": "Google", "email": "evil@other.iam.gserviceaccount.com"})
+    assert "release-publisher-changed" in _rules(release_event("demo", "1.1", _files(pypi), pypi))
+    assert scan_release({"package": "d", "version": "1", "publishers": ["nocolon"], "previous_publishers": ["github:a/b::"]})
+
+
+def test_an_environment_differing_only_in_case_is_the_same_publisher():
+    pypi = _PyPI()
+    _release("1.0", pypi, attested=True)
+    _release("1.1", pypi, publisher={**_PUBLISHER, "environment": "PyPI"})
+    assert "release-publisher-changed" not in _rules(release_event("demo", "1.1", _files(pypi), pypi), floor_only=False)
+
+
+def test_the_check_command_fails_when_the_comparison_does(tmp_path, monkeypatch):
+    from diff_sentry import cli, releases
+
+    monkeypatch.setattr(releases.ReleaseWatcher, "check", lambda self, p, v: {"package": p, "version": v, "error": "x"})
+    assert cli.main(["release-watch", "--check", "demo", "1.1", "--state", str(tmp_path / "s"),
+                     "--out", str(tmp_path / "o"), "--no-emit"]) == 1
+
+
+def test_hits_scanned_elsewhere_never_skip_a_release_scope():
+    from diff_sentry.cli import _baseline_indicators
+    from diff_sentry.indicators import scan_change
+
+    event = {"repo": "pypi/demo", "kind": "release", "title": "demo 1.1", "body": "", "release": {},
+             "files": [{"filename": "wheel/demo/x.py", "status": "added", "additions": 1, "deletions": 0,
+                        "patch": "@@ -0,0 +1 @@\n+# This file is protected via CODEOWNERS"}]}
+    hits = _baseline_indicators(event, content_hits=scan_change(event))
+    assert not [h for h in hits if h["severity"] in ("high", "critical")]

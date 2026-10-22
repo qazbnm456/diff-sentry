@@ -1,6 +1,6 @@
 """Release watch: each new file of a watched PyPI package, compared with the release before it.
 
-A compromised release need not pass through any pull request: litellm 1.107.0 was built from a lookalike fork and 1.82.8 was uploaded with a stolen token, and in both the wheels held files the previous release did not (a `.pth` startup hook, a packed stealer). So the release itself is the change. Its artifacts are downloaded as DATA (never installed, never unpacked to disk), their members are compared with the previous release's, and every new or changed member becomes a file of a change event (`kind="release"`) whose patch is the unified diff. That event goes through the same deterministic screen as a pull request (`cli.screen`), so every text and file-structure rule reads it, and the facts only the release shows join the baseline through `scan_release`.
+A compromised release need not pass through any pull request: litellm 1.107.0 was built from the attacker's `Berri-AI/litellm` by a release workflow changed with stolen tokens, and 1.82.8 was uploaded with a stolen token, and in both the wheels held files the previous release did not (a `.pth` startup hook, a packed stealer). So the release itself is the change. Its artifacts are downloaded as DATA (never installed, never unpacked to disk), their members are compared with the previous release's, and every new or changed member becomes a file of a change event (`kind="release"`) whose patch is the unified diff. That event goes through the same deterministic screen as a pull request (`cli.screen`), so every text and file-structure rule reads it, and the facts only the release shows join the baseline through `scan_release`.
 
 What cannot be read is evidence, never a silence: a member that would run (Python source, a `.pth`, a script) and could not be shown as text, two members that install to one path, and an artifact not read to its end are `high`.
 
@@ -432,8 +432,8 @@ def _roots(arts: list[Artifact]) -> set[str]:
 # ── facts only a release shows ───────────────────────────────────────────────────────────────────────────
 
 def scan_release(facts: dict) -> list[IndicatorHit]:
-    """The release's own facts as indicators, host-side like `scan_provenance`. What was not read is `high`: a member that runs and was not shown as text, two members at one install path, an artifact not read to its end. A name the wheels newly install at the root of site-packages is `medium`, a new dependency `low`. Text and file-structure rules read the release's files through the ordinary screen."""
-    from .indicators import _hit
+    """The release's own facts as indicators, host-side like `scan_provenance`. A Trusted Publisher the previous release's attestations did not name is `high` (`release-publisher-changed`), and `critical` when its owner differs from a previous publisher's only by hyphens (a stolen token publishing from an `Acme-Corp` that imitates `AcmeCorp`). It needs the previous release to be attested; a publisher names the repository whose workflow uploaded, not the one it built from. What was not read is `high`: a member that runs and was not shown as text, two members at one install path, an artifact not read to its end. A name the wheels newly install at the root of site-packages is `medium`, a new dependency `low`. Text and file-structure rules read the release's files through the ordinary screen."""
+    from .indicators import _hit, lookalike_owner
 
     if not isinstance(facts, dict) or not facts:
         return []
@@ -451,6 +451,28 @@ def scan_release(facts: dict) -> list[IndicatorHit]:
         hits.append(_hit("release-attestation-dropped", "high",
                          "the previous release carried PyPI attestations and this one does not (published another way)",
                          f"{facts.get('previous')} attested, {facts.get('version')} not", location=where))
+    publishers, before = set(listed("publishers")), set(listed("previous_publishers"))
+
+    def owner(identity: str) -> str:
+        return (identity.split(":") + ["", ""])[1].split("/")[0]
+
+    if before and not publishers and not (facts.get("previous_attested") and not facts.get("attested")):
+        hits.append(_hit("release-attestation-dropped", "high",
+                         "the previous release carried PyPI attestations and none of these files does (published another way)",
+                         f"{facts.get('previous')} attested by {', '.join(sorted(before))}"[:240], location=where))
+    if publishers and before and publishers - before:
+        new_owners = {owner(p) for p in publishers - before}
+        old_owners = {owner(p) for p in before}
+        how = {lookalike_owner(n, o) for n in new_owners for o in old_owners} - {None}
+        evidence = f"{', '.join(sorted(before))} -> {', '.join(sorted(publishers - before))}"[:240]
+        if "hyphen" in how:
+            hits.append(_hit("release-publisher-lookalike", "critical",
+                             "the release was published from a repository whose owner imitates the previous release's publisher",
+                             evidence, location=where))
+        else:
+            hits.append(_hit("release-publisher-changed", "high",
+                             "the release was published by another repository, workflow or environment than the previous release",
+                             evidence, location=where))
     if listed("new_requires") and facts.get("previous"):
         hits.append(_hit("release-new-dependency", "low", "the release requires a project the previous release did not",
                          ", ".join(listed("new_requires"))[:240], location=where))
@@ -467,11 +489,29 @@ def scan_release(facts: dict) -> list[IndicatorHit]:
     return hits
 
 
+# Rules about a repository and its reviewers that only see something mentioned: a prompt injection (read in a package by
+# the programs that import it, and an LLM library's own code talks about its prompts every release), a code-owners file,
+# a workflow file, a privileged trigger, a CI skip. A comment mentions these as readily as code and a package governs no
+# repository, so they stay below the floor anywhere in a release. The rules that see a workflow's dangerous content (a
+# pull request's head checked out under a privileged trigger, write-all permissions) keep their severity in every file:
+# wherever a package carries such a workflow, its code or its build can push it into someone's repository.
+_MENTION_RULES = frozenset({"prompt-injection", "codeowners-tamper", "workflow-tamper", "privileged-fork-trigger",
+                            "ci-bypass"})
+
+
 def release_scope(hits: list[IndicatorHit]) -> list[IndicatorHit]:
-    """The kind of a release changes one rule: a `prompt-injection` in a package's files is read by the programs that import it, not by a reviewer of a pull request, and an LLM library's own code talks about its prompts on every release. It stays in the evidence at `medium`, below the floor; what runs code keeps its severity."""
+    """The mention rules of a release stay in the evidence at `medium`, below the floor; everything else keeps its
+    severity."""
     return [h.model_copy(update={"severity": "medium",
                                  "title": f"{h.title} (in a released package's files, below the floor)"})
-            if h.rule == "prompt-injection" and h.severity in ("high", "critical") else h for h in hits]
+            if h.severity in ("high", "critical") and h.rule in _MENTION_RULES else h for h in hits]
+
+
+def scan_release_change(event: dict) -> list[IndicatorHit]:
+    """`scan_change` for a release event, with the mention rules below the floor (`release_scope`)."""
+    from .indicators import scan_change
+
+    return release_scope(scan_change(event))
 
 
 # ── PyPI ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -505,6 +545,7 @@ class ReleaseFile:
     upload_time: str
     yanked: bool
     attested: bool
+    provenance: str = ""        # the URL of the file's attestations on pypi.org, when PyPI holds any
 
 
 def parse_index(body: bytes) -> list[ReleaseFile]:
@@ -522,7 +563,8 @@ def parse_index(body: bytes) -> list[ReleaseFile]:
             filename=name, url=str(f.get("url") or ""), version=found[0], kind=found[1],
             size=int(f.get("size") or 0), sha256=str((f.get("hashes") or {}).get("sha256") or ""),
             upload_time=str(f.get("upload-time") or ""), yanked=bool(f.get("yanked")),
-            attested=bool(f.get("provenance"))))
+            attested=bool(f.get("provenance")),
+            provenance=str(f.get("provenance")) if isinstance(f.get("provenance"), str) else ""))
     return out
 
 
@@ -553,6 +595,43 @@ def _download(fetch: Fetch, f: ReleaseFile, budget: list[int], notes: list[str])
         return None
     budget[0] -= len(body)
     return body
+
+
+_MAX_PROVENANCE_BYTES = 4 << 20    # one file's attestation bundles
+_MAX_PROVENANCE_FILES = 500        # files whose attestations are read, on each side of a comparison
+
+
+def publisher_identity(publisher: dict) -> str:
+    """A Trusted Publisher as one comparable string: its kind, repository, workflow, environment and (a Google publisher's)
+    email, names that ignore case in lower case. PyPI verified the attestation against it at upload, so it names what published."""
+    workflow = publisher.get("workflow") or publisher.get("workflow_filepath") or ""
+    return ":".join(str(x).replace(":", "_") for x in (
+        str(publisher.get("kind") or "").lower(), str(publisher.get("repository") or "").lower(), workflow,
+        str(publisher.get("environment") or "").lower(), str(publisher.get("email") or "").lower()))
+
+
+def _publishers(fetch: Fetch, files: list[ReleaseFile], notes: list[str]) -> list[str]:
+    """The Trusted Publishers of the files' attestations, read from PyPI. A file PyPI holds no attestation for has none;
+    an attestation PyPI does not serve is retried like a download; one that cannot be read is a note."""
+    found: set[str] = set()
+    attested = [f for f in files if f.provenance]
+    if len(attested) > _MAX_PROVENANCE_FILES:
+        notes.append(f"{len(attested)} attested files, the attestations of the first {_MAX_PROVENANCE_FILES} read")
+    for f in attested[:_MAX_PROVENANCE_FILES]:
+        try:
+            status, _, body = fetch(f.provenance, {"Accept": "application/json"}, _MAX_PROVENANCE_BYTES)
+        except ValueError as exc:               # past the size bound, or a URL the fetch refuses: not read
+            notes.append(f"{f.filename}: its attestations were not read ({str(exc)[:120]})")
+            continue
+        if status != 200:
+            raise DownloadError(f"{f.filename}: its attestations answered HTTP {status}")
+        try:
+            bundles = json.loads(body.decode("utf-8")).get("attestation_bundles") or []
+            for bundle in bundles:
+                found.add(publisher_identity(bundle["publisher"]))
+        except (ValueError, TypeError, KeyError, AttributeError):
+            notes.append(f"{f.filename}: its attestations could not be read")
+    return sorted(found)
 
 
 def release_event(package: str, version: str, files: list[ReleaseFile], fetch: Fetch,
@@ -602,6 +681,8 @@ def release_event(package: str, version: str, files: list[ReleaseFile], fetch: F
         "artifacts": [f.filename for f in mine],
         "attested": bool(mine) and all(f.attested for f in mine),
         "previous_attested": bool(theirs) and all(f.attested for f in theirs),
+        "publishers": _publishers(fetch, mine, notes),
+        "previous_publishers": _publishers(fetch, theirs, notes),
         "uploaded": min((f.upload_time for f in mine if f.upload_time), default=""),
         "yanked": bool(mine) and all(f.yanked for f in mine),
         "new_roots": sorted(_roots(new) - _roots(old)) if old else [],

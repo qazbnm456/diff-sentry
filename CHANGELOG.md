@@ -4,11 +4,19 @@ All notable changes to diff-sentry, a BewAIre-style detector that classifies one
 
 ## 0.10.0
 
-Upgrade from 0.9.0: the GitHub Action now flags a GitHub owner that imitates your repository's own, so a workflow change it passed before can fail it now. Nothing needs configuring: the Action reads the repository from `GITHUB_REPOSITORY`. `rlm-harness==1.22.0` is unchanged.
+Upgrade from 0.9.0: the GitHub Action now flags a GitHub owner that imitates your repository's own, so a workflow change it passed before can fail it now, and `release-watch` compares who published each release. Nothing needs configuring: the Action reads the repository from `GITHUB_REPOSITORY`. `rlm-harness==1.22.0` is unchanged.
 
 ### Added
 - **`lookalike-owner` flags a GitHub owner that imitates the repository's own**, such as the `Berri-AI/litellm` that litellm's release workflow was pointed at to build 1.107.0 (the project is `BerriAI`). An owner that equals yours once hyphens are dropped is `critical` in a workflow and `high` in a URL, an action, a clone or a `--repo` elsewhere; one a single character away is `medium`, since real sibling organisations sit that close. A workflow that checks out another owner's repository is `foreign-checkout`, `medium`.
 - **`diff-sentry scan --repo owner/name`** names the repository a diff is of; it defaults to `GITHUB_REPOSITORY`.
+- **`release-watch` alerts when a release's Trusted Publisher changes**: a repository, workflow, environment or account that the previous release's PyPI attestations did not name is `high`, and `critical` when the repository's owner imitates the previous one's. It needs the previous release to be attested, and it names the repository whose workflow uploaded, not the one it built from.
+
+### Changed
+- **`release-watch` keeps the rules that only see a code-owners file, a workflow file or a CI skip mentioned below the alert floor**, as it already did for prompt injection: a package governs no repository, and a comment mentions them as readily as code. A workflow's dangerous content keeps its severity in every file of a package.
+
+### Fixed
+- **`release-watch` alerts when a release has no attestations after a release that had some**, including one whose sdist was uploaded by hand beside attested wheels.
+- **`release-watch --check` exits non-zero when the comparison fails.**
 
 ## 0.9.0
 
