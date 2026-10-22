@@ -4,7 +4,9 @@ A compromised release need not pass through any pull request: litellm 1.107.0 wa
 
 What cannot be read is evidence, never a silence: a member that would run (Python source, a `.pth`, a script) and could not be shown as text, two members that install to one path, and an artifact not read to its end are `high`.
 
-Host-side plumbing, like `ingest` and `watch`: it fetches only from PyPI's own hosts, with every download, every decompressed byte and all text kept bounded. Pure stdlib + httpx (+ `packaging` for version order); no dspy.
+With the package's GitHub repository known, the release's code is also compared with the repository's tag for its version (`tag_facts`).
+
+Host-side plumbing, like `ingest` and `watch`: it fetches only from PyPI's own hosts and GitHub's (a repository's refs and trees, never its code), with every download, every decompressed byte and all text kept bounded. Pure stdlib + httpx (+ `packaging` for version order); no dspy.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ import tarfile
 import time
 import zipfile
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
@@ -36,12 +38,12 @@ from .schema import IndicatorHit
 
 log = logging.getLogger(__name__)
 
-# A fetch maps (url, request headers, byte limit) to (status, response headers, body). Injectable, so tests and an air-gapped mirror need no network; the default refuses any host but PyPI's own.
+# A fetch maps (url, request headers, byte limit) to (status, response headers, body). Injectable, so tests and an air-gapped mirror need no network; the default refuses any host but PyPI's and GitHub's own.
 Fetch = Callable[[str, dict, int], tuple[int, dict, bytes]]
 
 _SIMPLE_URL = "https://pypi.org/simple/{name}/"
 _SIMPLE_ACCEPT = "application/vnd.pypi.simple.v1+json"
-_ALLOWED_HOSTS = frozenset({"pypi.org", "files.pythonhosted.org"})
+_ALLOWED_HOSTS = frozenset({"pypi.org", "files.pythonhosted.org", "github.com", "api.github.com"})
 
 _MAX_INDEX_BYTES = 32 << 20        # a project's simple index (litellm's, with every release, is about 2 MiB)
 # One wheel or sdist; a package larger than this is not compared, which is `high` (`release-not-fully-read`), so a watchlist with large packages raises it.
@@ -61,6 +63,7 @@ _REQUIRES_RE = re.compile(r"^Requires-Dist:[ \t]*([A-Za-z0-9][A-Za-z0-9._-]{0,99
 _WHEEL_DATA_RE = re.compile(r"^[^/]+\.data/(purelib|platlib|scripts|headers|data)/(.*)$")
 _DIST_INFO_RE = re.compile(r"^[^/]+\.dist-info/(.*)$")
 # Members that run, or decide what a build runs: unreadable, they are `high` rather than a note.
+_PYTHON_RUN = (".py", ".pyw", ".pth")
 _CODE_SUFFIXES = (".py", ".pyw", ".pth", ".pyc", ".pyo", ".sh", ".bat", ".cmd", ".ps1", ".js", ".cjs", ".mjs")
 _BUILD_FILES = frozenset({"pyproject.toml", "setup.cfg", "setup.py"})
 # Compiled code: never text, so a new or changed one is not read (`.pyc` runs without its source, and Python may load a cached one over it). A native module counts only when the release before had no module of that name.
@@ -116,6 +119,7 @@ class Member:
     digest: str                     # sha256 of the bytes, or the archive's checksum of a member past the read budget
     text: str | None                # the member as text, when it was read as text
     unread: str | None = None       # why a member that runs was not read as text
+    blobs: tuple[str, ...] = ()     # the git blob sha1 of the bytes when they were read, and of them with CRLF as LF (a Windows checkout's), to compare with a source tag
 
 
 @dataclass
@@ -181,6 +185,20 @@ def _source_path(path: str) -> str | None:
 
 
 def _member(path: str, size: int, data: bytes | None, checksum: str, budget: _Budget, why: str = "") -> Member:
+    m = _read_member(path, size, data, checksum, budget, why)
+    if data is None:
+        return m
+    return replace(m, blobs=tuple(_blob(d) for d in (data, data.replace(b"\r\n", b"\n") if b"\r\n" in data else None)
+                                  if d is not None))
+
+
+def _blob(data: bytes) -> str:
+    blob = hashlib.sha1(b"blob %d\0" % len(data), usedforsecurity=False)
+    blob.update(data)
+    return blob.hexdigest()
+
+
+def _read_member(path: str, size: int, data: bytes | None, checksum: str, budget: _Budget, why: str = "") -> Member:
     code = _is_code(path)
     if data is None:
         return Member(path, size, checksum, None, (why or "not read") if code else None)
@@ -473,6 +491,18 @@ def scan_release(facts: dict) -> list[IndicatorHit]:
             hits.append(_hit("release-publisher-changed", "high",
                              "the release was published by another repository, workflow or environment than the previous release",
                              evidence, location=where))
+    if facts.get("tag_still_missing"):
+        hits.append(_hit("release-tag-missing", "high",
+                         "the source repository tagged the previous release and still has no tag for this one",
+                         str(facts["tag_still_missing"])[:240], location=where))
+    elif facts.get("tag_missing"):
+        hits.append(_hit("release-tag-missing", "medium",
+                         "the source repository tagged the previous release and has no tag for this one yet (looked at again)",
+                         str(facts["tag_missing"])[:240], location=where))
+    if listed("tag_differs"):
+        hits.append(_hit("release-differs-from-tag", "high",
+                         "a file that runs differs from the source repository's tag where the previous release matched its own",
+                         f"{facts.get('tag')}: {'; '.join(listed('tag_differs'))}"[:240], location=where))
     if listed("new_requires") and facts.get("previous"):
         hits.append(_hit("release-new-dependency", "low", "the release requires a project the previous release did not",
                          ", ".join(listed("new_requires"))[:240], location=where))
@@ -522,7 +552,7 @@ def _httpx_fetch(timeout: float = 60.0) -> Fetch:
 
         host = urlsplit(url).hostname or ""
         if urlsplit(url).scheme != "https" or host not in _ALLOWED_HOSTS:
-            raise ValueError(f"refusing to fetch from {host!r}: only PyPI's own hosts are read")
+            raise ValueError(f"refusing to fetch from {host!r}: only PyPI's and GitHub's own hosts are read")
         with httpx.stream("GET", url, headers=headers, timeout=timeout, follow_redirects=False) as resp:
             body = bytearray()
             for chunk in resp.iter_bytes():
@@ -635,7 +665,7 @@ def _publishers(fetch: Fetch, files: list[ReleaseFile], notes: list[str]) -> lis
 
 
 def release_event(package: str, version: str, files: list[ReleaseFile], fetch: Fetch,
-                  only: set[str] | None = None) -> dict:
+                  only: set[str] | None = None, source: str | None = None) -> dict:
     """The change event of a release, or of the files in `only` (a wheel uploaded after the rest): its artifacts against the previous release's, as files whose patches are the diff, with the release's facts in `release`."""
     name = normalize_name(package)
     prev = previous_version(version, files)
@@ -689,13 +719,199 @@ def release_event(package: str, version: str, files: list[ReleaseFile], fetch: F
         "new_requires": sorted(_requires(new) - _requires(old)) if old else [],
         "shadowed": sorted({p for art in new for p in art.shadowed})[:50],
         "unread_code": unread[:50],
-        "notes": notes[:50],
     }
+    configured = source is not None
+    if source is None:      # without a configured repository, the one the previous release's Trusted Publisher names
+        repos = {p.split(":")[1] for p in facts["previous_publishers"] if p.startswith("github:")}
+        source = repos.pop() if len(repos) == 1 and _REPO_RE.fullmatch(next(iter(repos))) else None
+    if source:
+        facts.update(tag_facts(name, version, prev, new, old, source, fetch, notes, configured=configured))
+    facts["notes"] = notes[:50]
     return {
         "repo": f"pypi/{name}", "kind": "release", "number": None, "author": "",
         "title": f"{name} {version}" + (f" (after {prev})" if prev else " (first release seen)"),
         "body": "", "created_at": facts["uploaded"] or None, "files": changed, "release": facts,
     }
+
+
+# ── the source repository's tag ──────────────────────────────────────────────────────────────────────────
+
+_REFS_URL = "https://github.com/{repo}.git/info/refs?service=git-upload-pack"
+_TREE_URL = "https://api.github.com/repos/{repo}/git/trees/{sha}?recursive=1"
+_MAX_REFS_BYTES = 64 << 20         # a repository's refs (litellm's, with every pull request's, are about 3 MiB)
+_MAX_TREE_BYTES = 64 << 20         # one commit's recursive tree (litellm's 17,000 entries are about 3 MiB)
+_MAX_PREFIX_VOTES = 2000           # members whose blobs vote for where the artifact sits in the repository
+_REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}")
+_REF_LINE_RE = re.compile(r"(?:0000)?[0-9a-f]{4}([0-9a-f]{40}) refs/tags/([^\s\x00^]{1,250})(\^\{\})?")
+_TAG_RE = re.compile(r"([^0-9]{0,100})([0-9][^\s]{0,150})")
+
+
+def parse_sources(texts: list[str]) -> dict[str, str]:
+    """`package=owner/name` pairs from arguments and the environment: the GitHub repository each package is built from."""
+    out: dict[str, str] = {}
+    for text in texts:
+        for word in text.replace(",", " ").split():
+            package, sep, repo = word.partition("=")
+            if not sep or not _REPO_RE.fullmatch(repo):
+                raise ValueError(f"not a package=owner/name source: {word!r}")
+            out[parse_packages([package])[0]] = repo
+    return out
+
+
+def tag_commits(fetch: Fetch, repo: str) -> dict[str, str] | None:
+    """The repository's tags and the commit each names (an annotated tag's peeled commit), from the refs GitHub advertises to `git fetch`, which no API rate limit counts. None when GitHub serves no such public repository (a 401 or 404, or a redirect for one renamed)."""
+    status, _, body = fetch(_REFS_URL.format(repo=repo), {}, _MAX_REFS_BYTES)
+    if status in (401, 404) or 300 <= status < 400:
+        return None
+    if status != 200:
+        raise DownloadError(f"the refs of {repo}: HTTP {status}")
+    tags: dict[str, str] = {}
+    for line in body.decode("latin-1").split("\n"):
+        m = _REF_LINE_RE.match(line)
+        if m and (m.group(3) or m.group(2) not in tags):
+            tags[m.group(2)] = m.group(1)
+    return tags
+
+
+def _tags_of(tags: dict[str, str], version: str) -> dict[str, str]:
+    """The tags that name `version` (`v1.107.0-rc.1` names `1.107.0rc1`), by the prefix before their version."""
+    want = _version_key(version)
+    found: dict[str, str] = {}
+    for name in tags:
+        m = _TAG_RE.fullmatch(name)
+        if m and want is not None and _version_key(m.group(2)) == want:
+            found.setdefault(m.group(1), name)
+    return found
+
+
+def _pick(prefixes, package: str) -> str:
+    """One tag prefix of several: one that names the package (a monorepo's `demo-v`), else the shortest."""
+    return min(prefixes, key=lambda p: (normalize_name(package) not in normalize_name(p), len(p), p))
+
+
+class _GitHubLimited(Exception):
+    """GitHub's API refused for its rate limit: the release is not compared with its tag, which is a fact, not an alert."""
+
+
+def _tree(fetch: Fetch, repo: str, sha: str, notes: list[str]) -> dict[str, str] | None:
+    """A commit's files (path to blob sha), or None with a note when GitHub sends only part of it."""
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+    headers = {"Accept": "application/vnd.github+json", **({"Authorization": f"Bearer {token}"} if token else {})}
+    status, _, body = fetch(_TREE_URL.format(repo=repo, sha=sha), headers, _MAX_TREE_BYTES)
+    if status in (403, 429):
+        raise _GitHubLimited(f"GitHub's API answered HTTP {status} (its rate limit; set GITHUB_TOKEN)")
+    if status != 200:
+        raise DownloadError(f"the tree of {repo} at {sha[:12]}: HTTP {status}")
+    data = json.loads(body.decode("utf-8"))
+    if data.get("truncated"):
+        notes.append(f"{repo} at {sha[:12]}: GitHub sent part of its tree, so the release was not compared with its tag")
+        return None
+    return {str(e.get("path")): str(e.get("sha")) for e in data.get("tree") or []
+            if isinstance(e, dict) and e.get("type") == "blob" and e.get("mode") != "120000"}
+
+
+def _compared(art: Artifact) -> list[Member]:
+    """The members of an artifact compared with a tag: what Python runs (a `.py`, `.pyw` or `.pth`, and a build file), not what a build writes (a wheel's `.dist-info` and scripts, an sdist's `PKG-INFO` and `.egg-info`). Other files, a rebuilt web bundle among them, are screened by the rules but not compared, since a build names them anew each time."""
+    return [m for k, m in art.members.items() if "\0" not in k and m.blobs and not m.path.startswith("{")
+            and (m.path.lower().endswith(_PYTHON_RUN) or posixpath.basename(m.path) in _BUILD_FILES)
+            and not _derived(art.kind, m.path)]
+
+
+def _prefix(members: list[Member], files: dict[str, str]) -> str:
+    """Where the artifact's paths sit in the repository (`src/`, a monorepo's `python/`): the directory most of its members' blobs are found under."""
+    by_blob: dict[str, list[str]] = {}
+    for path, sha in files.items():
+        by_blob.setdefault(sha, []).append(path)
+    votes: dict[str, int] = {}
+    for m in members[:_MAX_PREFIX_VOTES]:
+        for path in (p for blob in m.blobs for p in by_blob.get(blob, [])[:20]):
+            if path == m.path or path.endswith("/" + m.path):
+                votes[path[:len(path) - len(m.path)]] = votes.get(path[:len(path) - len(m.path)], 0) + 1
+    return max(sorted(votes), key=lambda p: votes[p]) if votes else ""
+
+
+def _differences(art: Artifact, files: dict[str, str]) -> dict[str, str]:
+    """Each compared member that the tag does not hold as it is, by its path in the artifact."""
+    members = _compared(art)
+    prefix = _prefix(members, files)
+    return {m.path: f"{art.kind}/{m.path} (" + ("differs from the tag)" if prefix + m.path in files else "not in the tag)")
+            for m in members if files.get(prefix + m.path) not in m.blobs}
+
+
+def _resolve_tag(package: str, version: str, prev: str | None, source: str, fetch: Fetch, notes: list[str],
+                 configured: bool) -> tuple[dict, tuple[dict[str, str], dict[str, str]] | None]:
+    """The tag facts that need no artifact, and the two trees to compare with (the version's tag's, the previous release's tag's), or None when there is nothing to compare with."""
+    facts: dict = {"source": source}
+    if not prev:
+        return {**facts, "tag_compared": "no previous release to measure the build by"}, None
+    tags = tag_commits(fetch, source)
+    if tags is None:
+        if configured:
+            notes.append(f"GitHub does not serve the repository {source}, so the release was not compared with its tag")
+        return {**facts, "tag_compared": f"GitHub does not serve the repository {source}"}, None
+    before, after = _tags_of(tags, prev), _tags_of(tags, version)
+    if not before:
+        return {**facts, "tag_compared": f"{source} has no tag for the previous release {prev}"}, None
+    both = [p for p in before if p in after]
+    previous_tag = before[_pick(both or before, package)]
+    facts["previous_tag"] = previous_tag
+    if not after:
+        return {**facts, "tag_missing": f"{source} tags {prev} as {previous_tag} and has no tag for {version}"}, None
+    tag = after[_pick(both or after, package)]
+    facts["tag"] = tag
+    try:
+        trees = (_tree(fetch, source, tags[tag], notes), _tree(fetch, source, tags[previous_tag], notes))
+    except _GitHubLimited as exc:
+        log.warning("release %s %s: not compared with %s: %s", package, version, tag, exc)
+        return {**facts, "tag_compared": f"not compared yet: {exc}", "tag_limited": True}, None
+    if trees[0] is None or trees[1] is None:
+        return facts, None
+    return facts, (trees[0], trees[1])
+
+
+def _compare_tag(facts: dict, trees: tuple[dict[str, str], dict[str, str]], new: list[Artifact],
+                 old: list[Artifact]) -> dict:
+    expected = {(art.kind, path) for art in old for path in _differences(art, trees[1])}
+    differs = {label for art in new for path, label in _differences(art, trees[0]).items() if (art.kind, path) not in expected}
+    return {**facts, "tag_differs": sorted(differs)[:50],
+            "tag_compared": f"{sum(len(_compared(a)) for a in new)} files compared with {facts['tag']}"}
+
+
+def tag_facts(package: str, version: str, prev: str | None, new: list[Artifact], old: list[Artifact], source: str,
+              fetch: Fetch, notes: list[str], *, configured: bool = True) -> dict:
+    """The release's code against the source repository's tag for its version, where the previous release had a tag to measure what a build adds. A file the previous release also differed by at the same path (a version file the build writes) is expected; any other difference is `release-differs-from-tag`. With no tag for this version yet (`tag_missing`), or GitHub's API refusing for its limit (`tag_limited`), the watcher owes the comparison and makes it later (`ReleaseWatcher._recheck_tags`). Each artifact is compared by the git blob sha1 of its members, so nothing of the repository is downloaded but its refs and two trees. A configured repository GitHub does not serve is a note; the Trusted Publisher's is only a fact."""
+    facts, trees = _resolve_tag(package, version, prev, source, fetch, notes, configured)
+    return _compare_tag(facts, trees, new, old) if trees is not None else facts
+
+
+def tag_event(package: str, version: str, files: list[ReleaseFile], fetch: Fetch, source: str,
+              configured: bool = True) -> dict:
+    """A release against its tag alone, for a comparison its judgment could not make (no tag yet, or GitHub's API limit): the tag and both trees first, then, only when there is something to compare with, the release and the previous one downloaded again and read for their blobs. An event with no files whose facts are the tag's, so the content findings are not sent twice."""
+    name = normalize_name(package)
+    prev = previous_version(version, files)
+    notes: list[str] = []
+    facts, trees = _resolve_tag(name, version, prev, source, fetch, notes, configured)
+    if trees is not None:
+        budget = [_MAX_RELEASE_BYTES]
+        skim = _Budget(keep=lambda path, digest: False)
+
+        def arts(v: str | None) -> list[Artifact]:
+            out = []
+            for f in (x for x in files if x.version == v):
+                body = _download(fetch, f, budget, notes)
+                if body is not None:
+                    art = read_artifact(f.filename, body, skim)
+                    notes.extend(art.notes)
+                    out.append(art)
+            return out
+
+        new = arts(version)
+        if not new:
+            notes.append(f"PyPI serves no file of {version} any more, so it was not compared with its tag")
+        facts = _compare_tag(facts, trees, new, arts(prev))
+    return {"repo": f"pypi/{name}", "kind": "release", "number": None, "author": "", "body": "", "files": [],
+            "title": f"{name} {version} (against its tag)", "created_at": None,
+            "release": {"package": name, "version": version, "previous": prev, **facts, "notes": notes[:50]}}
 
 
 def run_id_for(package: str, version: str, revision: int = 0) -> str:
@@ -716,9 +932,15 @@ CREATE TABLE IF NOT EXISTS judgments (
     state TEXT NOT NULL, files TEXT NOT NULL, max_severity TEXT, signal INTEGER, error TEXT,
     fail_count INTEGER NOT NULL DEFAULT 0, alert_pending INTEGER NOT NULL DEFAULT 0,
     alert_fails INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS tag_checks (
+    run_id TEXT PRIMARY KEY, package TEXT NOT NULL, version TEXT NOT NULL, source TEXT NOT NULL,
+    configured INTEGER NOT NULL, first_seen TEXT NOT NULL, missing TEXT NOT NULL, state TEXT NOT NULL,
+    opened INTEGER NOT NULL DEFAULT 1);
 """
 _SCHEMA_VERSION = 2
 _MAX_FAILS = 5
+_TAG_GRACE = 3600              # seconds a release may wait for its tag before that is `high` (a project tagging after it uploads)
+_TAG_DEADLINE = 6 * 3600       # seconds a comparison with the tag may stay owed before that alerts (`release-not-fully-read`)
 _ALERT_RETRIES_PER_POLL = 5    # a SIEM that hangs costs one poll at most this many bounded POSTs
 _MAX_ALERT_FAILS = 20
 
@@ -742,9 +964,10 @@ class ReleaseWatcher:
 
     def __init__(self, packages: list[str], *, state_dir: str, out_dir: str, fetch: Fetch | None = None,
                  emit: bool = True, poster=None, config=None, archive: bool = True,
-                 now: Callable[[], datetime] | None = None):
+                 now: Callable[[], datetime] | None = None, sources: dict[str, str] | None = None):
         os.makedirs(state_dir, exist_ok=True)
         self.packages = packages
+        self.sources = sources or {}
         self.out_dir = out_dir
         self.fetch = fetch or _httpx_fetch()
         self.emit = emit
@@ -775,6 +998,7 @@ class ReleaseWatcher:
     def poll_once(self) -> list[dict]:
         """One pass over the packages: returns a summary per comparison screened. A package that fails is logged and tried again on the next pass; it never stops the others."""
         self._retry_alerts()
+        self._recheck_tags()
         results = []
         for package in self.packages:
             try:
@@ -826,15 +1050,15 @@ class ReleaseWatcher:
 
         names = sorted(only) if only is not None else sorted(f.filename for f in files if f.version == version)
         key = json.dumps(names)
-        if run_id is None:
+        if run_id is None:      # a release's own revisions: not a `--check`, and not a tag comparison (whose files are `[]`)
             prior = self.db.execute("SELECT run_id FROM judgments WHERE package=? AND version=? AND files=? "
-                                    "AND run_id NOT LIKE '%-check'", (package, version, key)).fetchone()
+                                    "AND run_id NOT LIKE '%-check' AND files!='[]'", (package, version, key)).fetchone()
             done = self.db.execute("SELECT COUNT(*) FROM judgments WHERE package=? AND version=? "
-                                   "AND run_id NOT LIKE '%-check'", (package, version)).fetchone()[0]
+                                   "AND run_id NOT LIKE '%-check' AND files!='[]'", (package, version)).fetchone()[0]
             run_id = prior["run_id"] if prior else run_id_for(package, version, done)
         stamp = self._stamp()
         try:
-            event = release_event(package, version, files, self.fetch, only=set(names))
+            event = release_event(package, version, files, self.fetch, only=set(names), source=self.sources.get(package))
             if self.archive is not None:
                 self.archive.put(repo=event["repo"], kind="release", number=None, event=event, raw={
                     "files": [f.__dict__ for f in files if f.version in (version, event["release"]["previous"])]})
@@ -865,6 +1089,17 @@ class ReleaseWatcher:
         if record:
             self.db.executemany("INSERT OR IGNORE INTO artifacts (package, filename, version, first_seen, run_id) "
                                 "VALUES (?, ?, ?, ?, ?)", [(package, n, version, stamp, run_id) for n in names])
+            facts = event["release"]
+            if facts.get("tag_missing") or facts.get("tag_limited"):
+                # a closed row is opened again with fresh clocks: a wheel added to the release later owes its own comparison
+                self.db.execute("INSERT INTO tag_checks (run_id, package, version, source, configured, first_seen, "
+                                "missing, state) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending') ON CONFLICT(run_id) DO UPDATE SET "
+                                "state='pending', first_seen=excluded.first_seen, missing=excluded.missing, "
+                                "source=excluded.source, configured=excluded.configured, opened=opened+1 "
+                                "WHERE state!='pending'",
+                                (f"{run_id_for(package, version)}-tag", package, version, facts["source"],
+                                 int(package in self.sources),
+                                 stamp, facts.get("tag_missing") or ""))
         self.db.commit()
         log.info("release %s %s (after %s): signal=%s floor=%s files=%d", package, version,
                  event["release"]["previous"], resp.signal, resp.floor_indicator_severity, len(event["files"]))
@@ -890,6 +1125,77 @@ class ReleaseWatcher:
         pending = int(art.emit is not None and art.emit.skipped_reason is None and not art.emit.ok)
         self.db.execute("UPDATE judgments SET signal=1, max_severity=?, alert_pending=? WHERE run_id=?",
                         (art.response.floor_indicator_severity, pending, run_id))
+
+    def _recheck_tags(self) -> None:
+        """Make the comparisons with a tag that judgments could not: a release judged before its tag existed, or while GitHub's API refused. Once a tag for the version appears and the API has room, the release is compared with it (`tag_event`) and screened under `<run id>-tag`. A release still without a tag `_TAG_GRACE` after it was judged is `release-tag-missing` (`high`), and a comparison still owed `_TAG_DEADLINE` after it, for any reason, is `release-not-fully-read`: nothing owed is dropped without an alert. A Trusted Publisher's repository GitHub stops serving ends the check, as it would at judgment."""
+        for row in self.db.execute("SELECT * FROM tag_checks WHERE state='pending'").fetchall():
+            name = normalize_name(row["package"])
+            waited = (self.now() - datetime.fromisoformat(row["first_seen"])).total_seconds()
+            base = {"package": name, "version": row["version"], "source": row["source"]}
+            try:
+                tags = tag_commits(self.fetch, row["source"])
+                if tags is None and not row["configured"]:
+                    self.db.execute("UPDATE tag_checks SET state='unserved' WHERE run_id=?", (row["run_id"],))
+                    self.db.commit()
+                    continue
+                if tags is None:
+                    self._screen_tag(row, {**base, "notes": [
+                        f"GitHub does not serve the repository {row['source']}, so the release was not compared with its tag"]})
+                    continue
+                if _tags_of(tags, row["version"]):
+                    if self._api_room():
+                        status, _, body = self.fetch(_SIMPLE_URL.format(name=row["package"]),
+                                                     {"Accept": _SIMPLE_ACCEPT}, _MAX_INDEX_BYTES)
+                        if status != 200:
+                            raise RuntimeError(f"the index of {row['package']} answered HTTP {status}")
+                        event = tag_event(row["package"], row["version"], parse_index(body), self.fetch, row["source"],
+                                          configured=bool(row["configured"]))
+                        if not event["release"].get("tag_limited"):
+                            self._screen_tag(row, event["release"])
+                            continue
+                elif waited >= _TAG_GRACE:
+                    missing = row["missing"] or f"{row['source']} has no tag for {row['version']}"
+                    self._screen_tag(row, {**base, "tag_still_missing":
+                                           f"{missing}, {int(waited // 60)} minutes after it was judged"})
+                    continue
+            except Exception as exc:  # noqa: BLE001 (looked at again on the next poll, until the deadline)
+                log.warning("release %s %s: its tag: %s", row["package"], row["version"], exc)
+            if waited >= _TAG_DEADLINE:
+                try:
+                    self._screen_tag(row, {**base, "notes": [
+                        f"not compared with its tag within {_TAG_DEADLINE // 3600} hours of its judgment"]})
+                except Exception as exc:  # noqa: BLE001 (screened again on the next poll)
+                    log.warning("release %s %s: the tag alert failed: %s", row["package"], row["version"], exc)
+
+    def _api_room(self) -> bool:
+        """Whether GitHub's API has the two calls a comparison takes (its `rate_limit` endpoint counts toward nothing)."""
+        token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+        try:
+            status, _, body = self.fetch("https://api.github.com/rate_limit", {
+                "Accept": "application/vnd.github+json", **({"Authorization": f"Bearer {token}"} if token else {})}, 1 << 20)
+            return status != 200 or int(json.loads(body)["resources"]["core"]["remaining"]) >= 2
+        except (ValueError, KeyError, TypeError):
+            return True
+
+    def _screen_tag(self, row, facts: dict) -> None:
+        """Screen a release's tag facts alone (an event with no files) under the row's `<run id>-tag`, and close the row."""
+        from .cli import screen
+
+        # each opening of the row screens under its own id, so a refused alert of an earlier one is never overwritten
+        run_id = row["run_id"] + (str(row["opened"]) if row["opened"] > 1 else "")
+        package, version = row["package"], row["version"]
+        event = {"repo": f"pypi/{facts['package']}", "kind": "release", "number": None, "author": "", "body": "",
+                 "files": [], "title": f"{facts['package']} {version} (against its tag)", "created_at": None,
+                 "release": facts}
+        art = screen(event, run_id=run_id, outdir=self.out_dir, config=self.config, emit=self.emit, poster=self.poster)
+        resp = art.response
+        pending = int(bool(resp.signal) and art.emit is not None and art.emit.skipped_reason is None and not art.emit.ok)
+        self.db.execute("INSERT OR REPLACE INTO judgments (run_id, package, version, first_seen, state, files, "
+                        "max_severity, signal, alert_pending) VALUES (?, ?, ?, ?, 'screened', '[]', ?, ?, ?)",
+                        (run_id, package, version, self._stamp(), resp.floor_indicator_severity, int(bool(resp.signal)),
+                         pending))
+        self.db.execute("UPDATE tag_checks SET state='done' WHERE run_id=?", (row["run_id"],))
+        self.db.commit()
 
     def _retry_alerts(self) -> None:
         """Send again, a few per poll, the early alerts the SIEM did not accept (a refusal or an outage), from the screened response on disk; an alert counts once the SIEM answered 2xx."""

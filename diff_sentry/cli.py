@@ -337,7 +337,7 @@ def _cmd_release_watch(args) -> int:
     import signal
 
     from .images import ImageWatcher
-    from .releases import ReleaseWatcher, parse_packages
+    from .releases import ReleaseWatcher, parse_packages, parse_sources
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if not math.isfinite(args.interval) or args.interval <= 0:
@@ -356,7 +356,9 @@ def _cmd_release_watch(args) -> int:
         image_watcher = ImageWatcher([] if args.check else images, state_dir=args.state, out_dir=args.out,
                                      floating=floating, emit=not args.no_emit)
         try:
-            watcher = ReleaseWatcher(packages, state_dir=args.state, out_dir=args.out, emit=not args.no_emit)
+            sources = parse_sources([*args.sources, os.getenv("DS_RELEASE_SOURCES", "")])
+            watcher = ReleaseWatcher(packages, state_dir=args.state, out_dir=args.out, emit=not args.no_emit,
+                                     sources=sources)
         except BaseException:
             image_watcher.close()
             raise
@@ -655,6 +657,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="compare each new release of watched PyPI packages with the one before it (no model)")
     rw.add_argument("--packages", nargs="+", default=[], help="PyPI project names (or set DS_RELEASE_PACKAGES)")
     rw.add_argument("--packages-file", help="a file of project names, one per line (# comments allowed)")
+    rw.add_argument("--sources", nargs="+", default=[], metavar="PACKAGE=OWNER/NAME",
+                    help="the GitHub repository each package is built from, to compare each release with its tag "
+                         "(or set DS_RELEASE_SOURCES; default: the repository of the previous release's Trusted Publisher)")
     rw.add_argument("--images", nargs="+", default=[],
                     help="container images (ghcr.io/owner/name, docker.io/owner/name) whose tags are compared by provenance "
                          "(or set DS_RELEASE_IMAGES)")

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import io
 import json
+import re
 import tarfile
 import zipfile
 
@@ -70,6 +71,7 @@ class _PyPI:
         self.calls: list[tuple[str, dict]] = []
         self.broken: set[str] = set()
         self.publishers: dict[str, dict] = {}
+        self.source: _Source | None = None
 
     def add(self, filename: str, data: bytes, *, attested: bool = False, publisher: dict | None = None) -> None:
         self.artifacts[filename] = data
@@ -97,8 +99,66 @@ class _PyPI:
             name = url.split("/")[-2]
             bundle = {"publisher": self.publishers[name], "attestations": []}
             return 200, {}, json.dumps({"version": 1, "attestation_bundles": [bundle]}).encode()
+        if url.startswith(("https://github.com/", "https://api.github.com/")):
+            return self.source(url) if self.source is not None else (404, {}, b"")
         name = url.rsplit("/", 1)[1]
         return (200, {}, self.artifacts[name]) if name in self.artifacts else (404, {}, b"")
+
+
+def _git_blob(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+class _Source:
+    """A fake GitHub repository: its tags as `git fetch` sees them, and each tag's tree as the API returns it."""
+
+    def __init__(self, repo: str = "BerriAI/litellm"):
+        self.repo = repo
+        self.tags: dict[str, dict[str, bytes]] = {}
+        self.truncated: set[str] = set()
+        self.down = False
+        self.gone = False
+        self.limited = False
+        self.refused: dict[str, int] = {}     # a tag whose tree the API answers with this status
+        self.remaining: int | None = None     # what `/rate_limit` reports, when set
+
+    def tag(self, name: str, version: str, extra: dict | None = None, prefix: str = "") -> None:
+        tree = {**_LIB, "pyproject.toml": "[project]\nname = 'demo'\n", **(extra or {})}
+        self.tags[name] = {prefix + p: (t.format(v=version) if "{v}" in t else t).encode() for p, t in tree.items()}
+
+    def _sha(self, name: str) -> str:
+        return hashlib.sha1(name.encode()).hexdigest()
+
+    def __call__(self, url: str):
+        if self.down:
+            return 503, {}, b""
+        if self.gone:
+            return 404, {}, b""
+        if url == "https://api.github.com/rate_limit":
+            if self.remaining is None:
+                return 404, {}, b""
+            return 200, {}, json.dumps({"resources": {"core": {"remaining": self.remaining}}}).encode()
+        if self.limited and "api.github.com" in url:
+            return 403, {}, b'{"message": "API rate limit exceeded"}'
+        url = re.sub(re.escape(self.repo), self.repo, url, flags=re.IGNORECASE)    # GitHub ignores the case of a name
+        if url == f"https://github.com/{self.repo}.git/info/refs?service=git-upload-pack":
+            lines = ["001e# service=git-upload-pack\n0000", "0040" + "f" * 40 + " HEAD\x00caps\n"]
+            lines += [f"0041{self._sha(n)} refs/tags/{n}\n" for n in self.tags]
+            return 200, {}, "".join(lines).encode()
+        prefix = f"https://api.github.com/repos/{self.repo}/git/trees/"
+        if url.startswith(prefix):
+            sha = url[len(prefix):].split("?")[0]
+            name = next((n for n in self.tags if self._sha(n) == sha), None)
+            if name is None:
+                return 404, {}, b""
+            if name in self.refused:
+                return self.refused[name], {}, b""
+            files = self.tags[name]
+            dirs = {"/".join(p.split("/")[:i]) for p in files for i in range(1, p.count("/") + 1)}
+            tree = [{"path": p, "type": "blob", "mode": "100644", "sha": _git_blob(d)} for p, d in files.items()]
+            tree += [{"path": d, "type": "tree", "mode": "040000", "sha": "0" * 40} for d in dirs]
+            return 200, {}, json.dumps({"sha": sha, "tree": tree, "truncated": name in self.truncated}).encode()
+        return 404, {}, b""
 
 
 def _files(pypi: _PyPI) -> list[ReleaseFile]:
@@ -761,3 +821,384 @@ def test_hits_scanned_elsewhere_never_skip_a_release_scope():
                         "patch": "@@ -0,0 +1 @@\n+# This file is protected via CODEOWNERS"}]}
     hits = _baseline_indicators(event, content_hits=scan_change(event))
     assert not [h for h in hits if h["severity"] in ("high", "critical")]
+
+
+# ── the source repository's tag ──────────────────────────────────────────────────────────────────────────
+
+def _tagged(*, payload: bool = False, tag_new: bool = True) -> tuple[_PyPI, _Source]:
+    pypi, source = _PyPI(), _Source()
+    pypi.source = source
+    _release("1.0", pypi)
+    _release("1.1", pypi, payload=payload)
+    source.tag("v1.0", "1.0")
+    if tag_new:
+        source.tag("v1.1", "1.1")
+    return pypi, source
+
+
+def _tag_event(pypi: _PyPI, version: str = "1.1", source: str | None = "BerriAI/litellm") -> dict:
+    return release_event("demo", version, _files(pypi), pypi, source=source)
+
+
+def _tag_rules(event: dict) -> set[str]:
+    return {h.rule for h in scan_release(event["release"])}
+
+
+def test_a_release_that_matches_its_tag_raises_nothing():
+    pypi, _ = _tagged()
+    event = _tag_event(pypi)
+    facts = event["release"]
+    assert facts["tag"] == "v1.1" and facts["previous_tag"] == "v1.0" and facts["tag_differs"] == []
+    assert "files compared with v1.1" in facts["tag_compared"]
+    assert not _tag_rules(event) & {"release-differs-from-tag", "release-tag-missing"}
+
+
+def test_a_file_the_tag_does_not_hold_is_high():
+    pypi, _ = _tagged(payload=True)
+    event = _tag_event(pypi)
+    assert "release-differs-from-tag" in _rules(event)
+    assert {"wheel/cook.pth (not in the tag)", "wheel/cook.py (not in the tag)"} <= set(event["release"]["tag_differs"])
+
+
+def test_a_file_changed_from_the_tag_is_high():
+    pypi, source = _tagged()
+    source.tag("v1.1", "1.1", {"demo/core.py": "def run(x):\n    return x * 3\n"})
+    event = _tag_event(pypi)
+    assert "release-differs-from-tag" in _rules(event)
+    assert set(event["release"]["tag_differs"]) == {"wheel/demo/core.py (differs from the tag)",
+                                                   "sdist/demo/core.py (differs from the tag)"}
+
+
+def test_a_release_without_the_tag_its_predecessor_had_is_medium_until_looked_at_again():
+    pypi, _ = _tagged(tag_new=False)
+    event = _tag_event(pypi)
+    assert "release-tag-missing" in _rules(event, floor_only=False) and "release-tag-missing" not in _rules(event)
+    assert event["release"]["tag_missing"] == "BerriAI/litellm tags 1.0 as v1.0 and has no tag for 1.1"
+
+
+def _tag_watch(tmp_path, pypi: _PyPI, clock: list, sent: list) -> ReleaseWatcher:
+    config = DetectConfig(main_model="x", sub_model="x", siem_webhook_url="https://siem.invalid/h")
+    return ReleaseWatcher(["demo"], state_dir=str(tmp_path / "s"), out_dir=str(tmp_path / "o"), fetch=pypi, config=config,
+                          poster=lambda u, h, p: sent.append(p) or 202, now=lambda: clock[0],
+                          sources={"demo": "BerriAI/litellm"})
+
+
+def _tag_alerts(sent: list) -> list[str]:
+    return [i["rule"] for p in sent for i in p["indicators"] if i["rule"] in ("release-tag-missing", "release-differs-from-tag")]
+
+
+@pytest.mark.parametrize("later", ["never", "clean", "changed"])
+def test_a_release_judged_before_its_tag_is_compared_when_the_tag_appears(tmp_path, later):
+    from datetime import UTC, datetime, timedelta
+
+    pypi, source = _PyPI(), _Source()
+    pypi.source = source
+    _release("1.0", pypi)
+    source.tag("v1.0", "1.0")
+    clock, sent = [datetime(2026, 10, 22, tzinfo=UTC)], []
+    w = _tag_watch(tmp_path, pypi, clock, sent)
+    try:
+        w.poll_once()
+        changed = {"demo/core.py": "def run(x):\n    return x * 3\n"}
+        pypi.add("demo-1.1-py3-none-any.whl", _wheel("1.1", changed if later == "changed" else None))
+        pypi.add("demo-1.1.tar.gz", _sdist("1.1"))
+        w.poll_once()
+        assert not _tag_alerts(sent)                                 # medium: below the floor, looked at again
+        clock[0] += timedelta(minutes=20)
+        if later != "never":
+            source.tag("v1.1", "1.1")                                # the tag pushed after the upload, at the clean code
+        w.poll_once()
+        clock[0] += timedelta(minutes=41)
+        w.poll_once()
+        w.poll_once()
+        assert _tag_alerts(sent) == {"never": ["release-tag-missing"], "clean": [],
+                                     "changed": ["release-differs-from-tag"]}[later]
+        assert w.db.execute("SELECT state FROM tag_checks").fetchone()["state"] == "done"
+    finally:
+        w.close()
+
+
+def test_a_release_judged_while_the_api_refused_is_compared_later(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    pypi, source = _tagged(payload=True)
+    del pypi.artifacts["demo-1.1-py3-none-any.whl"], pypi.artifacts["demo-1.1.tar.gz"]
+    clock, sent = [datetime(2026, 10, 22, tzinfo=UTC)], []
+    w = _tag_watch(tmp_path, pypi, clock, sent)
+    try:
+        w.poll_once()
+        _release("1.1", pypi, payload=True)
+        source.limited = True
+        w.poll_once()
+        assert not _tag_alerts(sent)
+        w.poll_once()
+        assert not _tag_alerts(sent)                                 # still refused: looked at again, no alert
+        source.limited = False
+        clock[0] += timedelta(minutes=5)
+        w.poll_once()
+        assert _tag_alerts(sent) == ["release-differs-from-tag"]
+    finally:
+        w.close()
+
+
+def test_a_second_tag_spelling_for_the_previous_release_does_not_hide_a_missing_tag():
+    pypi, source = _tagged(payload=True, tag_new=False)
+    source.tag("release-1.0", "1.0")
+    assert _tag_event(pypi)["release"]["tag_missing"].endswith("has no tag for 1.1")
+
+
+def test_a_tag_spelled_another_way_than_the_previous_one_is_still_the_tag():
+    pypi, source = _tagged(tag_new=False)
+    source.tag("1.1", "1.1")
+    facts = _tag_event(pypi)["release"]
+    assert facts["tag"] == "1.1" and facts["tag_differs"] == [] and "tag_missing" not in facts
+
+
+def test_what_the_build_adds_every_release_is_expected():
+    # a version file the build writes, and a web bundle rebuilt under new names (not what Python runs, so not compared)
+    pypi, source = _PyPI(), _Source()
+    pypi.source = source
+    for v, bundle in (("1.0", "a1b2"), ("1.1", "c3d4")):
+        extra = {"demo/_version.py": f"__version__ = '{v}'\n", f"demo/ui/static/{bundle}/chunk.js": "x()\n"}
+        pypi.add(f"demo-{v}-py3-none-any.whl", _wheel(v, extra))
+        pypi.add(f"demo-{v}.tar.gz", _sdist(v, extra))
+        source.tag(f"v{v}", v, {"demo/_version.py": "__version__ = '0.0.0'\n", "demo/ui/static/README.md": "built\n"})
+    event = _tag_event(pypi)
+    assert event["release"]["tag_differs"] == [] and "release-differs-from-tag" not in _tag_rules(event)
+    # the same build, with a file in a directory the build never wrote to
+    pypi.add("demo-1.1-py3-none-any.whl", _wheel("1.1", {"demo/_version.py": "__version__ = '1.1'\n",
+                                                        "demo/ui/static/c3d4/chunk.js": "x()\n", "demo/hook.py": "pass\n"}))
+    assert _tag_event(pypi)["release"]["tag_differs"] == ["wheel/demo/hook.py (not in the tag)"]
+
+
+@pytest.mark.parametrize("generated", ["demo/_version.py", "demo-{v}.data/purelib/_demo_build.py"])
+def test_a_generated_file_vouches_for_no_other_file(generated):
+    # a file every build writes and no tag holds, beside a payload in its directory and at the install root
+    pypi, source = _PyPI(), _Source()
+    pypi.source = source
+    for v in ("1.0", "1.1"):
+        extra = {generated: "BUILT = True\n", **(_PAYLOAD if v == "1.1" else {}), **({"demo/hook.py": "pass\n"} if v == "1.1" else {})}
+        pypi.add(f"demo-{v}-py3-none-any.whl", _wheel(v, extra))
+        pypi.add(f"demo-{v}.tar.gz", _sdist(v))
+        source.tag(f"v{v}", v)
+    assert set(_tag_event(pypi)["release"]["tag_differs"]) == {
+        "wheel/cook.pth (not in the tag)", "wheel/cook.py (not in the tag)", "wheel/demo/hook.py (not in the tag)"}
+
+
+def test_crlf_line_endings_match_the_tag():
+    pypi, _ = _tagged()
+    crlf = {"demo/core.py": "def run(x):\r\n    return x * 2\r\n", "demo/new.py": "A = 1\r\n"}
+    pypi.add("demo-1.1-cp310-abi3-win_amd64.whl", _wheel("1.1", crlf))
+    pypi.source.tag("v1.1", "1.1", {"demo/new.py": "A = 1\n"})
+    assert _tag_event(pypi)["release"]["tag_differs"] == []
+
+
+def test_a_pre_release_tag_is_matched_by_its_version_and_prefix():
+    pypi, source = _PyPI(), _Source()
+    pypi.source = source
+    _release("1.0", pypi)
+    _release("1.1rc1", pypi)
+    source.tag("v1.0", "1.0")
+    source.tag("other-v1.1.0-rc.1", "1.1rc1", {"demo/core.py": "evil\n"})    # another prefix: not this package's tag
+    source.tag("v1.1.0-rc.1", "1.1rc1")
+    facts = _tag_event(pypi, "1.1rc1")["release"]
+    assert facts["tag"] == "v1.1.0-rc.1" and facts["tag_differs"] == []
+
+
+def test_a_package_in_a_subdirectory_is_found_there():
+    pypi, source = _PyPI(), _Source()
+    pypi.source = source
+    for v in ("1.0", "1.1"):
+        _release(v, pypi)
+        source.tag(f"v{v}", v, prefix="python/")
+    assert _tag_event(pypi)["release"]["tag_differs"] == []
+
+
+def test_no_tag_for_the_previous_release_compares_nothing():
+    pypi, source = _tagged()
+    del source.tags["v1.0"]
+    facts = _tag_event(pypi)["release"]
+    assert facts["tag_compared"] == "BerriAI/litellm has no tag for the previous release 1.0"
+    assert "tag" not in facts and not _tag_rules(_tag_event(pypi)) & {"release-tag-missing", "release-differs-from-tag"}
+
+
+def test_the_previous_publisher_names_the_repository_when_none_is_configured():
+    pypi, source = _PyPI(), _Source()
+    pypi.source = source
+    _release("1.0", pypi, publisher=_PUBLISHER)
+    _release("1.1", pypi, payload=True, publisher=_PUBLISHER)
+    source.tag("v1.0", "1.0")
+    source.tag("v1.1", "1.1")
+    facts = _tag_event(pypi, source=None)["release"]
+    assert facts["source"] == "berriai/litellm" and "wheel/cook.pth (not in the tag)" in facts["tag_differs"]
+
+
+def test_a_configured_repository_github_does_not_serve_is_not_fully_read():
+    pypi, source = _tagged()
+    source.gone = True
+    event = _tag_event(pypi)
+    assert "release-not-fully-read" in _rules(event) and "tag" not in event["release"]
+
+
+def test_the_api_rate_limit_defers_the_comparison_without_an_alert():
+    pypi, source = _tagged(payload=True)
+    source.limited = True
+    event = _tag_event(pypi)
+    facts = event["release"]
+    assert facts["tag_limited"] and facts["tag_compared"].startswith("not compared yet: GitHub's API answered HTTP 403")
+    assert "tag_differs" not in facts and not _tag_rules(event) & {"release-tag-missing", "release-differs-from-tag"}
+
+
+def test_a_tree_github_cuts_short_is_not_fully_read():
+    pypi, source = _tagged()
+    source.truncated.add("v1.1")
+    event = _tag_event(pypi)
+    assert "release-not-fully-read" in _rules(event) and "tag_differs" not in event["release"]
+
+
+def test_a_github_that_does_not_answer_is_retried(tmp_path):
+    pypi, source = _tagged()
+    w = ReleaseWatcher(["demo"], state_dir=str(tmp_path / "s"), out_dir=str(tmp_path / "o"), fetch=pypi, emit=False,
+                       sources={"demo": "BerriAI/litellm"})
+    try:
+        source.down = True
+        assert "error" in w.check("demo", "1.1")
+        source.down = False
+        assert "error" not in w.check("demo", "1.1")
+    finally:
+        w.close()
+
+
+def test_sources_are_parsed_and_checked():
+    from diff_sentry.releases import parse_sources
+
+    assert parse_sources(["LiteLLM=BerriAI/litellm", "a=b/c,d=e/f.g"]) == {"litellm": "BerriAI/litellm", "a": "b/c",
+                                                                          "d": "e/f.g"}
+    for bad in ("litellm", "litellm=BerriAI", "litellm=../x/y", "litellm=https://github.com/BerriAI/litellm"):
+        with pytest.raises(ValueError):
+            parse_sources([bad])
+
+
+def _late_tag_watch(tmp_path, changed: bool = True):
+    from datetime import UTC, datetime
+
+    pypi, source = _PyPI(), _Source()
+    pypi.source = source
+    _release("1.0", pypi)
+    source.tag("v1.0", "1.0")
+    clock, sent = [datetime(2026, 10, 22, tzinfo=UTC)], []
+    w = _tag_watch(tmp_path, pypi, clock, sent)
+    w.poll_once()
+    pypi.add("demo-1.1-py3-none-any.whl", _wheel("1.1", {"demo/core.py": "def run(x):\n    return x * 3\n"} if changed else None))
+    pypi.add("demo-1.1.tar.gz", _sdist("1.1"))
+    w.poll_once()
+    return pypi, source, w, clock, sent
+
+
+def _not_compared(sent: list, tmp_path) -> list[str]:
+    """The evidence of each `release-not-fully-read` alert sent from a `-tag` run (the SIEM payload carries no evidence, the screened response does)."""
+    from diff_sentry.schema import DetectionResponse
+
+    alerted = {p["run_id"] for p in sent if any(i["rule"] == "release-not-fully-read" for i in p["indicators"])}
+    return [h.evidence for run_id in alerted if run_id.endswith("-tag")
+            for h in DetectionResponse.model_validate_json((tmp_path / "o" / "screened" / f"{run_id}.json").read_text()).indicators
+            if h.rule == "release-not-fully-read"]
+
+
+def test_a_tag_whose_tree_keeps_failing_alerts_at_the_deadline_and_downloads_nothing(tmp_path):
+    from datetime import timedelta
+
+    pypi, source, w, clock, sent = _late_tag_watch(tmp_path)
+    try:
+        source.tag("v1.1", "1.1")
+        source.refused["v1.1"] = 422                                 # a tag that names a blob: no tree
+        downloads = len([u for u, _ in pypi.calls if "files.pythonhosted.org" in u])
+        for _ in range(8):
+            clock[0] += timedelta(hours=1)
+            w.poll_once()
+        assert len([u for u, _ in pypi.calls if "files.pythonhosted.org" in u]) == downloads
+        assert any("not compared with its tag within 6 hours" in e for e in _not_compared(sent, tmp_path))
+        assert w.db.execute("SELECT state FROM tag_checks").fetchone()["state"] == "done"
+    finally:
+        w.close()
+
+
+def test_an_api_that_never_has_room_alerts_at_the_deadline(tmp_path):
+    from datetime import timedelta
+
+    _, source, w, clock, sent = _late_tag_watch(tmp_path)
+    try:
+        source.tag("v1.1", "1.1")
+        source.remaining = 0
+        for _ in range(5):
+            clock[0] += timedelta(hours=1)
+            w.poll_once()
+        assert not _not_compared(sent, tmp_path)
+        clock[0] += timedelta(hours=2)
+        w.poll_once()
+        assert any("not compared with its tag within 6 hours" in e for e in _not_compared(sent, tmp_path))
+    finally:
+        w.close()
+
+
+def test_a_wheel_added_later_owes_no_second_comparison(tmp_path):
+    from datetime import timedelta
+
+    pypi, source, w, clock, sent = _late_tag_watch(tmp_path)
+    try:
+        pypi.add("demo-1.1-cp310-abi3-win_amd64.whl", _wheel("1.1"))
+        w.poll_once()
+        assert w.db.execute("SELECT COUNT(*) FROM tag_checks").fetchone()[0] == 1
+        source.tag("v1.1", "1.1")
+        clock[0] += timedelta(minutes=5)
+        w.poll_once()
+        assert _tag_alerts(sent) == ["release-differs-from-tag"]
+    finally:
+        w.close()
+
+
+def test_a_publisher_repository_gone_before_the_tag_ends_the_check_quietly(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    pypi, source = _PyPI(), _Source()
+    pypi.source = source
+    _release("1.0", pypi, publisher=_PUBLISHER)
+    source.tag("v1.0", "1.0")
+    clock, sent = [datetime(2026, 10, 22, tzinfo=UTC)], []
+    config = DetectConfig(main_model="x", sub_model="x", siem_webhook_url="https://siem.invalid/h")
+    w = ReleaseWatcher(["demo"], state_dir=str(tmp_path / "s"), out_dir=str(tmp_path / "o"), fetch=pypi, config=config,
+                       poster=lambda u, h, p: sent.append(p) or 202, now=lambda: clock[0])
+    try:
+        w.poll_once()
+        _release("1.1", pypi, publisher=_PUBLISHER)
+        w.poll_once()
+        source.gone = True
+        clock[0] += timedelta(hours=2)
+        w.poll_once()
+        assert not _tag_alerts(sent) and not _not_compared(sent, tmp_path)
+        assert w.db.execute("SELECT state FROM tag_checks").fetchone()["state"] == "unserved"
+    finally:
+        w.close()
+
+
+def test_a_wheel_added_after_the_comparison_owes_a_new_one(tmp_path):
+    from datetime import timedelta
+
+    pypi, source, w, clock, sent = _late_tag_watch(tmp_path, changed=False)
+    try:
+        source.tag("v1.1", "1.1")
+        clock[0] += timedelta(minutes=10)
+        w.poll_once()
+        assert w.db.execute("SELECT state FROM tag_checks").fetchone()["state"] == "done" and not _tag_alerts(sent)
+        del source.tags["v1.1"]                                      # the tag deleted, and a wheel with other code added
+        pypi.add("demo-1.1-cp312-cp312-manylinux_2_28_x86_64.whl", _wheel("1.1", {"demo/core.py": "def run(x):\n    return x * 3\n"}))
+        w.poll_once()
+        assert w.db.execute("SELECT state FROM tag_checks").fetchone()["state"] == "pending"
+        for _ in range(2):
+            clock[0] += timedelta(minutes=40)
+            w.poll_once()
+        assert _tag_alerts(sent) == ["release-tag-missing"]
+        assert [p["run_id"] for p in sent if _tag_alerts([p])] == ["pypi__demo-1.1-tag2"]     # its own id, beside the first
+        assert w.db.execute("SELECT state FROM tag_checks").fetchone()["state"] == "done"
+    finally:
+        w.close()

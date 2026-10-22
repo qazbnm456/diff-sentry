@@ -6,9 +6,10 @@ A pull request scan cannot see a release that never went through a pull request.
 uv run diff-sentry release-watch --packages litellm requests            # poll every 5 minutes, alert on what the rules find
 uv run diff-sentry release-watch --packages-file packages.txt --once    # one pass, then exit
 uv run diff-sentry release-watch --check litellm 1.106.2                # judge one release against the one before it, now
+uv run diff-sentry release-watch --packages litellm --sources litellm=BerriAI/litellm   # also compare each release with its git tag
 ```
 
-It needs no model and no GitHub credentials. Set `DS_SIEM_WEBHOOK_URL` to receive alerts; `DS_RELEASE_PACKAGES` and `DS_RELEASE_INTERVAL` take the place of the flags. A package whose files are larger than 256 MB raises an alert that it was not compared; raise `DS_RELEASE_MAX_ARTIFACT_MB` for it.
+It needs no model, and no GitHub credentials unless it compares many releases with their tags. Set `DS_SIEM_WEBHOOK_URL` to receive alerts; `DS_RELEASE_PACKAGES` and `DS_RELEASE_INTERVAL` take the place of the flags. A package whose files are larger than 256 MB raises an alert that it was not compared; raise `DS_RELEASE_MAX_ARTIFACT_MB` for it.
 
 ## What it does
 
@@ -16,7 +17,8 @@ It needs no model and no GitHub credentials. Set `DS_SIEM_WEBHOOK_URL` to receiv
 2. **Downloads the new files and the previous release's**, as data. Nothing is installed or unpacked to disk, every download is checked against the index's sha256, and downloads, decompressed bytes and kept text are bounded. The previous release is the highest version below the new one with a file that is not yanked.
 3. **Builds a change from the difference**: each file of the new artifacts whose content the previous release did not have becomes a file of the change, at the path it installs to (`wheel/cook.pth`) or its path in the source tree (`sdist/pyproject.toml`), with the diff as its patch.
 4. **Screens that change** like a pull request, so the startup-hook, packed-loader, download-and-run and every other rule read the new files. It adds the facts only a release shows: a top-level name the wheels newly install into site-packages, a new dependency, attestations the previous release had and this one lacks, and a Trusted Publisher the previous release's attestations did not name (another repository, workflow, environment or account; `critical` when the repository's owner imitates the previous one's, such as `Acme-Corp` for `AcmeCorp`). A publisher is the repository whose workflow uploaded the files, not the one it built from, and the check needs the previous release to be attested. Whatever it could not read alerts on its own: a changed file that runs but could not be read as text, two files that install to the same path, and an artifact that could not be downloaded or read to its end.
-5. **Alerts** when the evidence reaches the floor, and archives the comparison in `snapshots/`, so the evidence survives PyPI removing the release.
+5. **Compares the release with its git tag**, when it knows the GitHub repository the package is built from (`--sources` or `DS_RELEASE_SOURCES`, or else the repository of the previous release's Trusted Publisher). See below.
+6. **Alerts** when the evidence reaches the floor, and archives the comparison in `snapshots/`, so the evidence survives PyPI removing the release.
 
 ## Container images
 
@@ -40,12 +42,26 @@ If the images the watch starts from already come from owners that imitate each o
 
 It reads GHCR and Docker Hub only, with anonymous pull tokens. It checks digests with HEAD requests, which Docker Hub does not count toward its pull limit, and a rate-limited poll waits for the next one. The provenance is not signed: whoever controls the push can write any statement, so a provenance that matches proves nothing, and a payload in a layer is not read.
 
+## Comparing a release with its git tag
+
+litellm 1.107.0 was built from `Berri-AI/litellm`, and `BerriAI/litellm` has no `v1.107.0` tag. With the source repository known, each release's files that Python runs (`.py`, `.pyw`, `.pth` and the build files) are compared with the repository's tag for that version, by git blob hash, so nothing is downloaded from GitHub but its tag list and two file trees:
+
+- **`release-differs-from-tag`** (`high`): a file the tag does not hold, or holds with other content.
+- **`release-tag-missing`**: the repository tagged the previous release and has no tag for this one. Many projects push the tag after they upload, so this is `medium` at first and is looked at again on every poll. When the tag appears, the release is compared with it; a release still without its tag an hour after it was judged raises a `high` alert of its own. A tag names its version as `v1.2.3`, `1.2.3`, `v1.2.3-rc.1` or with another prefix; one with the prefix the previous release's tag used is preferred.
+
+A build writes files no tag holds, such as a version file. So the previous release is compared with its own tag first, and a file that differed there at the same path is expected. Files Python does not run, such as a web bundle a build names anew each time, are screened by the rules but not compared. On litellm 1.106.2 that leaves no difference in 22,214 files. CRLF line endings, as a Windows wheel carries them, count as the same content. If the previous release has no tag, the release is not compared.
+
+Without credentials, GitHub's API allows 60 requests an hour, and each release takes two; set `GITHUB_TOKEN` to raise the limit. A release judged past the limit is compared once it lifts, which downloads its files again. Three cases alert that a release was not compared: a comparison still impossible six hours after the judgment, for any reason; a repository named with `--sources` that GitHub no longer serves (private, renamed or deleted); and a tree GitHub sends only part of (past 100,000 entries or 7 MB).
+
+Without `--sources`, the watch uses the repository of the previous release's Trusted Publisher. That needs the previous release to be attested, and it names the repository whose workflow uploaded, so a private releaser repository compares nothing.
+
 ## What it does not do
 
 - It sees a release only while PyPI lists it. A release removed within minutes of upload can be gone before the next poll.
-- It compares a release with the previous one, not with the git tag, so a payload that every release has carried since before the watch started is part of the baseline.
+- Without a source repository, it compares a release with the previous one only, so a payload that every release has carried since before the watch started is part of the baseline. With one, a payload in a file the build rewrites every release (such as a version file) is screened by the rules but is not a difference from the tag.
+- A tag only proves what the repository holds. An attacker who can push to the repository can tag the payload too, and it then matches.
 - A prompt injection in a package's files stays below the alert floor here: the files are read by the programs that import them, and an LLM library names "the system prompt" in its own code every release. So do the rules that only see a code-owners file, a workflow file or a CI skip mentioned, since a package governs no repository and a comment mentions them as readily as code; package code that writes only a code-owners file is below the floor. A workflow's dangerous content (a pull request's head checked out under a privileged trigger, write-all permissions) keeps its severity in every file: a package's code or build can push it into someone's repository, and a project whose own workflow has that shape has a vulnerability worth the alert.
 - A package whose job is to carry attack patterns, such as a scanner's rules and test fixtures (diff-sentry's own), alerts on every release that changes them.
 - A legitimate change of publisher alerts too: a renamed or transferred repository, a renamed workflow, a new deployment environment. So does a project that stops attesting its releases.
-- It watches PyPI only. npm packages and container images are not compared (litellm's Docker tags carried the same 1.107.0 payload).
+- It watches PyPI packages and container images. npm packages are not compared.
 - It does not run the model on a release. The screened response under `screened/` is the record.
