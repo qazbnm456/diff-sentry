@@ -33,8 +33,7 @@ async def detect_from_event(
     on_event: Callable[[dict], None] | None = None,
     extra_tools=(),
 ):
-    """Run the classifier on one change event and return the planner's JUDGEMENT (`ChangeVerdict`).
-    Call `assemble.assemble_verdict(verdict, events)` to attach the deterministic indicators + signal."""
+    """Run the classifier on one change event and return the planner's JUDGEMENT (`ChangeVerdict`). Call `assemble.assemble_verdict(verdict, events)` to attach the deterministic indicators + signal."""
     import rlm_harness
 
     from .detect import ClassifyChange, setup

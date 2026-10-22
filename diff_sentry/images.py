@@ -1,24 +1,17 @@
-"""Image watch: each new or moved tag of a watched container image, judged by its build provenance against what the
-repository's images have been built from before.
+"""Image watch: each new or moved tag of a watched container image, judged by its build provenance against what the repository's images have been built from before, and by the files it changes.
 
-litellm 1.107.0's images on GHCR and Docker Hub, `latest` and `main-stable` among them, were built by its own release
-workflow from the attacker's `Berri-AI/litellm`, and BuildKit wrote that in each image's SLSA provenance (`vcs:source`).
-So the provenance of an image names where it was built from and what built it, without reading a layer. A repository
-holds images from several workflows (releases, nightlies, branch builds), so an image is judged against the set of
-sources and builders the repository is known to use, learned from a sample at first sight and from every image judged
-clean since, never from one that raised an alert. The comparison is screened like a release (`kind="release"`, facts
-in `release.image`), and `scan_image` turns it into baseline hits.
+litellm 1.107.0's images on GHCR and Docker Hub, `latest` and `main-stable` among them, were built by its own release workflow from the attacker's `Berri-AI/litellm`, and BuildKit wrote that in each image's SLSA provenance (`vcs:source`). So the provenance of an image names where it was built from and what built it. A repository holds images from several workflows (releases, nightlies, branch builds), so an image is judged against the set of sources and builders the repository is known to use, learned from a sample at first sight and from every image judged clean since, never from one that raised an alert. The provenance is unsigned, so the image's content is read too: the layers it does not share with the image it replaces, compared file by file (`layer_change`). The comparison is screened like a release (`kind="release"`, facts in `release.image`, changed files as the event's files), and `scan_image` turns the provenance into baseline hits.
 
-Host-side plumbing, like `releases`: it reads the registry's API only (manifests, the provenance attestation), from
-the registries' own hosts and anonymous pull tokens, with every response bounded. Layers are never downloaded. Pure
-stdlib + httpx; no dspy.
+Host-side plumbing, like `releases`: it reads the registry's API only (manifests, the provenance attestation, the layers two images do not share), from the registries' own hosts and anonymous pull tokens, with every response bounded. A layer is read as data in memory, never unpacked to disk or run. Pure stdlib + httpx; no dspy.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import posixpath
 import re
 import time
 from collections.abc import Callable
@@ -27,12 +20,12 @@ from datetime import UTC, datetime
 from urllib.parse import quote, urlsplit
 
 from .dbutil import open_versioned
+from .releases import Artifact
 from .schema import IndicatorHit
 
 log = logging.getLogger(__name__)
 
-# A fetch maps (url, request headers, byte limit) to (status, response headers, body), and never follows a redirect. A
-# request header `X-Method: HEAD` asks for a HEAD (a digest without the manifest, which Docker Hub does not count).
+# A fetch maps (url, request headers, byte limit) to (status, response headers, body), and never follows a redirect. A request header `X-Method: HEAD` asks for a HEAD (a digest without the manifest, which Docker Hub does not count).
 Fetch = Callable[[str, dict, int], tuple[int, dict, bytes]]
 
 # The registries an image may be read from, the hosts their tokens come from, and the hosts their blobs redirect to.
@@ -108,9 +101,7 @@ class RateLimited(RuntimeError):
 
 
 class Registry:
-    """A registry's API read anonymously: a pull token is asked for when the registry answers 401 with a Bearer
-    challenge (again when a token expires), from the realm it names (an allowed host), kept per registry and repository;
-    a blob's redirect is followed to an allowed host only."""
+    """A registry's API read anonymously: a pull token is asked for when the registry answers 401 with a Bearer challenge (again when a token expires), from the realm it names (an allowed host), kept per registry and repository; a blob's redirect is followed to an allowed host only."""
 
     def __init__(self, fetch: Fetch):
         self.fetch = fetch
@@ -191,15 +182,13 @@ class Registry:
 # ── provenance ───────────────────────────────────────────────────────────────────────────────────────────
 
 def _source_repo(url: str) -> str:
-    """`owner/name` of a GitHub repository URL, lower case; any other source as written, lower case (never read as a
-    GitHub owner, so a lookalike is only ever judged between GitHub repositories)."""
+    """`owner/name` of a GitHub repository URL, lower case; any other source as written, lower case (never read as a GitHub owner, so a lookalike is only ever judged between GitHub repositories)."""
     m = _GITHUB_REPO_RE.fullmatch((url or "").strip())
     return m.group(1).lower() if m else (url or "").strip().lower()
 
 
 def provenance_facts(statement: dict) -> dict:
-    """What a BuildKit SLSA provenance (v0.2 or v1) says about where an image was built from and what built it: the
-    source repository and revision, and the GitHub repository, workflow (without its ref) and ref protection of the run."""
+    """What a BuildKit SLSA provenance (v0.2 or v1) says about where an image was built from and what built it: the source repository and revision, and the GitHub repository, workflow (without its ref) and ref protection of the run."""
     predicate = statement.get("predicate") or {}
     meta = ((predicate.get("runDetails") or {}).get("metadata") or predicate.get("metadata") or {})
     vcs = (meta.get("buildkit_metadata") or meta.get("https://mobyproject.org/buildkit@v1#metadata") or {}).get("vcs") or {}
@@ -223,10 +212,7 @@ def provenance_facts(statement: dict) -> dict:
 
 
 def image_provenance(registry: Registry, ref: ImageRef, reference: str) -> tuple[str, list[dict], list[str], bool]:
-    """The image's digest, the provenance facts of each platform it carries, notes on what could not be read, and
-    whether it is a multi-platform index (a single manifest carries no BuildKit attestation). An attestation counts only
-    when it names (`vnd.docker.reference.digest`) a platform image of the same index; a platform image no attestation
-    names is a note."""
+    """The image's digest, the provenance facts of each platform it carries, notes on what could not be read, and whether it is a multi-platform index (a single manifest carries no BuildKit attestation). An attestation counts only when it names (`vnd.docker.reference.digest`) a platform image of the same index; a platform image no attestation names is a note."""
     digest, top = registry.manifest(ref, reference)
     notes: list[str] = []
     if top.get("mediaType") not in _INDEX_TYPES and "manifests" not in top:
@@ -264,6 +250,176 @@ def image_provenance(registry: Registry, ref: ImageRef, reference: str) -> tuple
     return digest, facts, notes, True
 
 
+# ── layers ───────────────────────────────────────────────────────────────────────────────────────────────
+
+_MAX_LAYER_BYTES = int(os.getenv("DS_RELEASE_MAX_LAYER_MB", "1024") or "1024") << 20   # one compressed layer
+_MAX_LAYERS_BYTES = 4 << 30        # every differing layer of one comparison, both images and all platforms
+_MAX_LAYER_READ = 8 << 30          # what one layer may decompress to
+
+
+def _platform(desc: dict) -> str:
+    p = desc.get("platform") or {}
+    return "-".join(str(x) for x in (p.get("os"), p.get("architecture"), p.get("variant")) if x) or "default"
+
+
+def _platforms(registry: Registry, ref: ImageRef, digest: str, notes: list[str]) -> dict[str, dict]:
+    """Each platform image of an index (attestation manifests aside), or the one image of a single manifest, by platform. A runtime pulls the first entry for its platform, so that one is kept, and a second entry for a platform is a note."""
+    _, top = registry.manifest(ref, digest)
+    if top.get("mediaType") not in _INDEX_TYPES and "manifests" not in top:
+        return {"default": top}
+    images = [d for d in top.get("manifests") or [] if isinstance(d, dict)
+              and (d.get("annotations") or {}).get("vnd.docker.reference.type") != "attestation-manifest"]
+    if len(images) > _MAX_PLATFORMS:
+        notes.append(f"{len(images)} platform images, the first {_MAX_PLATFORMS} compared")
+    out: dict[str, dict] = {}
+    for desc in images[:_MAX_PLATFORMS]:
+        key = _platform(desc)
+        if key in out:
+            notes.append(f"{key}: two images for one platform; the first, which a runtime pulls, is compared")
+            continue
+        out[key] = registry.manifest(ref, desc["digest"])[1]
+    return out
+
+
+def _layer_path(name: str) -> str | None:
+    """A layer member's path in the image's file system (`./usr/bin/x` and `/usr/bin/x` are `usr/bin/x`)."""
+    parts = [p for p in name.split("/") if p not in ("", ".")]
+    return None if not parts or ".." in parts or name.endswith("/") else "/".join(parts)
+
+
+def _filesystem(kind: str, layers: list[tuple[str, bytes]], budget) -> Artifact:
+    """The files a run of layers leaves, applied in order as a container runtime applies them: a layer's whiteouts (`.wh.name`, `.wh..wh..opq`) first remove what the layers beneath it hold, then its files replace earlier ones (no shadow)."""
+    from .releases import _read_tar, _Spent
+
+    merged = Artifact(kind, kind)
+    for digest, body in layers:
+        layer = Artifact(f"{kind} layer {digest[7:19]}", kind)
+        try:
+            _read_tar(layer, body, budget, path_of=_layer_path, limit=_MAX_LAYER_READ)
+        except _Spent:
+            layer.notes.append(f"{layer.filename}: not read to its end (more than {_MAX_LAYER_READ >> 30} GiB decompressed)")
+        except Exception as exc:  # noqa: BLE001 (fail CLOSED: a layer this cannot read is evidence)
+            layer.notes.append(f"{layer.filename}: not read to its end ({str(exc)[:80] or type(exc).__name__})")
+        merged.notes += layer.notes
+        # a layer's whiteouts remove what the layers beneath it hold, never what the layer itself adds (the OCI layer spec): so they apply first
+        for member in layer.members.values():
+            folder, base = posixpath.split(member.path)
+            if base == ".wh..wh..opq":
+                for gone in [k for k in merged.members if k.startswith(f"{folder}/" if folder else "")]:
+                    del merged.members[gone]
+            elif base.startswith(".wh."):
+                target = posixpath.join(folder, base[4:])
+                for gone in [k for k in merged.members if k == target or k.startswith((f"{target}/", f"{target}\0"))]:
+                    del merged.members[gone]
+        for key, member in layer.members.items():
+            if not posixpath.basename(member.path).startswith(".wh."):
+                merged.members[key] = member
+    return merged
+
+
+# what the config sets that decides what a container runs, and the environment variables that load code into a process
+_RUN_KEYS = ("Entrypoint", "Cmd", "Shell", "User", "WorkingDir", "OnBuild", "Healthcheck")
+_LOADER_ENV = frozenset({"PATH", "PYTHONWARNINGS", "PYTHONEXECUTABLE", "PYTHONPLATLIBDIR", "GCONV_PATH", "NODE_EXTRA_CA_CERTS", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME",
+                         "PYTHONINSPECT", "PYTHONUSERBASE", "NODE_OPTIONS", "NODE_PATH", "BASH_ENV", "ENV", "PERL5OPT",
+                         "PERL5LIB", "RUBYOPT", "RUBYLIB", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "DYLD_INSERT_LIBRARIES"})
+_MAX_CONFIG_BYTES = 4 << 20
+
+
+def _config(registry: Registry, ref: ImageRef, manifest: dict, notes: list[str]) -> dict | None:
+    """A platform image's run configuration (its config blob's `config`), checked against its digest; None, with a note, when it cannot be read."""
+    desc = manifest.get("config") if isinstance(manifest.get("config"), dict) else {}
+    digest = str(desc.get("digest") or "")
+    try:
+        body = registry.blob(ref, digest, _MAX_CONFIG_BYTES)
+        if not digest.startswith("sha256:") or hashlib.sha256(body).hexdigest() != digest[7:]:
+            raise ValueError("does not match its digest")
+        config = json.loads(body.decode("utf-8")).get("config") or {}
+        return config if isinstance(config, dict) else {}
+    except RateLimited:
+        raise
+    except (RuntimeError, ValueError, AttributeError) as exc:
+        notes.append(f"the image config {digest[7:19]} was not read ({str(exc)[:80]})")
+        return None
+
+
+def _env(config: dict) -> dict[str, str]:
+    return {str(e).split("=", 1)[0]: str(e).split("=", 1)[-1] for e in config.get("Env") or [] if isinstance(e, str)}
+
+
+def _render_config(config: dict) -> str:
+    """The run configuration as a Dockerfile would write it, one setting a line, so the text rules read its commands."""
+    lines = [f"{key.upper()} {json.dumps(config[key])}" for key in _RUN_KEYS if config.get(key) not in (None, [], "")]
+    lines += [f"ENV {k}={v}" for k, v in sorted(_env(config).items())]
+    return "\n".join(lines) + "\n"
+
+
+def layer_change(registry: Registry, ref: ImageRef, digest: str, previous: str) -> tuple[list[dict], list[str], list[str], dict]:
+    """The files an image changes against the image it replaces, platform by platform, and its run configuration against the replaced one's (`{config}`, rendered as Dockerfile lines, with the run settings and loader variables it changes as facts): only the layers the two do not share are read (a shared layer is the same bytes), in two passes like a release (`releases.release_event`), and their files compared by path, so a rebuilt layer shows only what changed in it. Returns the change's files, the members that run and were not shown as text, and notes on what was not read. Layers are read as DATA, in memory, and never unpacked or run."""
+    from .releases import _Budget, _patch, pyc_source, release_files
+
+    files: list[dict] = []
+    unread: list[str] = []
+    notes: list[str] = []
+    runs: list[str] = []
+    loaders: list[str] = []
+    now, before = _platforms(registry, ref, digest, notes), _platforms(registry, ref, previous, [])
+    budget = [_MAX_LAYERS_BYTES]
+
+    def download(layers: list[dict]) -> list[tuple[str, bytes]]:
+        out = []
+        for layer in layers:
+            size, digest_ = int(layer.get("size") or 0), str(layer.get("digest") or "")
+            if size > _MAX_LAYER_BYTES or size > budget[0]:
+                notes.append(f"layer {digest_[7:19]}: {size} bytes, not read (more than DS_RELEASE_MAX_LAYER_MB, or the comparison's budget)")
+                continue
+            body = registry.blob(ref, digest_, _MAX_LAYER_BYTES)
+            if not digest_.startswith("sha256:") or hashlib.sha256(body).hexdigest() != digest_[7:]:
+                notes.append(f"layer {digest_[7:19]}: the download does not match its digest")
+                continue
+            budget[0] -= len(body)
+            out.append((digest_, body))
+        return out
+
+    for platform, manifest in now.items():
+        old = before.get(platform)
+        if old is None:
+            notes.append(f"{platform}: a platform the previous image did not have, so its layers were not compared")
+            continue
+        config, before_config = _config(registry, ref, manifest, notes), _config(registry, ref, old, notes)
+        if config is not None and before_config is not None and config != before_config:
+            patch, added, removed, _ = _patch(_render_config(before_config), _render_config(config))
+            files.append({"filename": f"{platform}/{{config}}", "status": "modified", "additions": added,
+                          "deletions": removed, "patch": patch})
+            for key in _RUN_KEYS:
+                if config.get(key) != before_config.get(key):
+                    runs.append(f"{platform} {key}: {json.dumps(config.get(key))}"[:200])
+            env, before_env = _env(config), _env(before_config)
+            loaders.extend(f"{platform} {k}={v}"[:200] for k, v in sorted(env.items())
+                           if (k in _LOADER_ENV or k.startswith(("LD_", "DYLD_"))) and before_env.get(k) != v)
+        mine = [layer for layer in manifest.get("layers") or [] if isinstance(layer, dict)]
+        theirs = [layer for layer in old.get("layers") or [] if isinstance(layer, dict)]
+        shared = {layer.get("digest") for layer in mine} & {layer.get("digest") for layer in theirs}
+        if all(layer.get("digest") in shared for layer in mine):
+            continue
+        new_bodies = download([layer for layer in mine if layer.get("digest") not in shared])
+        old_bodies = download([layer for layer in theirs if layer.get("digest") not in shared])
+        skim = _Budget(keep=lambda path, digest_: False)
+        old_digests = {(m.path, m.digest) for m in _filesystem(platform, old_bodies, skim).members.values()}
+        wanted = {(m.path, m.digest) for m in _filesystem(platform, new_bodies, skim).members.values()
+                  if (m.path, m.digest) not in old_digests}
+        paths = {p for p, _ in wanted}
+        sources = {src for p in paths if (src := pyc_source(p))}       # read too, to check the bytecode against
+        text = _Budget()
+        new = _filesystem(platform, new_bodies, _Budget.share(
+            text, lambda path, digest_, w=wanted, s=sources: (path, digest_) in w or path in s))
+        old_fs = _filesystem(platform, old_bodies, _Budget.share(text, lambda path, digest_, p=paths: path in p))
+        notes += new.notes
+        changed, missed = release_files([new], [old_fs])
+        files += changed
+        unread += missed
+    return files, unread[:50], notes[:50], {"config_run_changed": runs[:50], "config_loader_env": loaders[:50]}
+
+
 # ── facts as evidence ────────────────────────────────────────────────────────────────────────────────────
 
 def _owner(repo: str) -> str:
@@ -277,14 +433,7 @@ def _imitates(owner: str, owners: set[str]) -> bool:
 
 
 def scan_image(facts: dict) -> list[IndicatorHit]:
-    """An image's provenance against what its repository is known to be built from and by (`known`) and, on GHCR, the
-    namespace it is published under (a GitHub owner). A source or building repository whose owner imitates a known owner
-    is `critical`; one of an owner not known is `high`; another repository or workflow of a known owner is `medium` (a
-    repository's nightly and branch builds run other workflows, even from another repository of the same organisation); a build from an unprotected
-    ref by a workflow whose known builds ran from protected refs is `high` (litellm's attacker turned protection off
-    first). An image without provenance where the repository's images carry it is `high`, and so is anything that could
-    not be read. The provenance is unsigned: whoever controls the push can write any statement, so a match proves
-    nothing and only a mismatch is evidence."""
+    """An image's provenance against what its repository is known to be built from and by (`known`) and, on GHCR, the namespace it is published under (a GitHub owner). A source or building repository whose owner imitates a known owner is `critical`; one of an owner not known is `high`; another repository or workflow of a known owner is `medium` (a repository's nightly and branch builds run other workflows, even from another repository of the same organisation); a build from an unprotected ref by a workflow whose known builds ran from protected refs is `high` (litellm's attacker turned protection off first). An image without provenance where the repository's images carry it is `high`, and so is anything that could not be read. The provenance is unsigned: whoever controls the push can write any statement, so a match proves nothing and only a mismatch is evidence."""
     from .indicators import _hit
 
     if not isinstance(facts, dict) or not facts:
@@ -341,6 +490,14 @@ def scan_image(facts: dict) -> list[IndicatorHit]:
             hits.append(_hit("image-ref-unprotected", "high",
                              "a workflow whose known builds ran from protected refs built this image from an unprotected one",
                              f"{item.get('workflow')} @ {item.get('ref')}"[:240], location=where))
+    if facts.get("config_run_changed"):
+        hits.append(_hit("image-run-config-changed", "high",
+                         "the image runs another entrypoint, command, shell, user, healthcheck or build trigger than the image it replaces",
+                         "; ".join(str(x) for x in facts["config_run_changed"])[:240], location=where))
+    if facts.get("config_loader_env"):
+        hits.append(_hit("image-loader-env", "high",
+                         "the image sets an environment variable that loads code into its processes (LD_PRELOAD, PYTHONPATH, NODE_OPTIONS...)",
+                         "; ".join(str(x) for x in facts["config_loader_env"])[:240], location=where))
     notes = [str(n) for n in facts.get("notes") or []]
     if notes:
         hits.append(_hit("release-not-fully-read", "high", "part of the image's provenance was not read",
@@ -358,10 +515,7 @@ def _learn(known: dict, facts: list[dict]) -> dict:
 
 
 def _without_lookalikes(known: dict, namespace: str) -> tuple[dict, list[str]]:
-    """`known` without any source or building repository whose owner imitates another known owner or the namespace: a
-    first-sight sample that already holds a lookalike cannot tell which side is the real one, so neither is learned: both
-    owners are kept as `suspect`, and every image from either is `high` (`image-owner-unresolved`) until the state is
-    reset after an investigation."""
+    """`known` without any source or building repository whose owner imitates another known owner or the namespace: a first-sight sample that already holds a lookalike cannot tell which side is the real one, so neither is learned: both owners are kept as `suspect`, and every image from either is `high` (`image-owner-unresolved`) until the state is reset after an investigation."""
     repos = set(known.get("sources") or []) | {b.split(" ", 1)[0] for b in known.get("builders") or []}
     owners = {_owner(r) for r in repos} | {namespace}
     suspect = {o for o in owners if o and _imitates(o, owners - {o})}
@@ -402,8 +556,7 @@ _VERSION_NUMBERS_RE = re.compile(r"v?(\d{1,9}(?:\.\d{1,9}){0,3})")
 
 
 def _version_key(tag: str) -> tuple:
-    """Order tags by the version numbers they start with (`v1.106.2` after `v1.83.9-nightly`), a plain release after its
-    suffixed builds, and tags without numbers before every version; ties by name."""
+    """Order tags by the version numbers they start with (`v1.106.2` after `v1.83.9-nightly`), a plain release after its suffixed builds, and tags without numbers before every version; ties by name."""
     m = _VERSION_NUMBERS_RE.match(tag)
     if not m:
         return ((), 0, tag)
@@ -412,8 +565,7 @@ def _version_key(tag: str) -> tuple:
 
 
 def _releases(tags: list[str]) -> list[str]:
-    """The version tags that are plain releases (`v1.106.2`, `1.106.2`, not `-nightly` or `-rc.1`), oldest first: the
-    images a re-push would hurt, which a run of one version's pre-releases must not crowd out of a window."""
+    """The version tags that are plain releases (`v1.106.2`, `1.106.2`, not `-nightly` or `-rc.1`), oldest first: the images a re-push would hurt, which a run of one version's pre-releases must not crowd out of a window."""
     return sorted((t for t in tags if _VERSION_TAG_RE.fullmatch(t) and _version_key(t)[1] == 1), key=_version_key)
 
 
@@ -423,10 +575,7 @@ def _namespace(ref: ImageRef) -> str:
 
 
 class ImageWatcher:
-    """Polls each image's tags. On first sight every tag is the baseline, and the provenance of the watched floating tags
-    and the newest version tags seeds what the repository is known to be built from and by. After that a new tag (cosign's
-    `.sig`/`.att`/`.sbom` tags aside, at most `_MAX_NEW_TAGS` a poll), a watched floating tag that points at another image,
-    and one of the newest version tags re-pushed, are judged; an image judged clean adds what built it to what is known."""
+    """Polls each image's tags. On first sight every tag is the baseline, and the provenance of the watched floating tags and the newest version tags seeds what the repository is known to be built from and by. After that a new tag (cosign's `.sig`/`.att`/`.sbom` tags aside, at most `_MAX_NEW_TAGS` a poll), a watched floating tag that points at another image, and one of the newest version tags re-pushed, are judged; an image judged clean adds what built it to what is known."""
 
     def __init__(self, images: list[str], *, state_dir: str, out_dir: str, floating: tuple[str, ...] = ("latest",),
                  fetch: Fetch | None = None, emit: bool = True, poster=None, config=None,
@@ -511,7 +660,7 @@ class ImageWatcher:
         fresh = sorted((t for t in tags if t not in known or t in pending), key=_version_key, reverse=True)[:_MAX_NEW_TAGS]
         results = []
         for tag in fresh:                           # newest first: junk tags cannot hold a new release back
-            result = self.judge(ref, tag, record=True)
+            result = self.judge(ref, tag, record=True, previous=known.get(tag) or self._predecessor(tag, known))
             if result.get("rate_limited"):
                 return results
             results.append(result)
@@ -521,13 +670,13 @@ class ImageWatcher:
                 continue
             digest = self.registry.digest(ref, tag)
             if known.get(tag) != digest:
-                results.append(self.judge(ref, tag, record=True, digest=digest))
+                results.append(self.judge(ref, tag, record=True, digest=digest,
+                                          previous=known.get(tag) or self._predecessor(tag, known)))
         return results
 
-    def judge(self, ref: ImageRef, tag: str, *, record: bool = False, digest: str | None = None) -> dict:
-        """Judge the image a tag names against what the repository is known to use, screen it (the early SIEM alert when
-        its evidence reaches the floor), and record it; a comparison that fails is retried, then screened as not compared
-        (`release-not-fully-read`, which alerts). Never raises."""
+    def judge(self, ref: ImageRef, tag: str, *, record: bool = False, digest: str | None = None,
+              previous: str | None = None) -> dict:
+        """Judge the image a tag names against what the repository is known to use, screen it (the early SIEM alert when its evidence reaches the floor), and record it; a comparison that fails is retried, then screened as not compared (`release-not-fully-read`, which alerts). Never raises."""
         from .cli import screen
 
         stamp = self._stamp()
@@ -536,9 +685,14 @@ class ImageWatcher:
             digest, facts, notes, index = image_provenance(self.registry, ref, digest or tag)
             image = {"image": ref.label, "tag": tag, "digest": digest, "index": index, "provenance": facts, "known": known,
                      "namespace": _namespace(ref), "notes": notes[:50]}
+            event = self._event(ref, tag, image)
+            if previous and previous != digest:     # the files the image changes against the one it replaces
+                files, unread, layer_notes, config_facts = layer_change(self.registry, ref, digest, previous)
+                event["files"] = files
+                image.update(config_facts)
+                event["release"].update({"previous": previous, "unread_code": unread, "notes": layer_notes})
             run_id = image_run_id(ref, tag, digest)
-            art = screen(self._event(ref, tag, image), run_id=run_id, outdir=self.out_dir, config=self.config,
-                         emit=self.emit, poster=self.poster)
+            art = screen(event, run_id=run_id, outdir=self.out_dir, config=self.config, emit=self.emit, poster=self.poster)
         except RateLimited as exc:                 # not a failure of the image: the next poll tries again
             log.warning("image %s:%s: %s", ref.label, tag, exc)
             return {"image": ref.label, "tag": tag, "rate_limited": True}
@@ -556,6 +710,14 @@ class ImageWatcher:
         return {"image": ref.label, "tag": tag, "digest": digest, "run_id": run_id, "signal": bool(resp.signal),
                 "floor": resp.floor_indicator_severity, "path": art.path,
                 "indicators": [(h.rule, h.severity, h.location) for h in resp.indicators]}
+
+    def _predecessor(self, tag: str, known: dict[str, str | None]) -> str | None:
+        """The image a new tag is compared with: the newest release tag below it (by the version numbers it starts with) whose digest is known, or the newest such release when the tag carries no version; without one, a watched floating tag's image (a repository tagged only `latest` and `sha-…`)."""
+        releases = [t for t in _releases([t for t, d in known.items() if d]) if t != tag]
+        below = [t for t in releases if _version_key(t) < _version_key(tag)] if _VERSION_NUMBERS_RE.match(tag) else releases
+        if below:
+            return known[below[-1]]
+        return next((known[t] for t in self.floating if known.get(t) and t != tag), None)
 
     @staticmethod
     def _event(ref: ImageRef, tag: str, image: dict) -> dict:

@@ -54,6 +54,7 @@ _MAX_RELEASE_BYTES = max(1 << 30, 4 * _MAX_ARTIFACT_BYTES)   # every artifact of
 _MAX_MEMBERS = 50_000              # members of one artifact
 _MAX_DIRECTORY_BYTES = 32 << 20    # a zip's central directory, which zipfile parses whole (whatever count it states)
 _MAX_MEMBER_BYTES = 1 << 20        # a member past this is compared by its sha256, never read as text
+_MAX_CHECKED_BYTES = 16 << 20      # a Python source or bytecode up to this is kept to check the bytecode against its source
 _MAX_READ_BYTES = 256 << 20        # what one artifact may decompress to, in all (tar headers included)
 _MAX_TEXT_BYTES = 256 << 20        # text kept for one comparison, the new and the previous release together
 _MAX_PATCH_CHARS = 16 << 20        # the patches of one release event, in all
@@ -72,6 +73,7 @@ _BUILD_FILES = frozenset({"pyproject.toml", "setup.cfg", "setup.py"})
 # Compiled code: never text, so a new or changed one is not read (`.pyc` runs without its source, and Python may load a cached one over it). A native module counts only when the release before had no module of that name.
 _BYTECODE_SUFFIXES = (".pyc", ".pyo")
 _NATIVE_SUFFIXES = (".so", ".pyd", ".dll", ".dylib")
+_PYCACHE_RE = re.compile(r"((?:[^/]{1,255}/){0,64})__pycache__/([^/.]{1,200})\.[A-Za-z0-9_-]{1,40}(?:\.opt-[12])?\.pyc")
 _SO_VERSION_RE = re.compile(r"\.so\.[0-9.]{1,40}$")         # `libfoo.so.1.2`
 # A PEP 263 coding declaration, looked for anywhere on a source file's first two lines: CPython's own rule (a comment, line 2 only after a blank or comment line 1) is not reproduced, so a file that declares one is read both ways.
 _CODING_RE = re.compile(r"coding[:=][ \t]*([-\w.]{1,200})([-\w.])?")
@@ -123,6 +125,7 @@ class Member:
     text: str | None                # the member as text, when it was read as text
     unread: str | None = None       # why a member that runs was not read as text
     blobs: tuple[str, ...] = ()     # the git blob sha1 of the bytes when they were read, and of them with CRLF as LF (a Windows checkout's), to compare with a source tag
+    raw: bytes | None = field(default=None, repr=False)   # a kept Python source's or bytecode's bytes, to check the bytecode against the source (`pycheck`)
 
 
 @dataclass
@@ -195,6 +198,17 @@ def _member(path: str, size: int, data: bytes | None, checksum: str, budget: _Bu
                                   if d is not None))
 
 
+def _large_member(path: str, size: int, fh) -> Member:
+    """A member past `_MAX_MEMBER_BYTES`, hashed a chunk at a time and never kept as text."""
+    digest = hashlib.sha256()
+    blob = hashlib.sha1(b"blob %d\0" % size, usedforsecurity=False)
+    while chunk := fh.read(1 << 20):
+        digest.update(chunk)
+        blob.update(chunk)
+    unread = f"larger than {_MAX_MEMBER_BYTES >> 20} MiB" if _is_code(path) else None
+    return Member(path, size, "sha256:" + digest.hexdigest(), None, unread, blobs=(blob.hexdigest(),))
+
+
 def _blob(data: bytes) -> str:
     blob = hashlib.sha1(b"blob %d\0" % len(data), usedforsecurity=False)
     blob.update(data)
@@ -206,12 +220,18 @@ def _read_member(path: str, size: int, data: bytes | None, checksum: str, budget
     if data is None:
         return Member(path, size, checksum, None, (why or "not read") if code else None)
     digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    if path.lower().endswith(_BYTECODE_SUFFIXES) and len(data) >= 16:
+        # a `.pyc` is compared by its code, not its 16-byte header, whose source mtime and size change with every rebuild
+        digest = "pyc:" + hashlib.sha256(data[16:]).hexdigest()
     if len(data) > _MAX_MEMBER_BYTES:
-        return Member(path, size, digest, None, f"larger than {_MAX_MEMBER_BYTES >> 20} MiB" if code else None)
+        python = path.lower().endswith(_BYTECODE_SUFFIXES + (".py", ".pyw"))      # kept to check bytecode against (`pycheck`)
+        why = "compiled bytecode" if path.lower().endswith(_BYTECODE_SUFFIXES) else f"larger than {_MAX_MEMBER_BYTES >> 20} MiB"
+        return Member(path, size, digest, None, why if code else None,
+                      raw=data if python and len(data) <= _MAX_CHECKED_BYTES and budget.keep(path, digest) else None)
     if not budget.keep(path, digest):
         return Member(path, size, digest, None, None)
     if path.lower().endswith(_BYTECODE_SUFFIXES):
-        return Member(path, size, digest, None, "compiled bytecode")
+        return Member(path, size, digest, None, "compiled bytecode", raw=data)
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
@@ -229,7 +249,7 @@ def _read_member(path: str, size: int, data: bytes | None, checksum: str, budget
         text = None
     if text is not None and not budget.spend(len(text)):
         return Member(path, size, digest, None, "the comparison's text budget is spent" if code else None)
-    return Member(path, size, digest, text)
+    return Member(path, size, digest, text, raw=data if path.lower().endswith((".py", ".pyw")) else None)
 
 
 def _declared_coding(data: bytes) -> str | None:
@@ -342,22 +362,30 @@ def _decompressed(data: bytes):
         return bz2.BZ2File(raw)
     if data[:6] == b"\xfd7zXZ\x00":
         return lzma.LZMAFile(raw)
+    if data[:4] == b"\x28\xb5\x2f\xfd":
+        raise ValueError("zstd compression, which this reader does not decompress")
     return raw
 
 
-def _read_tar(art: Artifact, data: bytes, budget: _Budget) -> None:
-    stream = io.BufferedReader(_Capped(_decompressed(data), _MAX_READ_BYTES))
+def _read_tar(art: Artifact, data: bytes, budget: _Budget, path_of: Callable[[str], str | None] = _source_path,
+              limit: int | None = None) -> None:
+    """The members of a tar, at the path `path_of` gives each (an sdist's without its top directory), decompressing at most `limit` bytes (`_MAX_READ_BYTES` by default)."""
+    stream = io.BufferedReader(_Capped(_decompressed(data), _MAX_READ_BYTES if limit is None else limit))
     with tarfile.open(fileobj=stream, mode="r|") as tf:
         for count, info in enumerate(tf, 1):
             if count > _MAX_MEMBERS:
                 art.notes.append(f"{art.filename}: more than {_MAX_MEMBERS} members, not read past them")
                 return
-            path = _source_path(info.name)
+            path = path_of(info.name)
             if path is None or not info.isfile():
                 if path is not None and (info.issym() or info.islnk()) and _is_code(path):
                     art.add(Member(path, 0, f"link:{info.linkname[:200]}", None, "a link"))
                 continue
             fh = tf.extractfile(info)
+            python = path.lower().endswith(_BYTECODE_SUFFIXES + (".py", ".pyw")) and info.size <= _MAX_CHECKED_BYTES
+            if fh is not None and info.size > _MAX_MEMBER_BYTES and not python:
+                art.add(_large_member(path, info.size, fh))   # hashed in chunks: one member is never held whole
+                continue
             art.add(_member(path, info.size, fh.read() if fh is not None else None, f"size:{info.size}", budget))
 
 
@@ -395,6 +423,7 @@ def release_files(new: list[Artifact], old: list[Artifact]) -> tuple[list[dict],
         for m in art.members.values():
             old_by.setdefault((art.kind, m.path), {}).setdefault(m.digest, m)
     old_native = {n for art in old for m in art.members.values() if (n := _native_module(m.path))}
+    checked = _check_bytecode(new, old_by)
     files: list[dict] = []
     unread: list[str] = []
     labels: set[str] = set()
@@ -417,6 +446,8 @@ def release_files(new: list[Artifact], old: list[Artifact]) -> tuple[list[dict],
                 label = f"{art.kind}[{_wheel_tag(art.filename) if art.kind == 'wheel' else art.filename}]/{m.path}"
             labels.add(label)
             why = m.unread
+            if why == "compiled bytecode" and (art.filename, key) in checked:
+                why = checked[(art.filename, key)]
             native = _native_module(m.path)
             if native and old and native not in old_native:
                 why = "a native module the previous release did not have"
@@ -435,6 +466,33 @@ def release_files(new: list[Artifact], old: list[Artifact]) -> tuple[list[dict],
             files.append({"filename": label, "status": "modified" if before else "added",
                           "additions": added, "deletions": removed, "patch": patch})
     return files, unread
+
+
+def pyc_source(path: str) -> str | None:
+    """The source a `__pycache__` bytecode file is compiled from (`a/__pycache__/x.cpython-313.opt-1.pyc` is `a/x.py`)."""
+    m = _PYCACHE_RE.fullmatch(path)
+    return f"{m.group(1)}{m.group(2)}.py" if m else None
+
+
+def _check_bytecode(new: list[Artifact], old_by: dict) -> dict[tuple[str, str], str | None]:
+    """Each changed `__pycache__` bytecode of the new artifacts whose source the artifact also ships, checked against that source (`pycheck`): bytecode that is the source compiled is not unread code (None); other code, or bytecode no interpreter here can check, stays unread, with why. Bytecode without its source stays unread as it is."""
+    from .pycheck import check_bytecode
+
+    todo: list[tuple[str, str]] = []
+    pairs: list[tuple[bytes, bytes, str, int]] = []
+    for art in new:
+        for key, m in art.members.items():
+            source = art.members.get(pyc_source(m.path) or "")
+            if m.raw is None or m.digest in old_by.get((art.kind, m.path), {}) or source is None or source.raw is None:
+                continue
+            todo.append((art.filename, key))
+            opt = m.path.rsplit(".opt-", 1)[1][:1] if ".opt-" in m.path else "0"
+            pairs.append((m.raw, source.raw, "/" + source.path, int(opt) if opt.isdigit() else 0))
+    out: dict[tuple[str, str], str | None] = {}
+    for where, same in zip(todo, check_bytecode(pairs) if pairs else [], strict=True):
+        out[where] = None if same else ("compiled bytecode that is not its source compiled" if same is False
+                                        else "compiled bytecode no interpreter of its Python version here could check")
+    return out
 
 
 def _requires(arts: list[Artifact]) -> set[str]:
@@ -541,19 +599,13 @@ def scan_release(facts: dict) -> list[IndicatorHit]:
     return hits
 
 
-# Rules about a repository and its reviewers that only see something mentioned: a prompt injection (read in a package by
-# the programs that import it, and an LLM library's own code talks about its prompts every release), a code-owners file,
-# a workflow file, a privileged trigger, a CI skip. A comment mentions these as readily as code and a package governs no
-# repository, so they stay below the floor anywhere in a release. The rules that see a workflow's dangerous content (a
-# pull request's head checked out under a privileged trigger, write-all permissions) keep their severity in every file:
-# wherever a package carries such a workflow, its code or its build can push it into someone's repository.
+# Rules about a repository and its reviewers that only see something mentioned: a prompt injection (read in a package by the programs that import it, and an LLM library's own code talks about its prompts every release), a code-owners file, a workflow file, a privileged trigger, a CI skip. A comment mentions these as readily as code and a package governs no repository, so they stay below the floor anywhere in a release. The rules that see a workflow's dangerous content (a pull request's head checked out under a privileged trigger, write-all permissions) keep their severity in every file: wherever a package carries such a workflow, its code or its build can push it into someone's repository.
 _MENTION_RULES = frozenset({"prompt-injection", "codeowners-tamper", "workflow-tamper", "privileged-fork-trigger",
                             "ci-bypass"})
 
 
 def release_scope(hits: list[IndicatorHit]) -> list[IndicatorHit]:
-    """The mention rules of a release stay in the evidence at `medium`, below the floor; everything else keeps its
-    severity."""
+    """The mention rules of a release stay in the evidence at `medium`, below the floor; everything else keeps its severity."""
     return [h.model_copy(update={"severity": "medium",
                                  "title": f"{h.title} (in a released package's files, below the floor)"})
             if h.severity in ("high", "critical") and h.rule in _MENTION_RULES else h for h in hits]
@@ -659,8 +711,7 @@ _MAX_PROVENANCE_FILES = 500        # files whose attestations are read, on each 
 
 
 def publisher_identity(publisher: dict) -> str:
-    """A Trusted Publisher as one comparable string: its kind, repository, workflow, environment and (a Google publisher's)
-    email, names that ignore case in lower case. PyPI verified the attestation against it at upload, so it names what published."""
+    """A Trusted Publisher as one comparable string: its kind, repository, workflow, environment and (a Google publisher's) email, names that ignore case in lower case. PyPI verified the attestation against it at upload, so it names what published."""
     workflow = publisher.get("workflow") or publisher.get("workflow_filepath") or ""
     return ":".join(str(x).replace(":", "_") for x in (
         str(publisher.get("kind") or "").lower(), str(publisher.get("repository") or "").lower(), workflow,
@@ -668,8 +719,7 @@ def publisher_identity(publisher: dict) -> str:
 
 
 def _publishers(fetch: Fetch, files: list[ReleaseFile], notes: list[str]) -> list[str]:
-    """The Trusted Publishers of the files' attestations, read from PyPI. A file PyPI holds no attestation for has none;
-    an attestation PyPI does not serve is retried like a download; one that cannot be read is a note."""
+    """The Trusted Publishers of the files' attestations, read from PyPI. A file PyPI holds no attestation for has none; an attestation PyPI does not serve is retried like a download; one that cannot be read is a note."""
     found: set[str] = set()
     attested = [f for f in files if f.provenance]
     if len(attested) > _MAX_PROVENANCE_FILES:
@@ -728,11 +778,12 @@ def release_event(package: str, version: str, files: list[ReleaseFile], fetch: F
     wanted = {(art.kind, m.path, m.digest) for art in first for m in art.members.values()
               if (art.kind, m.path, m.digest) not in old_digests} | {
               (art.kind, m.path, m.digest) for art in first for k, m in art.members.items() if "\0" in k}
+    sources = {(k, src) for k, p, _ in wanted if (src := pyc_source(p))}     # read too, to check the bytecode against
     paths = {p for _, p, _ in wanted} | _ALWAYS_TEXT
     text = _Budget()
 
     def changed_in(kind: str) -> Callable[[str, str], bool]:
-        return lambda path, digest: (kind, path, digest) in wanted or path in _ALWAYS_TEXT
+        return lambda path, digest: (kind, path, digest) in wanted or path in _ALWAYS_TEXT or (kind, path) in sources
 
     new = [read_artifact(art.filename, body, _Budget.share(text, changed_in(art.kind)), art.kind)
            for art, (_, body) in zip(first, new_bodies, strict=True)]
