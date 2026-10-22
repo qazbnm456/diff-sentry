@@ -240,10 +240,11 @@ def _print_run(arts: RunArtifacts) -> None:
 
 
 def _cmd_pr(args) -> int:
+    from .history import enabled
     from .ingest import pr_event
 
     config = DetectConfig.from_env()
-    event = pr_event(args.repo, args.number)
+    event = pr_event(args.repo, args.number, history=enabled(args.account_history))
     arts = run(event, run_id=f"{args.repo.replace('/', '-')}-pr-{args.number}", outdir=args.out,
                config=config, emit=not args.no_emit)
     _print_run(arts)
@@ -251,10 +252,11 @@ def _cmd_pr(args) -> int:
 
 
 def _cmd_issue(args) -> int:
+    from .history import enabled
     from .ingest import issue_event
 
     config = DetectConfig.from_env()
-    event = issue_event(args.repo, args.number)
+    event = issue_event(args.repo, args.number, history=enabled(args.account_history))
     arts = run(event, run_id=f"{args.repo.replace('/', '-')}-issue-{args.number}", outdir=args.out,
                config=config, emit=not args.no_emit)
     _print_run(arts)
@@ -512,7 +514,9 @@ def _cmd_watch(args) -> int:
               file=sys.stderr)
         return 2
     try:
-        watcher = Watcher(config, detect, emit=not args.no_emit)
+        from .history import enabled
+
+        watcher = Watcher(config, detect, emit=not args.no_emit, history=enabled(args.account_history))
     except RuntimeError as exc:                        # a state directory written by another build
         print(f"watch: {exc}", file=sys.stderr)
         return 2
@@ -543,6 +547,7 @@ def _cmd_watch(args) -> int:
 
 def _cmd_actor(args) -> int:
     from .actors import ActorStore, format_dossier
+    from .history import enabled
     from .ingest import public_activity
 
     db = os.path.join(args.state, "actors.db")
@@ -560,13 +565,19 @@ def _cmd_actor(args) -> int:
             print(f"actor: nothing recorded for {args.login!r}", file=sys.stderr)
             return 1
         live = public_activity(dossier["login"]) if args.live else None
+        lookup = enabled(args.account_history)
+        past = lookup(dossier["login"]) if lookup is not None else None
         if args.json:
-            print(_json_out({**dossier, **({"live_public_activity": live} if live is not None else {})}))
+            print(_json_out({**dossier, **({"live_public_activity": live} if live is not None else {}),
+                             **({"account_history": past} if past is not None else {})}))
             return 0
         print(format_dossier(dossier))
         if live is not None:
             print("  live public activity (GitHub keeps ~30 days / 300 events):")
             print(f"    {json.dumps(live, ensure_ascii=False) if live else 'unavailable'}")
+        if past is not None:
+            print("  public history before the last 30 days (GH Archive, via ClickHouse):")
+            print(f"    {json.dumps(past, ensure_ascii=False) if past else 'none, or unavailable'}")
         return 0
     finally:
         store.close()
@@ -608,6 +619,8 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("number", type=int)
     pr.add_argument("--out", default="./output")
     pr.add_argument("--no-emit", action="store_true", help="do not emit a SIEM signal")
+    pr.add_argument("--account-history", action="store_true",
+                    help="look up the author's public history before the last 30 days in GH Archive, via ClickHouse's public playground (sends the login there; or set DS_ACCOUNT_HISTORY=clickhouse; off by default)")
     pr.set_defaults(func=_cmd_pr)
 
     iss = sub.add_parser("issue", help="classify a GitHub issue")
@@ -615,6 +628,8 @@ def build_parser() -> argparse.ArgumentParser:
     iss.add_argument("number", type=int)
     iss.add_argument("--out", default="./output")
     iss.add_argument("--no-emit", action="store_true", help="do not emit a SIEM signal")
+    iss.add_argument("--account-history", action="store_true",
+                     help="look up the author's public history before the last 30 days in GH Archive, via ClickHouse's public playground (sends the login there; or set DS_ACCOUNT_HISTORY=clickhouse; off by default)")
     iss.set_defaults(func=_cmd_issue)
 
     cl = sub.add_parser("classify", help="classify a change payload you already hold (offline ingest)")
@@ -658,6 +673,8 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--workers", type=int, default=None,
                    help="model runs at once, each in a process of its own (DS_WATCH_WORKERS, default 1)")
     w.add_argument("--no-emit", action="store_true", help="do not emit SIEM signals")
+    w.add_argument("--account-history", action="store_true",
+                   help="look up the author's public history before the last 30 days in GH Archive, via ClickHouse's public playground (sends the login there; or set DS_ACCOUNT_HISTORY=clickhouse; off by default)")
     w.add_argument("--once", action="store_true", help="one poll, run the queue, exit")
     w.add_argument("--stats", action="store_true", help="print the watcher's state counts and exit (read-only)")
     w.add_argument("--requeue-failed", action="store_true",
@@ -693,6 +710,8 @@ def build_parser() -> argparse.ArgumentParser:
     ac.add_argument("login", help="a login, or `id:<github id>`")
     ac.add_argument("--state", default=os.getenv("DS_WATCH_STATE_DIR", "./output/state"))
     ac.add_argument("--live", action="store_true", help="also fetch the account's recent public activity")
+    ac.add_argument("--account-history", action="store_true",
+                    help="also look up the account's public history before the last 30 days in GH Archive, via ClickHouse's public playground (sends the login there; or set DS_ACCOUNT_HISTORY=clickhouse; off by default)")
     ac.add_argument("--json", action="store_true")
     ac.set_defaults(func=_cmd_actor)
 

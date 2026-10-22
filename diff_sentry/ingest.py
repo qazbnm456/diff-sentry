@@ -18,6 +18,8 @@ from typing import Any
 
 # An `api` maps a `gh api <path>` argument to parsed JSON. Injectable for tests; default uses `gh`.
 GhApi = Callable[[str], Any]
+# An account-history lookup (`history.account_history`): (login, the event's time) to facts. Off unless a caller passes one.
+History = Callable[[str, "datetime | None"], dict]
 # A `raw` maps (path, Accept media type) to the response TEXT, for the one surface that is not JSON: the `.patch` mbox, whose `Date:` headers keep the author's UTC offset (REST and GraphQL normalize it away).
 GhRaw = Callable[[str, str], str]
 
@@ -170,7 +172,7 @@ def _mbox_offsets(text: str, limit: int = 100) -> dict[str, int]:
 
 def _provenance(repo: str, number: int | None, user: dict | None, association: Any,
                 call: GhApi, *, fetch_commits: bool, as_of: Any = None,
-                raw: GhRaw | None = None) -> dict:
+                raw: GhRaw | None = None, history: History | None = None) -> dict:
     """Best-effort HOST-SIDE source/provenance facts for a change: author identity/association, the account's absolute `created_at` and its age as of the event, profile facts, and (PRs) commit signature counts, commit dates and UTC offsets, from `gh api`. Every enrichment call is guarded: a `gh` hiccup or a missing field just OMITS that key, never sinks the ingest. The `indicators.scan_provenance` detectors turn these into deterministic hits at baseline."""
     user = user if isinstance(user, dict) else {}
     login = str(user.get("login", "") or "")
@@ -197,6 +199,15 @@ def _provenance(repo: str, number: int | None, user: dict | None, association: A
                 prov["author_not_found"] = True                         # POSITIVE 404 → a fact
         except Exception:  # noqa: BLE001,S110 (transient failure: omit, never sink the ingest)
             pass
+    if history is not None and login and prov["author_type"] == "User" and login.strip().lower() != "ghost":
+        # the account's public history before the Events API's 30 days (GH Archive), as of the event; best-effort
+        past = history(login, _parse_ts(as_of))
+        first, created = _parse_ts(str(past.get("first_event") or "").replace(" ", "T")), _parse_ts(prov.get("author_account_created_at"))
+        if first is not None and created is not None and first < created:
+            prov["author_history_other_account"] = True     # events under this login before the account existed: another account's, not read
+        else:
+            for key, value in past.items():
+                prov[f"author_history_{key}"] = value
     if fetch_commits and number is not None:
         try:
             commits = call(f"repos/{repo}/pulls/{number}/commits?per_page=100")
@@ -405,7 +416,8 @@ def event_from_payload(payload: dict) -> dict:
     return out
 
 
-def pr_event(repo: str, number: int, *, api: GhApi | None = None, raw: GhRaw | None = None) -> dict:
+def pr_event(repo: str, number: int, *, api: GhApi | None = None, raw: GhRaw | None = None,
+             history: History | None = None) -> dict:
     """Fetch a PR + its files, comments and provenance from GitHub (host-side) into a change-event dict.
 
     `api` is injectable. The `.patch` fetch (commit UTC offsets) runs only on the real `gh` transport or an explicitly injected `raw`, so a test that fakes `api` never reaches the network."""
@@ -415,7 +427,7 @@ def pr_event(repo: str, number: int, *, api: GhApi | None = None, raw: GhRaw | N
     files = _pages(call, f"repos/{repo}/pulls/{number}/files", _MAX_FILE_PAGES)
     timeline = _timeline(pr)
     prov = _provenance(repo, number, pr.get("user"), pr.get("author_association"),
-                       call, fetch_commits=True, as_of=timeline.get("event_created_at"), raw=raw_call)
+                       call, fetch_commits=True, as_of=timeline.get("event_created_at"), raw=raw_call, history=history)
     prov.update(timeline)
     prov.update(_head_facts(pr))
     changed = pr.get("changed_files")
@@ -454,13 +466,13 @@ def pr_event(repo: str, number: int, *, api: GhApi | None = None, raw: GhRaw | N
     return event
 
 
-def issue_event(repo: str, number: int, *, api: GhApi | None = None) -> dict:
+def issue_event(repo: str, number: int, *, api: GhApi | None = None, history: History | None = None) -> dict:
     """Fetch an issue from GitHub (host-side) into a change-event dict; the issue body is the untrusted content (the hackerbot-claw prompt-injection issues came in this shape)."""
     call = api or _gh_cli_api()
     issue = call(f"repos/{repo}/issues/{number}")
     timeline = _timeline(issue)
     prov = _provenance(repo, number, issue.get("user"), issue.get("author_association"),
-                       call, fetch_commits=False, as_of=timeline.get("event_created_at"))
+                       call, fetch_commits=False, as_of=timeline.get("event_created_at"), history=history)
     prov.update(timeline)
     event = {
         "repo": repo,

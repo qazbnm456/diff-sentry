@@ -487,8 +487,10 @@ class Watcher:
         poster: Callable[[str, dict, dict], int] | None = None,
         emit: bool = True,
         clock: Callable[[], datetime] | None = None,
+        history: Callable[[str, datetime | None], dict] | None = None,
     ):
         self.config = config
+        self._history = history
         self.detect_config = detect_config or (DetectConfig.screen_from_env() if config.screen_only
                                                else DetectConfig.from_env())
         if config.workers > 1 and not config.screen_only:       # checked before any file is opened
@@ -733,9 +735,9 @@ class Watcher:
         rec = RecordingApi(self._api or _default_api())
         if kind == "pull_request":
             event = pr_event(repo, number, api=rec, raw=self._raw if self._raw is not None
-                             else (None if self._api is not None else _default_raw()))
+                             else (None if self._api is not None else _default_raw()), history=self._history)
         else:
-            event = issue_event(repo, number, api=rec)
+            event = issue_event(repo, number, api=rec, history=self._history)
         if self._rate_left is not None:
             self._rate_left -= rec.calls
         return event, rec.records

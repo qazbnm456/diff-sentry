@@ -3538,6 +3538,8 @@ _BOT_BASES = ("dependabot", "renovate", "github-actions", "mergify", "snyk", "gr
 _OUTSIDER_ASSOCIATIONS = OUTSIDER_ASSOCIATIONS
 _YOUNG_ACCOUNT_DAYS = 30  # younger than this is a weak newness tell (sub-floor)
 _NEW_ACCOUNT_DAYS = 14    # hackerbot-claw struck 7 days after its account was created; margin for a longer wait
+_DORMANT_DAYS = 365         # a year without public activity, then this change
+_SLEEPER_DAYS = 180         # an account this old with no public activity before the last 30 days
 # Thresholds for the actor-correlation facts the watcher derives from its store (see `actors.correlate`).
 _BURST_PER_HOUR = 10      # AsyncAPI took 37 PRs from one account in a day
 _MULTI_REPO_24H = 3
@@ -3691,6 +3693,19 @@ def scan_provenance(provenance: dict) -> list[IndicatorHit]:
         hits.append(_hit("brand-new-account", "medium",
                          f"the author account was created less than {_NEW_ACCOUNT_DAYS} days before the event",
                          f"age<{_NEW_ACCOUNT_DAYS}d created={created or 'n/a'} login={login[:80]}"))
+
+    # GH Archive history (`history.account_history`, opt-in): what the account did publicly before the Events API's 30 days, as of the event. A taken-over account is an old one that wakes up; a sleeper is an old one that never did anything in public. Both are common enough to stay sub-floor corroborators.
+    last_before = prov.get("author_history_last_before_days")
+    if is_user and isinstance(last_before, int) and not isinstance(last_before, bool) and last_before >= _DORMANT_DAYS:
+        hits.append(_hit("dormant-account-reactivated", "medium",
+                         "the author's last public activity before the past 30 days was more than a year before the event "
+                         "(a dormant account active again, as a taken-over one is)",
+                         f"dormant>={last_before // 365}y login={login[:80]}"))     # whole years: a re-ingest keeps the id
+    if (is_user and prov.get("author_history_events_before") == 0 and isinstance(age, int) and not isinstance(age, bool)
+            and age >= _SLEEPER_DAYS):
+        hits.append(_hit("no-public-history", "low",
+                         f"an account older than {_SLEEPER_DAYS} days with no public activity before the past 30 days",
+                         f"age>={_SLEEPER_DAYS}d login={login[:80]}"))
 
     if prov.get("head_repo_deleted") is True:
         hits.append(_hit("head-repo-deleted", "medium",
