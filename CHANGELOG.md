@@ -2,6 +2,16 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.12.0
+
+Upgrade from 0.11.0: `release-watch` can compare each release with its git tag, and `rlm-harness` moves to 1.24.0. The GitHub Action's scan is unchanged, and nothing needs configuring.
+
+### Added
+- **`release-watch` compares each release with its git tag**, when it knows the GitHub repository a package is built from (`--sources litellm=BerriAI/litellm`, `DS_RELEASE_SOURCES`, or else the repository of the previous release's Trusted Publisher). The files Python runs are compared with the tag for the version by git blob hash, so nothing is downloaded from GitHub but its tag list and two file trees. A file the tag does not hold, or holds with other content, is `release-differs-from-tag` (`high`); what the previous release also differed by at the same path, such as a version file the build writes, is expected. A release whose repository tagged the previous one and has no tag for it (`BerriAI/litellm` has no `v1.107.0`) is `release-tag-missing`: `medium` at first, compared once the tag appears, and `high` after an hour. A comparison that still cannot be made six hours after the release was judged alerts that it was not made. See [Comparing a release with its git tag](docs/release-watch.md#comparing-a-release-with-its-git-tag).
+
+### Changed
+- **`rlm-harness` 1.24.0.** A tool call recorded without an outcome now reads as unknown rather than as a decline; every call diff-sentry records declares its outcome.
+
 ## 0.11.0
 
 Upgrade from 0.10.0: `release-watch` can now watch container images. The GitHub Action's scan is unchanged, nothing needs configuring, and `rlm-harness==1.22.0` is unchanged.
