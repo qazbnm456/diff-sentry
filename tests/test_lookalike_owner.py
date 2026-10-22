@@ -1,4 +1,4 @@
-"""A GitHub owner that imitates the repository's own: litellm 1.107.0's private release workflow was pointed at `Berri-AI/litellm` (the project is `BerriAI`) by a commit pushed past branch protection, and built the release from it. The Action scans a push as well as a pull request, so that commit is a diff it can read."""
+"""A GitHub owner that imitates the repository's own: litellm 1.107.0's private release workflow was pointed at `Berri-AI/litellm` (the project is `BerriAI`) by a commit force-pushed with an organisation owner's stolen GitHub CLI token, after that token turned branch protection off, and built the release from it. The Action scans a push as well as a pull request, so that commit is a diff it can read."""
 
 from __future__ import annotations
 

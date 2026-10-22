@@ -1,6 +1,6 @@
 """The Python loader rules, and the litellm 1.107.0 compromise they were written for.
 
-The wheels of litellm 1.107.0 (2026-10-21, BerriAI/litellm#47826) carried three files the git tag did not: a `.pth` file whose one line imports a module, that module running a zlib+base64-packed stealer through `exec`, and a `sitecustomize.py` that forks a daemon which fetches code and `exec`s it. The commits reached the release build from a lookalike fork, never through a pull request, so no PR scan saw them; the rules hold that the same diff, had it come through one, fails the Action's scan. The payload here is a harmless stand-in of the same shape.
+The wheels of litellm 1.107.0 (2026-10-21, BerriAI/litellm#47826) carried three files the git tag did not: a `.pth` file whose one line imports a module, that module running a zlib+base64-packed stealer through `exec`, and a `sitecustomize.py` that forks a daemon which fetches code and `exec`s it. The release workflow, changed with stolen tokens, built them from the attacker's `Berri-AI/litellm`, never through a pull request, so no PR scan saw them; the rules hold that the same diff, had it come through one, fails the Action's scan. The payload here is a harmless stand-in of the same shape.
 """
 
 from __future__ import annotations
