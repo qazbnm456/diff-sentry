@@ -74,7 +74,7 @@ If you operate the infrastructure, or maintain a project where a wrong call is e
 - **Deep classification**: a reasoning model reads a PR, issue or push in a sandbox and returns a verdict next to the evidence. See [How it works](docs/how-it-works.md).
 - **The studio**: a local console that streams a run as it happens. See [`studio/README.md`](studio/README.md).
 - **Watch**: monitors a list of repositories, alerts the moment the rules fire, and remembers the accounts and payload hosts it has seen. See [Watching a watchlist](docs/watch.md).
-- **Release watch**: compares each new release of the PyPI packages you depend on with the release before it, and alerts when the new wheels carry a startup hook or a packed loader that the source never showed. See [Watching releases](docs/release-watch.md).
+- **Release watch**: compares each new release of the PyPI and npm packages you depend on with the release before it, and alerts when it carries a startup hook, a packed loader or a new install script, or was published without its usual provenance. See [Watching releases](docs/release-watch.md).
 - **Trajectories for training**: every run is recorded, and `export` turns the traces into a reward-free dataset for fine-tuning a smaller planner. See [The full pipeline](docs/how-it-works.md#the-full-pipeline).
 
 None of this is needed for the Action, and none of it sends your code anywhere you did not configure yourself.
@@ -87,7 +87,7 @@ A strong prompt injection can skew a model's verdict, though never the evidence.
 
 - [How it works](docs/how-it-works.md): severity tuning, the evidence union, the full pipeline, running it locally, and the incidents the tests reconstruct.
 - [Watching a watchlist](docs/watch.md): the monitor, its alerts, its archive, and what the account dossier holds.
-- [Watching releases](docs/release-watch.md): comparing each new PyPI release with the one before it.
+- [Watching releases](docs/release-watch.md): comparing each new PyPI or npm release, and each container image, with what came before.
 - [Honest limits](docs/limits.md): what the rules and the pipeline do not see.
 - [Development](docs/development.md): the test suites and CI.
 - [CHANGELOG](CHANGELOG.md)

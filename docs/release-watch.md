@@ -1,6 +1,6 @@
 # Watching releases
 
-A pull request scan cannot see a release that never went through a pull request. litellm 1.107.0 was built from an attacker's repository after an organisation owner's stolen GitHub CLI token was used to force-push a change to its release workflow, and 1.82.8 was uploaded with a stolen token; in both, the wheels on PyPI held files the previous release did not. `release-watch` compares each new release of the PyPI packages you name with the release before it, and screens what changed with the same rules as a pull request.
+A pull request scan cannot see a release that never went through a pull request. litellm 1.107.0 was built from an attacker's repository after an organisation owner's stolen GitHub CLI token was used to force-push a change to its release workflow, and 1.82.8 was uploaded with a stolen token; in both, the wheels on PyPI held files the previous release did not. `release-watch` compares each new release of the PyPI packages you name with the release before it, and screens what changed with the same rules as a pull request. It watches npm packages and container images the same way (see below).
 
 ```bash
 uv run diff-sentry release-watch --packages litellm requests            # poll every 5 minutes, alert on what the rules find
@@ -42,6 +42,24 @@ If the images the watch starts from already come from owners that imitate each o
 
 It reads GHCR and Docker Hub only, with anonymous pull tokens. It checks digests with HEAD requests, which Docker Hub does not count toward its pull limit, and a rate-limited poll waits for the next one. The provenance is not signed: whoever controls the push can write any statement, so a provenance that matches proves nothing, and a payload in a layer is not read.
 
+## npm packages
+
+```bash
+uv run diff-sentry release-watch --npm @acme/widget left-pad
+uv run diff-sentry release-watch --check npm:@sigstore/sign 5.0.0
+```
+
+The npm worms of 2025 published new versions of popular packages with stolen tokens, each with a `preinstall` or `postinstall` script that runs the payload on every install. A version published with a stolen token also lacks the provenance a package's own release workflow attaches. `--npm` (or `DS_RELEASE_NPM`) compares each new version of an npm package with the version before it in semver order, as it does a PyPI release: the tarball is read as data and checked against the registry's sha512, and every new or changed file is screened by the same rules. It adds what only npm shows:
+
+- **`npm-install-script-added`** (`high`): a script npm runs at install (`preinstall`, `install`, `postinstall`, or the `node-gyp rebuild` a `binding.gyp` implies) that the previous version did not have, in the package or in a dependency it bundles. The manifests are read as npm reads them, and one that cannot be read alerts.
+- **`npm-install-script-changed`** (`medium`, evidence below the floor): one of those scripts with another command.
+- **`npm-dependency-source`** (`high`): a dependency installed from a git repository, a URL, a path or an `npm:` alias that the previous version did not install from there. npm fetches that code at install and runs its install scripts, so a version needs no script of its own to run code.
+- **`release-attestation-dropped`**, **`release-publisher-changed`** and **`release-publisher-lookalike`**: as for PyPI, from the SLSA provenance the registry holds for each version, which names the repository and workflow that published it. A provenance that names another tarball's digest is not trusted and alerts.
+- **`npm-dependency-runs-at-install`**, **`npm-dependency-young`** (`high`): a dependency newly taken from the registry whose versions run a script at install, or that was created in the last 30 days or is not on the registry. A compromised version need not carry the payload: it can depend on a package published hours before whose install script runs it. Each dependency newly taken from the registry, in the package or a dependency it bundles, is looked up there, and its age is measured as of the version's publish time; one whose registry document is too large to read alerts that it was not read.
+- **`release-new-dependency`** (`low`): a name newly in `dependencies`, `optionalDependencies` or `peerDependencies`.
+
+It reads `registry.npmjs.org` only. A version's tarball served from another host is not read.
+
 ## Comparing a release with its git tag
 
 litellm 1.107.0 was built from `Berri-AI/litellm`, and `BerriAI/litellm` has no `v1.107.0` tag. With the source repository known, each release's files that Python runs (`.py`, `.pyw`, `.pth` and the build files) are compared with the repository's tag for that version, by git blob hash, so nothing is downloaded from GitHub but its tag list and two file trees:
@@ -63,5 +81,5 @@ Without `--sources`, the watch uses the repository of the previous release's Tru
 - A prompt injection in a package's files stays below the alert floor here: the files are read by the programs that import them, and an LLM library names "the system prompt" in its own code every release. So do the rules that only see a code-owners file, a workflow file or a CI skip mentioned, since a package governs no repository and a comment mentions them as readily as code; package code that writes only a code-owners file is below the floor. A workflow's dangerous content (a pull request's head checked out under a privileged trigger, write-all permissions) keeps its severity in every file: a package's code or build can push it into someone's repository, and a project whose own workflow has that shape has a vulnerability worth the alert.
 - A package whose job is to carry attack patterns, such as a scanner's rules and test fixtures (diff-sentry's own), alerts on every release that changes them.
 - A legitimate change of publisher alerts too: a renamed or transferred repository, a renamed workflow, a new deployment environment. So does a project that stops attesting its releases.
-- It watches PyPI packages and container images. npm packages are not compared.
+- It does not compare an npm version with its git tag, and it reads the public registry only.
 - It does not run the model on a release. The screened response under `screened/` is the record.

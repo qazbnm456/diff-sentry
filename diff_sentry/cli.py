@@ -337,6 +337,7 @@ def _cmd_release_watch(args) -> int:
     import signal
 
     from .images import ImageWatcher
+    from .npm import NpmWatcher, parse_npm_packages
     from .releases import ReleaseWatcher, parse_packages, parse_sources
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -349,8 +350,11 @@ def _cmd_release_watch(args) -> int:
             with open(args.packages_file, encoding="utf-8") as fh:
                 texts.append(fh.read())
         packages = parse_packages(texts)
+        npm = parse_npm_packages([*args.npm, os.getenv("DS_RELEASE_NPM", "")])
+        check_npm = bool(args.check) and args.check[0].startswith("npm:")
         if args.check:
-            packages = parse_packages([args.check[0]])
+            packages = [] if check_npm else parse_packages([args.check[0]])
+            npm = parse_npm_packages([args.check[0][4:]]) if check_npm else []
         images = [i for text in [*args.images, os.getenv("DS_RELEASE_IMAGES", "")] for i in text.replace(",", " ").split()]
         floating = tuple(args.image_tags or os.getenv("DS_RELEASE_IMAGE_TAGS", "latest").replace(",", " ").split())
         image_watcher = ImageWatcher([] if args.check else images, state_dir=args.state, out_dir=args.out,
@@ -362,20 +366,26 @@ def _cmd_release_watch(args) -> int:
         except BaseException:
             image_watcher.close()
             raise
+        try:
+            npm_watcher = NpmWatcher(npm, state_dir=args.state, out_dir=args.out, emit=not args.no_emit)
+        except BaseException:
+            image_watcher.close()
+            watcher.close()
+            raise
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"release-watch: {exc}", file=sys.stderr)
         return 2
     try:
         if args.check:
-            result = watcher.check(packages[0], args.check[1])
+            result = npm_watcher.check(npm[0], args.check[1]) if check_npm else watcher.check(packages[0], args.check[1])
             print(json.dumps(result, indent=2, default=str))
             return 1 if "error" in result else 0
-        if not packages and not images:
-            print("release-watch: nothing to watch (--packages, --packages-file, --images, or DS_RELEASE_PACKAGES / "
-                  "DS_RELEASE_IMAGES)", file=sys.stderr)
+        if not packages and not npm and not images:
+            print("release-watch: nothing to watch (--packages, --packages-file, --npm, --images, or DS_RELEASE_PACKAGES / "
+                  "DS_RELEASE_NPM / DS_RELEASE_IMAGES)", file=sys.stderr)
             return 2
         if args.once:
-            for result in watcher.poll_once() + image_watcher.poll_once():
+            for result in watcher.poll_once() + npm_watcher.poll_once() + image_watcher.poll_once():
                 print(json.dumps(result, default=str))
             return 0
         stopping = []
@@ -384,6 +394,7 @@ def _cmd_release_watch(args) -> int:
             while not stopping:
                 started = time.monotonic()
                 watcher.poll_once()
+                npm_watcher.poll_once()
                 image_watcher.poll_once()
                 while not stopping and time.monotonic() - started < args.interval:
                     time.sleep(min(1.0, args.interval))
@@ -392,6 +403,7 @@ def _cmd_release_watch(args) -> int:
         return 0
     finally:
         watcher.close()
+        npm_watcher.close()
         image_watcher.close()
 
 
@@ -657,6 +669,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="compare each new release of watched PyPI packages with the one before it (no model)")
     rw.add_argument("--packages", nargs="+", default=[], help="PyPI project names (or set DS_RELEASE_PACKAGES)")
     rw.add_argument("--packages-file", help="a file of project names, one per line (# comments allowed)")
+    rw.add_argument("--npm", nargs="+", default=[], help="npm package names, @scope/name included (or set DS_RELEASE_NPM)")
     rw.add_argument("--sources", nargs="+", default=[], metavar="PACKAGE=OWNER/NAME",
                     help="the GitHub repository each package is built from, to compare each release with its tag "
                          "(or set DS_RELEASE_SOURCES; default: the repository of the previous release's Trusted Publisher)")
@@ -673,7 +686,8 @@ def build_parser() -> argparse.ArgumentParser:
     rw.add_argument("--no-emit", action="store_true", help="do not emit SIEM signals")
     rw.add_argument("--once", action="store_true", help="one poll, then exit")
     rw.add_argument("--check", nargs=2, metavar=("PACKAGE", "VERSION"),
-                    help="judge one release against the one before it now, print the result, and exit")
+                    help="judge one release against the one before it now, print the result, and exit "
+                         "(npm:NAME for an npm package)")
     rw.set_defaults(func=_cmd_release_watch)
 
     ac = sub.add_parser("actor", help="the dossier of an account the watcher has seen (offline)")

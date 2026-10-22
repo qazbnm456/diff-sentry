@@ -11,6 +11,7 @@ Host-side plumbing, like `ingest` and `watch`: it fetches only from PyPI's own h
 
 from __future__ import annotations
 
+import base64
 import bz2
 import codecs
 import difflib
@@ -29,6 +30,7 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlsplit
 
 from packaging.version import InvalidVersion, Version
@@ -38,12 +40,12 @@ from .schema import IndicatorHit
 
 log = logging.getLogger(__name__)
 
-# A fetch maps (url, request headers, byte limit) to (status, response headers, body). Injectable, so tests and an air-gapped mirror need no network; the default refuses any host but PyPI's and GitHub's own.
+# A fetch maps (url, request headers, byte limit) to (status, response headers, body). Injectable, so tests and an air-gapped mirror need no network; the default refuses any host but PyPI's, npm's and GitHub's own.
 Fetch = Callable[[str, dict, int], tuple[int, dict, bytes]]
 
 _SIMPLE_URL = "https://pypi.org/simple/{name}/"
 _SIMPLE_ACCEPT = "application/vnd.pypi.simple.v1+json"
-_ALLOWED_HOSTS = frozenset({"pypi.org", "files.pythonhosted.org", "github.com", "api.github.com"})
+_ALLOWED_HOSTS = frozenset({"pypi.org", "files.pythonhosted.org", "github.com", "api.github.com", "registry.npmjs.org"})
 
 _MAX_INDEX_BYTES = 32 << 20        # a project's simple index (litellm's, with every release, is about 2 MiB)
 # One wheel or sdist; a package larger than this is not compared, which is `high` (`release-not-fully-read`), so a watchlist with large packages raises it.
@@ -59,6 +61,7 @@ _MAX_PATCH_LINES = 20_000          # one member's patch
 
 # Members derived from the rest, which change with every release and say nothing of their own: the wheel's file list, tag and metadata (whose long description is the README, read as its own file in the sdist), and the sdist's `PKG-INFO` and `*.egg-info/`.
 _WHEEL_DERIVED = frozenset({"{dist-info}/RECORD", "{dist-info}/WHEEL", "{dist-info}/METADATA"})
+_ALWAYS_TEXT = _WHEEL_DERIVED | {"package.json"}     # read as text in both releases: the dependency and install-script facts
 _REQUIRES_RE = re.compile(r"^Requires-Dist:[ \t]*([A-Za-z0-9][A-Za-z0-9._-]{0,99})", re.MULTILINE)
 _WHEEL_DATA_RE = re.compile(r"^[^/]+\.data/(purelib|platlib|scripts|headers|data)/(.*)$")
 _DIST_INFO_RE = re.compile(r"^[^/]+\.dist-info/(.*)$")
@@ -248,11 +251,11 @@ class _Spent(Exception):
     """More was decompressed than an artifact may be."""
 
 
-def read_artifact(filename: str, data: bytes, budget: _Budget | None = None) -> Artifact:
+def read_artifact(filename: str, data: bytes, budget: _Budget | None = None, kind: str | None = None) -> Artifact:
     """The members of a wheel or an sdist, read from memory with every size bounded. Never raises on a malformed archive: what could not be read is a note, and a note is `high` evidence (`release-not-fully-read`)."""
     budget = budget or _Budget()
     found = artifact_version(filename)
-    art = Artifact(filename, found[1] if found else "sdist")
+    art = Artifact(filename, kind or (found[1] if found else "sdist"))
     try:
         if filename.endswith((".whl", ".zip")):
             _read_zip(art, data, budget)
@@ -503,6 +506,25 @@ def scan_release(facts: dict) -> list[IndicatorHit]:
         hits.append(_hit("release-differs-from-tag", "high",
                          "a file that runs differs from the source repository's tag where the previous release matched its own",
                          f"{facts.get('tag')}: {'; '.join(listed('tag_differs'))}"[:240], location=where))
+    if listed("install_scripts_added"):
+        hits.append(_hit("npm-install-script-added", "high",
+                         "the version runs a script at install that the previous version did not",
+                         "; ".join(listed("install_scripts_added"))[:240], location=where))
+    if listed("dependency_sources"):
+        hits.append(_hit("npm-dependency-source", "high",
+                         "the version installs a dependency from a git repository, a URL, a path or an alias the previous version did not",
+                         "; ".join(listed("dependency_sources"))[:240], location=where))
+    if listed("dependencies_run_at_install"):
+        hits.append(_hit("npm-dependency-runs-at-install", "high",
+                         "the version newly depends on a package whose versions run a script at install",
+                         "; ".join(listed("dependencies_run_at_install"))[:240], location=where))
+    if listed("dependencies_young"):
+        hits.append(_hit("npm-dependency-young", "high",
+                         "the version newly depends on a package created days ago, or not on the registry",
+                         "; ".join(listed("dependencies_young"))[:240], location=where))
+    if listed("install_scripts_changed"):
+        hits.append(_hit("npm-install-script-changed", "medium", "the version changes a script it runs at install",
+                         "; ".join(listed("install_scripts_changed"))[:240], location=where))
     if listed("new_requires") and facts.get("previous"):
         hits.append(_hit("release-new-dependency", "low", "the release requires a project the previous release did not",
                          ", ".join(listed("new_requires"))[:240], location=where))
@@ -552,7 +574,7 @@ def _httpx_fetch(timeout: float = 60.0) -> Fetch:
 
         host = urlsplit(url).hostname or ""
         if urlsplit(url).scheme != "https" or host not in _ALLOWED_HOSTS:
-            raise ValueError(f"refusing to fetch from {host!r}: only PyPI's and GitHub's own hosts are read")
+            raise ValueError(f"refusing to fetch from {host!r}: only PyPI's, npm's and GitHub's own hosts are read")
         with httpx.stream("GET", url, headers=headers, timeout=timeout, follow_redirects=False) as resp:
             body = bytearray()
             for chunk in resp.iter_bytes():
@@ -575,7 +597,8 @@ class ReleaseFile:
     upload_time: str
     yanked: bool
     attested: bool
-    provenance: str = ""        # the URL of the file's attestations on pypi.org, when PyPI holds any
+    provenance: str = ""        # the URL of the file's attestations on pypi.org (or the npm registry), when it holds any
+    sha512: str = ""            # an npm tarball's `integrity`, base64 as the registry gives it
 
 
 def parse_index(body: bytes) -> list[ReleaseFile]:
@@ -598,13 +621,14 @@ def parse_index(body: bytes) -> list[ReleaseFile]:
     return out
 
 
-def previous_version(version: str, files: list[ReleaseFile]) -> str | None:
+def previous_version(version: str, files: list[ReleaseFile], order: Callable[[str], Any] | None = None) -> str | None:
     """The highest version below `version` with a file that is not yanked; a pre-release is compared only with a release when `version` is not one itself."""
-    key = _version_key(version)
+    order = order or _version_key
+    key = order(version)
     if key is None:
         return None
     candidates = {f.version for f in files if not f.yanked}
-    ordered = sorted((k, v) for v in candidates if (k := _version_key(v)) is not None and k < key
+    ordered = sorted((k, v) for v in candidates if (k := order(v)) is not None and k < key
                      and (key.is_prerelease or not k.is_prerelease))
     return ordered[-1][1] if ordered else None
 
@@ -622,6 +646,9 @@ def _download(fetch: Fetch, f: ReleaseFile, budget: list[int], notes: list[str])
         raise DownloadError(f"{f.filename}: HTTP {status}")
     if f.sha256 and hashlib.sha256(body).hexdigest() != f.sha256:
         notes.append(f"{f.filename}: the download does not match the index's sha256")
+        return None
+    if f.sha512 and base64.b64encode(hashlib.sha512(body).digest()).decode() != f.sha512:
+        notes.append(f"{f.filename}: the download does not match the registry's sha512")
         return None
     budget[0] -= len(body)
     return body
@@ -648,6 +675,11 @@ def _publishers(fetch: Fetch, files: list[ReleaseFile], notes: list[str]) -> lis
     if len(attested) > _MAX_PROVENANCE_FILES:
         notes.append(f"{len(attested)} attested files, the attestations of the first {_MAX_PROVENANCE_FILES} read")
     for f in attested[:_MAX_PROVENANCE_FILES]:
+        if f.kind == "npm":
+            from .npm import npm_publishers
+
+            found |= npm_publishers(fetch, f, notes)
+            continue
         try:
             status, _, body = fetch(f.provenance, {"Accept": "application/json"}, _MAX_PROVENANCE_BYTES)
         except ValueError as exc:               # past the size bound, or a URL the fetch refuses: not read
@@ -665,10 +697,14 @@ def _publishers(fetch: Fetch, files: list[ReleaseFile], notes: list[str]) -> lis
 
 
 def release_event(package: str, version: str, files: list[ReleaseFile], fetch: Fetch,
-                  only: set[str] | None = None, source: str | None = None) -> dict:
-    """The change event of a release, or of the files in `only` (a wheel uploaded after the rest): its artifacts against the previous release's, as files whose patches are the diff, with the release's facts in `release`."""
-    name = normalize_name(package)
-    prev = previous_version(version, files)
+                  only: set[str] | None = None, source: str | None = None, registry: str = "pypi") -> dict:
+    """The change event of a release, or of the files in `only` (a wheel uploaded after the rest): its artifacts against the previous release's, as files whose patches are the diff, with the release's facts in `release`. `registry` is `pypi` or `npm` (`diff_sentry.npm`), which orders versions by semver, keeps the name as written, and reads a version's one tarball as kind `npm`."""
+    npm = registry == "npm"
+    if npm:
+        from .npm import npm_facts, semver_key
+    name = package if npm else normalize_name(package)
+    prev = previous_version(version, files, semver_key if npm else None)
+    kinds = {f.filename: f.kind for f in files}
     notes: list[str] = []
     budget = [_MAX_RELEASE_BYTES]
 
@@ -681,7 +717,7 @@ def release_event(package: str, version: str, files: list[ReleaseFile], fetch: F
         return out
 
     def read(bodies: list[tuple[str, bytes]], text: _Budget) -> list[Artifact]:
-        return [read_artifact(filename, body, text) for filename, body in bodies]
+        return [read_artifact(filename, body, text, kinds.get(filename)) for filename, body in bodies]
 
     new_bodies = download(version, only)
     old_bodies = download(prev, None) if prev else []
@@ -692,15 +728,16 @@ def release_event(package: str, version: str, files: list[ReleaseFile], fetch: F
     wanted = {(art.kind, m.path, m.digest) for art in first for m in art.members.values()
               if (art.kind, m.path, m.digest) not in old_digests} | {
               (art.kind, m.path, m.digest) for art in first for k, m in art.members.items() if "\0" in k}
-    paths = {p for _, p, _ in wanted} | set(_WHEEL_DERIVED)
+    paths = {p for _, p, _ in wanted} | _ALWAYS_TEXT
     text = _Budget()
 
     def changed_in(kind: str) -> Callable[[str, str], bool]:
-        return lambda path, digest: (kind, path, digest) in wanted or path in _WHEEL_DERIVED
+        return lambda path, digest: (kind, path, digest) in wanted or path in _ALWAYS_TEXT
 
-    new = [read_artifact(art.filename, body, _Budget.share(text, changed_in(art.kind)))
+    new = [read_artifact(art.filename, body, _Budget.share(text, changed_in(art.kind)), art.kind)
            for art, (_, body) in zip(first, new_bodies, strict=True)]
-    old = [read_artifact(fn, body, _Budget.share(text, lambda path, digest: path in paths)) for fn, body in old_bodies]
+    old = [read_artifact(fn, body, _Budget.share(text, lambda path, digest: path in paths), kinds.get(fn))
+           for fn, body in old_bodies]
     for art in new + old:
         notes.extend(art.notes)
     changed, unread = release_files(new, old)
@@ -720,15 +757,17 @@ def release_event(package: str, version: str, files: list[ReleaseFile], fetch: F
         "shadowed": sorted({p for art in new for p in art.shadowed})[:50],
         "unread_code": unread[:50],
     }
+    if npm:
+        facts.update(npm_facts(new_bodies, old_bodies, notes, fetch, name, version))
     configured = source is not None
-    if source is None:      # without a configured repository, the one the previous release's Trusted Publisher names
+    if source is None and not npm:      # without a configured repository, the one the previous release's Trusted Publisher names
         repos = {p.split(":")[1] for p in facts["previous_publishers"] if p.startswith("github:")}
         source = repos.pop() if len(repos) == 1 and _REPO_RE.fullmatch(next(iter(repos))) else None
-    if source:
+    if source and not npm:
         facts.update(tag_facts(name, version, prev, new, old, source, fetch, notes, configured=configured))
     facts["notes"] = notes[:50]
     return {
-        "repo": f"pypi/{name}", "kind": "release", "number": None, "author": "",
+        "repo": f"{registry}/{name}", "kind": "release", "number": None, "author": "",
         "title": f"{name} {version}" + (f" (after {prev})" if prev else " (first release seen)"),
         "body": "", "created_at": facts["uploaded"] or None, "files": changed, "release": facts,
     }
@@ -914,9 +953,10 @@ def tag_event(package: str, version: str, files: list[ReleaseFile], fetch: Fetch
             "release": {"package": name, "version": version, "previous": prev, **facts, "notes": notes[:50]}}
 
 
-def run_id_for(package: str, version: str, revision: int = 0) -> str:
-    """`pypi__<name>-<version>`, `-r<n>` for a later look at files added to the same release. A version string comes from PyPI, so anything but `[A-Za-z0-9._-]` is replaced and the id is never a path."""
-    rid = re.sub(r"[^A-Za-z0-9._-]", "_", f"pypi__{normalize_name(package)}-{version}")[:200]
+def run_id_for(package: str, version: str, revision: int = 0, registry: str = "pypi") -> str:
+    """`pypi__<name>-<version>` (`npm__<name>-<version>`), `-r<n>` for a later look at files added to the same release. A name and a version come from the registry, so anything but `[A-Za-z0-9._-]` is replaced (`@scope/name` is `_scope_name`) and the id is never a path."""
+    name = package if registry == "npm" else normalize_name(package)
+    rid = re.sub(r"[^A-Za-z0-9._-]", "_", f"{registry}__{name}-{version}")[:200]
     return f"{rid}-r{revision}" if revision else rid
 
 
@@ -960,6 +1000,9 @@ def parse_packages(texts: list[str]) -> list[str]:
 
 
 class ReleaseWatcher:
+    registry = "pypi"
+    state_file = "releases.db"
+
     """Polls the simple index of each package. On first sight of a package, every file it already has is the baseline and is not judged; each file that appears after that is, grouped by release and compared with the release before. A file is recorded only once its comparison is screened, and the index's ETag only once every file of it is, so a watcher stopped mid-comparison judges the same files on its next pass."""
 
     def __init__(self, packages: list[str], *, state_dir: str, out_dir: str, fetch: Fetch | None = None,
@@ -974,7 +1017,7 @@ class ReleaseWatcher:
         self.poster = poster
         self.config = config
         self.now = now or (lambda: datetime.now(UTC))
-        self.db = open_versioned(os.path.join(state_dir, "releases.db"), _SCHEMA, _SCHEMA_VERSION, "judgments")
+        self.db = open_versioned(os.path.join(state_dir, self.state_file), _SCHEMA, _SCHEMA_VERSION, "judgments")
         self.archive = None
         if archive:
             from .snapshot import SnapshotStore
@@ -985,6 +1028,9 @@ class ReleaseWatcher:
 
     def _stamp(self) -> str:
         return self.now().isoformat(timespec="seconds")
+
+    def _order(self, version: str):
+        return _version_key(version)
 
     def _index(self, package: str, etag: str | None) -> tuple[list[ReleaseFile] | None, str | None]:
         headers = {"Accept": _SIMPLE_ACCEPT, **({"If-None-Match": etag} if etag else {})}
@@ -1034,7 +1080,7 @@ class ReleaseWatcher:
         self.db.commit()
         results = []
         clean = True
-        for version in sorted(fresh, key=lambda v: (_version_key(v) is None, _version_key(v) or v)):
+        for version in sorted(fresh, key=lambda v: (self._order(v) is None, self._order(v) or (), v)):
             result = self.judge(package, version, files, only=fresh[version], record=True)
             results.append(result)
             clean = clean and "error" not in result
@@ -1055,10 +1101,11 @@ class ReleaseWatcher:
                                     "AND run_id NOT LIKE '%-check' AND files!='[]'", (package, version, key)).fetchone()
             done = self.db.execute("SELECT COUNT(*) FROM judgments WHERE package=? AND version=? "
                                    "AND run_id NOT LIKE '%-check' AND files!='[]'", (package, version)).fetchone()[0]
-            run_id = prior["run_id"] if prior else run_id_for(package, version, done)
+            run_id = prior["run_id"] if prior else run_id_for(package, version, done, self.registry)
         stamp = self._stamp()
         try:
-            event = release_event(package, version, files, self.fetch, only=set(names), source=self.sources.get(package))
+            event = release_event(package, version, files, self.fetch, only=set(names), source=self.sources.get(package),
+                                  registry=self.registry)
             if self.archive is not None:
                 self.archive.put(repo=event["repo"], kind="release", number=None, event=event, raw={
                     "files": [f.__dict__ for f in files if f.version in (version, event["release"]["previous"])]})
@@ -1111,9 +1158,9 @@ class ReleaseWatcher:
         """A comparison that failed `_MAX_FAILS` times is screened as a release that could not be read (`high`), so the files it held back still raise an alert rather than going quiet."""
         from .cli import screen
 
-        name = normalize_name(package)
-        event = {"repo": f"pypi/{name}", "kind": "release", "number": None, "author": "", "body": "", "files": [],
-                 "title": f"{name} {version} (not compared)",
+        name = package if self.registry == "npm" else normalize_name(package)
+        event = {"repo": f"{self.registry}/{name}", "kind": "release", "number": None, "author": "", "body": "",
+                 "files": [], "title": f"{name} {version} (not compared)",
                  "release": {"package": name, "version": version, "artifacts": names,
                              "notes": [f"not compared after {_MAX_FAILS} attempts: {error[:200]}"]}}
         try:
@@ -1222,10 +1269,8 @@ class ReleaseWatcher:
 
     def check(self, package: str, version: str) -> dict:
         """Judge one release now against the one before it, whatever the state says, under its own run id (`...-check`): a one-off look never stands in for the watcher's judgment."""
-        status, _, body = self.fetch(_SIMPLE_URL.format(name=package), {"Accept": _SIMPLE_ACCEPT}, _MAX_INDEX_BYTES)
-        if status != 200:
-            raise RuntimeError(f"the index of {package} answered HTTP {status}")
-        return self.judge(package, version, parse_index(body), run_id=f"{run_id_for(package, version)}-check")
+        files, _ = self._index(package, None)
+        return self.judge(package, version, files or [], run_id=f"{run_id_for(package, version, 0, self.registry)}-check")
 
     def run(self, interval: float, *, stop: Callable[[], bool] = lambda: False) -> None:
         while not stop():
