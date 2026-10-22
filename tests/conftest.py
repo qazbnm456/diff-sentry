@@ -141,7 +141,7 @@ def make_trace(tmp_path):
         if emit_on is not None:
             meta["emit_on"] = list(emit_on)
         with TraceRecorder(path, run_id=run_id, meta=meta) as rec:
-            record_tool_call("read_skill", args={"name": "triage-a-change"}, result_len=900,
+            record_tool_call("read_skill", args={"name": "triage-a-change"}, ok=True, result_len=900,
                              preview="# Triage a change ...")
             # An in-loop scan of a region the planner decoded; its hits union with the baseline.
             region_hits = scan_indicators(raw_content(event))

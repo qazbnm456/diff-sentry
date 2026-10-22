@@ -143,7 +143,7 @@ def make_deep_classify_tool(config: DetectConfig, chat_fn: Callable[[str], str] 
             return ("DEEP_CLASSIFY CIRCUIT BREAKER — too many unusable replies or failing calls in a row. Decide from the "
                     "deterministic indicators and your own reading; do not keep re-asking.")
         if r.endpoint_error is not None:
-            record_tool_call("deep_classify", args={"findings": findings[:400]}, error=r.endpoint_error)
+            record_tool_call("deep_classify", args={"findings": findings[:400]}, ok=False, error=r.endpoint_error)
             return f"DEEP_CLASSIFY ENDPOINT ERROR: {r.endpoint_error}. Decide from the indicators yourself."
         v: ClassifyValidation = r.validated
         # SEAM: a delegated rlm-harness HARNESS backend (make_harness_tool) returns

@@ -66,7 +66,7 @@ def record_run(tmp_path, *, run_id, with_result=True, verdict=None, change=None,
         "rubric": rubric_to_meta(default_rubric()),
     }
     with TraceRecorder(path, run_id=run_id, meta=meta) as rec:
-        record_tool_call("read_skill", args={"name": "triage-a-change"}, result_len=900,
+        record_tool_call("read_skill", args={"name": "triage-a-change"}, ok=True, result_len=900,
                          preview="# Triage a change ...")
         region_hits = scan_indicators(raw_content(change))
         record_tool_call("scan_indicators", args={"region": "decoded filename"}, ok=True,

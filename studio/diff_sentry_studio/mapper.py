@@ -2,7 +2,7 @@
 
 A trace event is `{type, step_id, ts, payload}` (rlm-harness's trace, v1 or v2). We surface only the events a UI needs and rename them to a stable `detection.<noun>.<verb>` vocabulary (OpenAI-Responses-flavored). Unknown / internal events return None (skipped). The full structured result is NOT streamed; the client GETs `/v1/runs/{run_id}` after `detection.run.completed`.
 
-Payload tolerance is deliberate (the tools emit shape variants; see `diff_sentry.deep_classify`): `deep_classify` records THREE shapes: validated (`ok`/`verdict`/`confidence`), circuit-break (`ok=False, circuit_broken=True`), and endpoint-error (ONLY `error`, no `ok` key). We normalize all three. `sub_call` carries `input`/`processed`/`raw` (rlm-harness's sub-LM), not question/answer.
+Payload tolerance is deliberate (the tools emit shape variants; see `diff_sentry.deep_classify`): `deep_classify` records THREE shapes: validated (`ok`/`verdict`/`confidence`), circuit-break (`ok=False, circuit_broken=True`), and endpoint-error (`ok=False, error=…`; an older trace carries only `error`, no `ok` key). We normalize all three. `sub_call` carries `input`/`processed`/`raw` (rlm-harness's sub-LM), not question/answer.
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def to_event(trace_event: dict) -> dict[str, Any] | None:
                 "worst": _worst_severity(hits),
             })
         if tool == "deep_classify":
-            # Three shapes normalized to one event. endpoint-error carries only `error` (no `ok` key), so `ok` defaults to False there; circuit-break carries circuit_broken=True.
+            # Three shapes normalized to one event. An older endpoint-error carries only `error` (no `ok` key), so `ok` defaults to False there; circuit-break carries circuit_broken=True.
             return _ev("detection.classify", {
                 "ok": bool(p.get("ok")),
                 "circuit_broken": bool(p.get("circuit_broken", False)),

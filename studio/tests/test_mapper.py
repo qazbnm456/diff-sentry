@@ -72,7 +72,7 @@ def test_deep_classify_circuit_break_variant():
 
 
 def test_deep_classify_endpoint_error_variant_has_no_ok_key():
-    # the endpoint-error shape records ONLY `error`; no `ok` key. `ok` must default to False, and the error must surface (regression guard on the mapper's payload tolerance).
+    # an older trace's endpoint-error shape records ONLY `error`; no `ok` key. `ok` must default to False, and the error must surface (regression guard on the mapper's payload tolerance).
     ev = to_event({"type": "tool_call", "payload": {
         "tool": "deep_classify", "args": {"findings": "…"}, "error": "ConnectTimeout"}})
     assert ev["data"]["ok"] is False and ev["data"]["error"] == "ConnectTimeout"
