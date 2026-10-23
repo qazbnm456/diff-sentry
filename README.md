@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0          # the scan diffs against the PR base
-      - uses: qazbnm456/diff-sentry@v0.14.0
+      - uses: qazbnm456/diff-sentry@v0.15.0
 ```
 
 That is the whole setup. The job fails when an indicator at or above `high` fires. Add `push` to `on:` to also scan commits pushed straight to a branch. A push that bypasses branch protection can also delete this workflow, so `watch` and `release-watch` read the repository and its releases from outside.

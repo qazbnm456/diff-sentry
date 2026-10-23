@@ -2,6 +2,15 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.15.0
+
+Upgrade from 0.14.0: `watch` weighs slash commands by the target repository's own workflows, and can look up an author's older public history if you turn that on. The GitHub Action's scan is unchanged, nothing needs configuring, and `rlm-harness==1.24.0` is unchanged.
+
+### Added
+- **A slash command is weighed by what the repository's own workflows answer.** `watch`, `pr` and `issue` read the target repository's `.github/workflows` (its default branch, once an hour). A command that a workflow runs for anyone who comments goes one step up, to `high` when the change's author fires it within an hour of opening it, the hackerbot-claw shape. A command only some commenters can run keeps its usual weight, and one no workflow answers goes one step down. Only GitHub Actions workflows are read.
+- **`prt-runs-fork-code`** (`medium`): an outsider's pull request into a repository whose `pull_request_target` workflow checks out the pull request's own code, which then runs with the repository's secrets.
+- **An opt-in account history from GH Archive.** With `--account-history` (or `DS_ACCOUNT_HISTORY=clickhouse`), `watch`, `pr`, `issue` and `actor` look up an author's public events from before GitHub's 30-day window, as of the event, through ClickHouse's public playground. An account that wakes after a year without public activity is `dormant-account-reactivated` (`medium`), and an account older than 180 days with no earlier public activity is `no-public-history` (`low`); neither raises an alert on its own. The lookup is off by default because it sends the author's login to a third party, and `scan` and the GitHub Action never use it. See [Watching a watchlist](docs/watch.md).
+
 ## 0.14.0
 
 Upgrade from 0.13.0: `release-watch --images` now reads what each image changes, and checks compiled bytecode against its source. The GitHub Action's scan is unchanged, and `rlm-harness==1.24.0` is unchanged. For the bytecode check, install the Python version an image or wheel uses (`python3.N` on `PATH`) beside the watcher; without it, changed bytecode alerts that it could not be checked.
