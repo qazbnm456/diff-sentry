@@ -36,7 +36,7 @@ That is the whole setup. The job fails when an indicator at or above `high` fire
 | Exfiltration | secrets reaching a network sink, cross-process `/proc/<pid>/mem` reads, OAST callback services, IPFS and permaweb gateways |
 | Diff-presentation evasion | payloads shoved past the viewport by a long whitespace run, bidi-override and zero-width characters |
 | Provenance | forged `[bot]` identities, bot-mimicking new accounts, accounts created days before the event, profiles that describe an autonomous agent, unsigned or identity-mismatched commits, a fork deleted after the PR |
-| Author-controlled channels | a PR branch name carrying shell syntax, slash-command comments that fire `issue_comment` workflows |
+| Author-controlled channels | a PR branch name carrying shell syntax, slash-command comments that fire `issue_comment` workflows (weighed by what the repository's own workflows answer) |
 | Campaign memory (`watch` only) | an account or payload host already flagged in another repository, an edit that removes a flagged payload, a burst of changes from a new account |
 | Prompt injection | instructions aimed at an LLM reviewer or triage workflow |
 

@@ -44,13 +44,14 @@ from .actors import ActorStore
 from .config import DetectConfig
 from .dbutil import open_versioned
 from .emit import emit_signal
-from .ingest import GhApi, GhApiError, GhRaw, issue_event, pr_event
+from .ingest import GhApi, GhApiError, GhRaw, issue_event, pr_event, repo_workflows
 from .normalize import OUTSIDER_ASSOCIATIONS, event_metadata
 from .schema import IndicatorHit, at_signal_floor, severity_rank
 from .snapshot import RecordingApi, SnapshotStore
 
 log = logging.getLogger("diff_sentry.watch")
 
+_WORKFLOWS_TTL_S = 3600     # a repository's workflow facts are read again after this
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # Re-check schedule: seconds after a change was first seen. Cut off at `recheck_s`.
 _RECHECK_OFFSETS = (900, 3600, 6 * 3600, 24 * 3600)
@@ -491,6 +492,7 @@ class Watcher:
     ):
         self.config = config
         self._history = history
+        self._workflows: dict[str, tuple[float, dict]] = {}     # repo -> (when read, its workflow facts)
         self.detect_config = detect_config or (DetectConfig.screen_from_env() if config.screen_only
                                                else DetectConfig.from_env())
         if config.workers > 1 and not config.screen_only:       # checked before any file is opened
@@ -731,13 +733,23 @@ class Watcher:
 
     # ── examining one change ───────────────────────────────────────────────────────────────────────
 
+    def _repo_workflows(self, repo: str, call) -> dict:
+        """The repository's workflow facts (`ingest.repo_workflows`), read once an hour: they change with a merge, not with each change."""
+        now = time.monotonic()
+        cached = self._workflows.get(repo)
+        if cached is None or now - cached[0] > _WORKFLOWS_TTL_S:
+            cached = (now, repo_workflows(repo, call))
+            self._workflows[repo] = cached
+        return cached[1]
+
     def _ingest(self, repo: str, kind: str, number: int) -> tuple[dict, dict]:
         rec = RecordingApi(self._api or _default_api())
         if kind == "pull_request":
             event = pr_event(repo, number, api=rec, raw=self._raw if self._raw is not None
-                             else (None if self._api is not None else _default_raw()), history=self._history)
+                             else (None if self._api is not None else _default_raw()), history=self._history,
+                             workflows=self._repo_workflows)
         else:
-            event = issue_event(repo, number, api=rec, history=self._history)
+            event = issue_event(repo, number, api=rec, history=self._history, workflows=self._repo_workflows)
         if self._rate_left is not None:
             self._rate_left -= rec.calls
         return event, rec.records

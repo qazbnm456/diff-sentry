@@ -3040,6 +3040,12 @@ def scan_metadata(event: dict) -> list[IndicatorHit]:
     author = str(event.get("author") or "").strip().lower()
     opened = _ts(event.get("created_at"))
     seen: set[str] = set()
+    prov = event.get("provenance") or {}
+    # what the repository's own workflows run on (`ingest.repo_workflows`), when it was read: a command no workflow can answer is one step down, one a workflow matches one step up
+    known = prov.get("repo_workflows_read") is True
+    handled = {str(c).lower() for c in prov.get("repo_comment_commands") or []}
+    open_to_all = {str(c).lower() for c in prov.get("repo_comment_commands_open") or []}     # no check on who commented
+    open_handler = bool(prov.get("repo_comment_workflows_unfiltered"))
     for c in _comments(event):
         if not is_scanned_comment(c, author):
             continue
@@ -3052,12 +3058,22 @@ def scan_metadata(event: dict) -> list[IndicatorHit]:
             when = _ts(c["created_at"])
             quick = (bool(author) and who == author and opened is not None and when is not None
                      and 0 <= (when - opened).total_seconds() <= _SLASH_SELF_WINDOW_S)
+            if known and cmd in open_to_all:
+                severity, reach = ("high" if quick else "medium"), f"; a workflow of the repository runs /{cmd} for anyone"
+            elif known and cmd in handled:      # matched, but the workflow checks who commented: the plain reading
+                severity, reach = ("medium" if quick else "low"), f"; a workflow of the repository matches /{cmd} for some commenters"
+            elif known and not open_handler:
+                severity = "low" if quick else "info"
+                reach = ("; no workflow of the repository starts on a comment" if not prov.get("repo_comment_workflows")
+                         else f"; no workflow of the repository matches /{cmd}")
+            else:
+                severity, reach = ("medium" if quick else "low"), ""
             hits.append(_hit(
-                "slash-command-trigger", "medium" if quick else "low",
-                "a slash command from the change's author or an outsider (fires `issue_comment` workflows)"
-                if not quick else
-                "the change's author fires a slash command within an hour of opening it "
-                "(the `issue_comment` workflow trigger)",
+                "slash-command-trigger", severity,
+                ("a slash command from the change's author or an outsider (fires `issue_comment` workflows)"
+                 if not quick else
+                 "the change's author fires a slash command within an hour of opening it "
+                 "(the `issue_comment` workflow trigger)") + reach,
                 f"/{cmd} by {c['author'][:40]}",       # no association: it can change and would re-mint the id
                 location=f"comment:{c['author'][:40]}").model_copy(update={"via": c["author"]}))
     return hits
@@ -3693,6 +3709,13 @@ def scan_provenance(provenance: dict) -> list[IndicatorHit]:
         hits.append(_hit("brand-new-account", "medium",
                          f"the author account was created less than {_NEW_ACCOUNT_DAYS} days before the event",
                          f"age<{_NEW_ACCOUNT_DAYS}d created={created or 'n/a'} login={login[:80]}"))
+
+    # A pull request from an outsider into a repository whose `pull_request_target` workflow checks out the PR's own code: that code runs with the repository's secrets and write token (the "pwn request" shape hackerbot-claw looked for). A fact about the repository, so a corroborator.
+    prt = [str(x) for x in prov.get("repo_prt_head_checkout") or []]
+    if prt and outsider and prov.get("head_sha"):
+        hits.append(_hit("prt-runs-fork-code", "medium",
+                         "an outsider's PR into a repository whose pull_request_target workflow checks out the PR's own code",
+                         ", ".join(sorted(prt))[:_MAX_EVIDENCE]))
 
     # GH Archive history (`history.account_history`, opt-in): what the account did publicly before the Events API's 30 days, as of the event. A taken-over account is an old one that wakes up; a sleeper is an old one that never did anything in public. Both are common enough to stay sub-floor corroborators.
     last_before = prov.get("author_history_last_before_days")

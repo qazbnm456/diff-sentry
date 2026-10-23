@@ -9,6 +9,7 @@ Pure stdlib; no dspy. `event_from_payload` is the offline path (a payload you al
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from collections.abc import Callable
@@ -20,6 +21,8 @@ from typing import Any
 GhApi = Callable[[str], Any]
 # An account-history lookup (`history.account_history`): (login, the event's time) to facts. Off unless a caller passes one.
 History = Callable[[str, "datetime | None"], dict]
+# The repository's workflow facts (`repo_workflows`, or a cache of it): (repo, the API) to facts. Off unless a caller passes one.
+Workflows = Callable[[str, "GhApi"], dict]
 # A `raw` maps (path, Accept media type) to the response TEXT, for the one surface that is not JSON: the `.patch` mbox, whose `Date:` headers keep the author's UTC offset (REST and GraphQL normalize it away).
 GhRaw = Callable[[str, str], str]
 
@@ -417,7 +420,7 @@ def event_from_payload(payload: dict) -> dict:
 
 
 def pr_event(repo: str, number: int, *, api: GhApi | None = None, raw: GhRaw | None = None,
-             history: History | None = None) -> dict:
+             history: History | None = None, workflows: Workflows | None = None) -> dict:
     """Fetch a PR + its files, comments and provenance from GitHub (host-side) into a change-event dict.
 
     `api` is injectable. The `.patch` fetch (commit UTC offsets) runs only on the real `gh` transport or an explicitly injected `raw`, so a test that fakes `api` never reaches the network."""
@@ -430,6 +433,8 @@ def pr_event(repo: str, number: int, *, api: GhApi | None = None, raw: GhRaw | N
                        call, fetch_commits=True, as_of=timeline.get("event_created_at"), raw=raw_call, history=history)
     prov.update(timeline)
     prov.update(_head_facts(pr))
+    if workflows is not None:
+        prov.update(workflows(repo, call))
     changed = pr.get("changed_files")
     if isinstance(changed, int) and not isinstance(changed, bool):
         prov["changed_files"] = changed
@@ -466,7 +471,8 @@ def pr_event(repo: str, number: int, *, api: GhApi | None = None, raw: GhRaw | N
     return event
 
 
-def issue_event(repo: str, number: int, *, api: GhApi | None = None, history: History | None = None) -> dict:
+def issue_event(repo: str, number: int, *, api: GhApi | None = None, history: History | None = None,
+                workflows: Workflows | None = None) -> dict:
     """Fetch an issue from GitHub (host-side) into a change-event dict; the issue body is the untrusted content (the hackerbot-claw prompt-injection issues came in this shape)."""
     call = api or _gh_cli_api()
     issue = call(f"repos/{repo}/issues/{number}")
@@ -474,6 +480,8 @@ def issue_event(repo: str, number: int, *, api: GhApi | None = None, history: Hi
     prov = _provenance(repo, number, issue.get("user"), issue.get("author_association"),
                        call, fetch_commits=False, as_of=timeline.get("event_created_at"), history=history)
     prov.update(timeline)
+    if workflows is not None:
+        prov.update(workflows(repo, call))
     event = {
         "repo": repo,
         "kind": "issue",
@@ -495,6 +503,75 @@ def issue_event(repo: str, number: int, *, api: GhApi | None = None, history: Hi
     if truncated:
         prov["comments_truncated"] = True
     return event
+
+
+# ── the repository's own workflows ───────────────────────────────────────────────────────────────────────
+
+_MAX_WORKFLOWS = 100
+_MAX_WORKFLOW_BYTES = 512 << 10
+# a workflow a comment starts: an issue comment (PRs included) or a review comment
+_COMMENT_TRIGGER_RE = re.compile(r"(?<![\w-])(?:issue_comment|pull_request_review_comment)(?![\w-])")
+_PRT_TRIGGER_RE = re.compile(r"(?<![\w-])pull_request_target(?![\w-])")
+# the PR's own code checked out into the workspace: `actions/checkout` with `ref:` its head or its pull ref, `gh pr checkout`, or `git checkout`/`switch` to it (a `git fetch` that only reads the head, to diff it, is not)
+_PR_HEAD = (r"(?:github\.event\.pull_request\.(?:head\.(?:sha|ref)|merge_commit_sha)|github\.head_ref"
+            r"|refs/pull/|pull/[^\s'\"]{0,80}/(?:head|merge)|FETCH_HEAD)")
+_HEAD_CHECKOUT_RE = re.compile(rf"\bref:[^\n]{{0,200}}{_PR_HEAD}|\brepository:[^\n]{{0,200}}github\.event\.pull_request\.head\.repo"
+                               rf"|\bgh[ \t]+pr[ \t]+checkout\b|\bgit[ \t]+(?:checkout|switch)\b[^\n]{{0,200}}{_PR_HEAD}")
+# a slash command a workflow matches: a quoted literal on a line that reads the comment (`contains(github.event.comment.body, '/format')`, `case "$COMMENT" in "/format"`)
+_WORKFLOW_COMMAND_RE = re.compile(r"""['"]/([a-z][a-z0-9_-]{1,30})(?![a-z0-9_/-])""", re.IGNORECASE)
+_READS_COMMENT_RE = re.compile(r"comment|body", re.IGNORECASE)
+# a workflow that checks who commented before it acts, or hands the comment to a reusable workflow whose checks are not read here
+_COMMENTER_GATE_RE = re.compile(r"author_association|getCollaboratorPermissionLevel|/collaborators/|/members/|/memberships/"
+                                r"|github\.(?:actor|triggering_actor)\b|event\.sender\.login|event\.comment\.user\.login"
+                                r"|\buses:[ \t]*[^\n]{0,200}\.github/(?:workflows|actions)/", re.IGNORECASE)
+
+
+def repo_workflows(repo: str, call: GhApi) -> dict:
+    """What the repository's own workflows (its default branch's `.github/workflows`) run on: how many a comment starts, the slash commands they match as quoted literals, how many match none (a handler of any comment, or one that filters some other way), and which `pull_request_target` workflows check out the PR's own code. Read as text: a token in a comment or a string counts too, which can only make a comment look more able to start a workflow. Best-effort: `{}` when the listing cannot be read, so the slash-command rule keeps its plain reading."""
+    try:
+        listing = call(f"repos/{repo}/contents/.github/workflows")
+    except GhApiError as e:
+        return {"repo_workflows_read": True, "repo_comment_workflows": 0} if e.status == 404 else {}
+    except Exception:  # noqa: BLE001 (best-effort)
+        return {}
+    if not isinstance(listing, list):
+        return {}
+    files = [f for f in listing if isinstance(f, dict) and f.get("type") == "file"
+             and str(f.get("name") or "").endswith((".yml", ".yaml"))]
+    if len(files) > _MAX_WORKFLOWS:
+        return {}                              # not read whole: the rule keeps its plain reading
+    comment_files, unfiltered, prt = 0, 0, []
+    commands: set[str] = set()
+    open_commands: set[str] = set()
+    for f in files:
+        name = _clip(f.get("path"), 200)
+        if int(f.get("size") or 0) > _MAX_WORKFLOW_BYTES:
+            return {}                          # not read whole: the rule keeps its plain reading
+        try:
+            body = call(f"repos/{repo}/contents/{name}")
+            text = base64.b64decode(str(body.get("content") or "")).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 (one workflow unread: the facts are not whole, so none)
+            return {}
+        if _COMMENT_TRIGGER_RE.search(text):
+            comment_files += 1
+            found: set[str] = set()
+            elsewhere = False                  # a literal on a line that does not read the comment: a dispatcher (`case "$CMD" in "/deploy")`) or a path
+            for line in text.splitlines():
+                literals = {m.group(1).lower() for m in _WORKFLOW_COMMAND_RE.finditer(line)}
+                if _READS_COMMENT_RE.search(line):
+                    found |= literals
+                elif literals:
+                    elsewhere = True
+            commands |= found
+            if not _COMMENTER_GATE_RE.search(text):
+                open_commands |= found         # anyone who comments can run these
+            unfiltered += not found or elsewhere   # it may answer commands not read here: no step down
+        if _PRT_TRIGGER_RE.search(text) and _HEAD_CHECKOUT_RE.search(text):
+            prt.append(name)
+    return {"repo_workflows_read": True, "repo_comment_workflows": comment_files,
+            "repo_comment_commands": sorted(commands)[:100], "repo_comment_commands_open": sorted(open_commands)[:100],
+            "repo_comment_workflows_unfiltered": unfiltered,
+            "repo_prt_head_checkout": prt[:20]}
 
 
 def public_activity(login: str, *, api: GhApi | None = None, pages: int = 3) -> dict:

@@ -241,10 +241,10 @@ def _print_run(arts: RunArtifacts) -> None:
 
 def _cmd_pr(args) -> int:
     from .history import enabled
-    from .ingest import pr_event
+    from .ingest import pr_event, repo_workflows
 
     config = DetectConfig.from_env()
-    event = pr_event(args.repo, args.number, history=enabled(args.account_history))
+    event = pr_event(args.repo, args.number, history=enabled(args.account_history), workflows=repo_workflows)
     arts = run(event, run_id=f"{args.repo.replace('/', '-')}-pr-{args.number}", outdir=args.out,
                config=config, emit=not args.no_emit)
     _print_run(arts)
@@ -253,10 +253,10 @@ def _cmd_pr(args) -> int:
 
 def _cmd_issue(args) -> int:
     from .history import enabled
-    from .ingest import issue_event
+    from .ingest import issue_event, repo_workflows
 
     config = DetectConfig.from_env()
-    event = issue_event(args.repo, args.number, history=enabled(args.account_history))
+    event = issue_event(args.repo, args.number, history=enabled(args.account_history), workflows=repo_workflows)
     arts = run(event, run_id=f"{args.repo.replace('/', '-')}-issue-{args.number}", outdir=args.out,
                config=config, emit=not args.no_emit)
     _print_run(arts)
