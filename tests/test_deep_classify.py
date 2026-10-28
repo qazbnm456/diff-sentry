@@ -115,6 +115,21 @@ def test_the_default_request_keeps_its_temperature(monkeypatch):
     assert _FakeOpenAI.sent["temperature"] == 0.1
 
 
+def test_omitted_params_are_left_out_of_the_request(monkeypatch):
+    _chat(monkeypatch, ('{"verdict": "benign"}', "stop"), classifier_omit_params=("temperature", "max_tokens"))("f")
+    sent = _FakeOpenAI.sent
+    assert "temperature" not in sent and "max_tokens" not in sent
+    assert sent["model"] == "c" and sent["messages"][1]["content"] == "f"
+    _chat(monkeypatch, ('{"verdict": "benign"}', "stop"), classifier_omit_params=("temperature",))("f")
+    assert "temperature" not in _FakeOpenAI.sent and _FakeOpenAI.sent["max_tokens"] == 2048
+
+
+def test_a_cut_with_no_max_tokens_sent_names_the_endpoints_limit(monkeypatch):
+    chat = _chat(monkeypatch, ("", "length"), classifier_omit_params=("max_tokens",))
+    out = make_deep_classify_tool(_cfg(), chat_fn=chat)("findings")
+    assert "endpoint's own output limit" in out and "max_tokens=" not in out and "DS_CLASSIFIER_MAX_TOKENS" not in out
+
+
 @pytest.mark.parametrize("content", ["", None, '{"verdict": "mal'])
 def test_a_reply_cut_at_max_tokens_says_so_once_and_counts_toward_the_breaker(monkeypatch, content):
     calls = []

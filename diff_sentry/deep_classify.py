@@ -24,7 +24,7 @@ from .schema import SUBMIT_VERDICTS
 class _CutReply(str):
     """The classifier's reply when it stopped at `max_tokens` (`finish_reason == "length"`). A str, so rlm-harness's `make_model_tool` hands it to the validator as it is, which names the cut: as an unusable reply it is not re-sent (the same request is cut the same way) and it counts toward the circuit breaker."""
 
-    limit: int = 0
+    limit: int | None = 0     # None: the request sent none (`DS_CLASSIFIER_OMIT_PARAMS`), so the endpoint's own cut
 
 
 @dataclass
@@ -45,6 +45,11 @@ def _parse_classifier_json(raw: str) -> ClassifyValidation:
     if v.ok or not isinstance(raw, _CutReply):
         return v
     held = f"{len(raw.strip()):,} characters" if raw.strip() else "no answer"
+    if raw.limit is None:
+        return ClassifyValidation(ok=False, errors=[(
+            f"the classifier stopped at its endpoint's own output limit with {held} (DS_CLASSIFIER_OMIT_PARAMS sends no "
+            "max_tokens): a reasoning model can think through the whole budget. Give it a thinking budget in "
+            "DS_CLASSIFIER_LM_KWARGS")])
     return ClassifyValidation(ok=False, errors=[(
         f"the classifier stopped at max_tokens={raw.limit} with {held}: a reasoning model can think through the whole "
         "budget. Raise DS_CLASSIFIER_MAX_TOKENS, or give it a thinking budget in DS_CLASSIFIER_LM_KWARGS")])
@@ -102,7 +107,7 @@ def _selfclassify_chat(config: DetectConfig) -> Callable[[str], str]:
             timeout=config.classifier_timeout,
             max_retries=0,  # our own transient-retry loop owns retries; keep the timeout a HARD ceiling
         )
-        resp = client.chat.completions.create(**{
+        request = {
             "temperature": 0.1,
             **(config.classifier_lm_kwargs or {}),       # `config.from_env` refuses the keys set below
             "model": config.classifier_model,
@@ -111,12 +116,15 @@ def _selfclassify_chat(config: DetectConfig) -> Callable[[str], str]:
                 {"role": "user", "content": findings},
             ],
             "max_tokens": config.classifier_max_tokens,
-        })
+        }
+        for name in config.classifier_omit_params:      # an endpoint that refuses them (`from_env` checks the names)
+            request.pop(name, None)
+        resp = client.chat.completions.create(**request)
         choice = resp.choices[0]
         content = choice.message.content or ""
         if choice.finish_reason == "length":
             content = _CutReply(content)
-            content.limit = config.classifier_max_tokens
+            content.limit = request.get("max_tokens")
         return content
 
     return chat
