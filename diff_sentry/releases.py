@@ -73,7 +73,8 @@ _BUILD_FILES = frozenset({"pyproject.toml", "setup.cfg", "setup.py"})
 # Compiled code: never text, so a new or changed one is not read (`.pyc` runs without its source, and Python may load a cached one over it). A native module counts only when the release before had no module of that name.
 _BYTECODE_SUFFIXES = (".pyc", ".pyo")
 _NATIVE_SUFFIXES = (".so", ".pyd", ".dll", ".dylib")
-_PYCACHE_RE = re.compile(r"((?:[^/]{1,255}/){0,64})__pycache__/([^/.]{1,200})\.[A-Za-z0-9_-]{1,40}(?:\.opt-[12])?\.pyc")
+# Anchored: only ever a whole member path (`fullmatch`), so a search never retries the 64-segment prefix from every offset.
+_PYCACHE_RE = re.compile(r"\A((?:[^/]{1,255}/){0,64})__pycache__/([^/.]{1,200})\.[A-Za-z0-9_-]{1,40}(?:\.opt-[12])?\.pyc")
 _SO_VERSION_RE = re.compile(r"\.so\.[0-9.]{1,40}$")         # `libfoo.so.1.2`
 # A PEP 263 coding declaration, looked for anywhere on a source file's first two lines: CPython's own rule (a comment, line 2 only after a blank or comment line 1) is not reproduced, so a file that declares one is read both ways.
 _CODING_RE = re.compile(r"coding[:=][ \t]*([-\w.]{1,200})([-\w.])?")
