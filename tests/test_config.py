@@ -15,7 +15,7 @@ _DS_ENV = (
     "DS_ROOT_LM_KWARGS", "DS_SUB_LM_KWARGS", "RLM_MAIN_LM_KWARGS", "RLM_SUB_LM_KWARGS",
     "DS_CLASSIFY_BACKEND", "DS_CLASSIFIER_BASE_URL", "DS_CLASSIFIER_API_KEY", "DS_CLASSIFIER_SYSTEM_PROMPT",
     "DS_CLASSIFIER_TIMEOUT", "DS_CLASSIFIER_MAX_TOKENS", "DS_CLASSIFIER_TRANSIENT_RETRIES",
-    "DS_CLASSIFIER_CIRCUIT_BREAK", "DS_CLASSIFIER_LM_KWARGS", "DS_INTERPRETER", "DS_OBSERVE", "DS_ADAPTER", "DS_MAX_ITERATIONS",
+    "DS_CLASSIFIER_CIRCUIT_BREAK", "DS_CLASSIFIER_LM_KWARGS", "DS_CLASSIFIER_OMIT_PARAMS", "DS_INTERPRETER", "DS_OBSERVE", "DS_ADAPTER", "DS_MAX_ITERATIONS",
     "DS_MAX_LLM_CALLS", "DS_MAX_OUTPUT_CHARS", "DS_ENABLE_FETCH", "DS_FETCH_TIMEOUT", "DS_FETCH_MAX_BYTES",
     "DS_FETCH_ALLOW_CIDRS", "DS_ENABLE_SKILLS", "DS_SIEM_WEBHOOK_URL", "DS_SIEM_TOKEN", "DS_EMIT_ON",
 )
@@ -186,4 +186,32 @@ def test_classifier_lm_kwargs_refuse_a_way_around_the_guard(clean_env, raw):
     clean_env.setenv("DS_SUB_LM", "a")
     clean_env.setenv("DS_CLASSIFIER_LM_KWARGS", raw)
     with pytest.raises(ValueError, match="DS_CLASSIFIER_LM_KWARGS"):
+        DetectConfig.from_env()
+
+
+def test_classifier_omit_params_are_parsed_and_deduplicated(clean_env):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    assert DetectConfig.from_env().classifier_omit_params == ()            # the request is unchanged by default
+    clean_env.setenv("DS_CLASSIFIER_OMIT_PARAMS", "Temperature, max_tokens temperature")
+    assert DetectConfig.from_env().classifier_omit_params == ("temperature", "max_tokens")
+
+
+@pytest.mark.parametrize("raw", ["top_p", "temperature,model", "messages"])
+def test_classifier_omit_params_refuse_a_parameter_not_on_the_list(clean_env, raw):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv("DS_CLASSIFIER_OMIT_PARAMS", raw)
+    with pytest.raises(ValueError, match="may name only temperature, max_tokens"):
+        DetectConfig.from_env()
+
+
+@pytest.mark.parametrize(("var", "value", "omit"), [("DS_CLASSIFIER_LM_KWARGS", '{"temperature": 1}', "temperature"),
+                                                     ("DS_CLASSIFIER_MAX_TOKENS", "4096", "max_tokens")])
+def test_classifier_omit_params_refuse_a_parameter_another_setting_asks_for(clean_env, var, value, omit):
+    clean_env.setenv("DS_ROOT_LM", "p")
+    clean_env.setenv("DS_SUB_LM", "a")
+    clean_env.setenv(var, value)
+    clean_env.setenv("DS_CLASSIFIER_OMIT_PARAMS", omit)
+    with pytest.raises(ValueError, match=f"leaves out {omit}, which {var} sets"):
         DetectConfig.from_env()

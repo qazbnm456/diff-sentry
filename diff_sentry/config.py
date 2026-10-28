@@ -85,6 +85,25 @@ def _classifier_lm_kwargs() -> dict | None:
     return kw
 
 
+# What an endpoint that refuses them may have left out of the classifier's request (`DS_CLASSIFIER_OMIT_PARAMS`).
+_CLASSIFIER_OMITTABLE = ("temperature", "max_tokens")
+
+
+def _classifier_omit_params(lm_kwargs: dict | None) -> tuple[str, ...]:
+    """`DS_CLASSIFIER_OMIT_PARAMS`: the default request parameters an endpoint does not take, left out of every classifier call. Only `temperature` and `max_tokens`; anything else, or a parameter another setting asks for, stops the process here."""
+    raw = os.getenv("DS_CLASSIFIER_OMIT_PARAMS", "")
+    names = tuple(dict.fromkeys(p.lower() for p in raw.replace(",", " ").split()))
+    unknown = [n for n in names if n not in _CLASSIFIER_OMITTABLE]
+    if unknown:
+        raise ValueError(f"DS_CLASSIFIER_OMIT_PARAMS may name only {', '.join(_CLASSIFIER_OMITTABLE)}, "
+                         f"not {', '.join(unknown)}")
+    if "temperature" in names and lm_kwargs and "temperature" in lm_kwargs:
+        raise ValueError("DS_CLASSIFIER_OMIT_PARAMS leaves out temperature, which DS_CLASSIFIER_LM_KWARGS sets")
+    if "max_tokens" in names and os.getenv("DS_CLASSIFIER_MAX_TOKENS"):
+        raise ValueError("DS_CLASSIFIER_OMIT_PARAMS leaves out max_tokens, which DS_CLASSIFIER_MAX_TOKENS sets")
+    return names
+
+
 @dataclass(frozen=True)
 class DetectConfig:
     # Planner (main) + analyst (sub), sharing one OpenAI-compatible proxy. No model name is assumed: `from_env` requires them. Empty defaults are only for direct construction in tests.
@@ -104,6 +123,8 @@ class DetectConfig:
     classifier_transient_retries: int = 1
     # Extra request parameters of the classifier's call, over its `temperature=0.1` (`_classifier_lm_kwargs`).
     classifier_lm_kwargs: dict | None = None
+    # Default parameters left out of the classifier's request, for an endpoint that refuses them (`_classifier_omit_params`).
+    classifier_omit_params: tuple[str, ...] = ()
     # After this many CONSECUTIVE unusable replies or repeating error statuses the tool short-circuits (make_model_tool).
     classifier_circuit_break: int = 4
 
@@ -194,6 +215,7 @@ class DetectConfig:
                 RLMConfig(main_model=planner, sub_model=analyst, **{field: kw})
             except ValueError as exc:
                 raise ValueError(f"{name}: {exc}") from exc
+        classifier_kw = _classifier_lm_kwargs()
         return cls(
             main_model=planner,
             sub_model=analyst,
@@ -209,7 +231,8 @@ class DetectConfig:
             classifier_max_tokens=int(os.getenv("DS_CLASSIFIER_MAX_TOKENS", "2048")),
             classifier_transient_retries=int(os.getenv("DS_CLASSIFIER_TRANSIENT_RETRIES", "1")),
             classifier_circuit_break=int(os.getenv("DS_CLASSIFIER_CIRCUIT_BREAK", "4")),
-            classifier_lm_kwargs=_classifier_lm_kwargs(),
+            classifier_lm_kwargs=classifier_kw,
+            classifier_omit_params=_classifier_omit_params(classifier_kw),
             interpreter=os.getenv("DS_INTERPRETER", "pyodide"),
             observe=_env_bool("DS_OBSERVE", False),
             adapter=os.getenv("DS_ADAPTER", "json"),

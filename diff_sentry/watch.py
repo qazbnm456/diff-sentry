@@ -136,12 +136,15 @@ class WatchConfig:
     max_deep_per_hour: int = 0          # 0 = unlimited model runs per hour
     rate_reserve: int = 200             # stop polling when the API's remaining budget falls below this
     workers: int = 1                    # model runs at once; above 1, each in a process of its own
+    paused: tuple[str, ...] = ()        # repositories held: not polled, re-checked, re-alerted or run (kept as they are)
 
     @classmethod
     def from_env(cls, **overrides: Any) -> WatchConfig:
         env = os.getenv("DS_WATCH_REPOS", "")
+        paused = os.getenv("DS_WATCH_PAUSED_REPOS", "")
         base: dict[str, Any] = {
             "repos": parse_repos([env]) if env else (),
+            "paused": parse_repos([paused]) if paused else (),
             "state_dir": os.getenv("DS_WATCH_STATE_DIR", "./output/state"),
             "poll_interval_s": _env_float("DS_WATCH_INTERVAL", 60.0),
             "backfill_s": int(_env_float("DS_WATCH_BACKFILL_HOURS", 0.0) * 3600),
@@ -161,6 +164,11 @@ class WatchConfig:
         if severity_rank(self.deep_min_severity) < 0:
             raise ValueError(f"deep_min_severity must be one of info/low/medium/high/critical, "
                              f"got {self.deep_min_severity!r}")
+        # GitHub matches `owner/name` in any case, so a pause does too
+        object.__setattr__(self, "paused", tuple(dict.fromkeys(r.lower() for r in self.paused)))
+
+    def is_paused(self, repo: str) -> bool:
+        return repo.lower() in self.paused
 
 
 # ── the list transport (ETag-aware) ───────────────────────────────────────────────────────────────────
@@ -214,6 +222,17 @@ def _gh_cli_list(timeout: float = 30.0) -> ListApi:
 
 
 # ── durable state ─────────────────────────────────────────────────────────────────────────────────────
+
+def _unpaused(column: str, paused: tuple[str, ...]) -> tuple[str, tuple]:
+    """A clause leaving out the rows of paused repositories (lower-cased, as `WatchConfig.paused` holds them)."""
+    if not paused:
+        return "", ()
+    return f" AND lower({column}) NOT IN ({','.join('?' * len(paused))})", paused
+
+
+# A queue row's repository is its event's: a run id's `owner__name-` prefix is also that of `owner/name-pr`'s.
+_QUEUE_REPO = "json_extract(event_json, '$.repo')"
+
 
 def _iso(dt: datetime) -> str:
     return dt.astimezone(UTC).isoformat(timespec="seconds")
@@ -299,38 +318,42 @@ class WatchState:
                 self._db.rollback()
                 raise
 
-    def due_checks(self, now: datetime) -> list[sqlite3.Row]:
+    def due_checks(self, now: datetime, paused: tuple[str, ...] = ()) -> list[sqlite3.Row]:
+        skip, args = _unpaused("repo", paused)
         with self._lock:
             return self._db.execute(
-                "SELECT * FROM changes WHERE next_check_at IS NOT NULL AND next_check_at<=? AND state!='gone' "
-                "ORDER BY next_check_at", (_iso(now),)).fetchall()
+                "SELECT * FROM changes WHERE next_check_at IS NOT NULL AND next_check_at<=? AND state!='gone'"
+                f"{skip} ORDER BY next_check_at", (_iso(now), *args)).fetchall()
 
     # ── the model queue: the table IS the queue, so a restart loses nothing ──
     def enqueue(self, run_id: str, priority: int, event: dict, now: datetime) -> None:
         self._q("INSERT OR REPLACE INTO queue (run_id, priority, enqueued_at, event_json) VALUES (?,?,?,?)",
                 (run_id, priority, _iso(now), json.dumps(event, ensure_ascii=False, default=str)))
 
-    def queue_size(self) -> int:
-        """Changes waiting for the model (the one being run is not waiting)."""
+    def queue_size(self, paused: tuple[str, ...] = ()) -> int:
+        """Changes waiting for the model (the one being run is not waiting), those of `paused` repositories aside."""
+        skip, args = _unpaused(_QUEUE_REPO, paused)
         with self._lock:
-            return self._db.execute("SELECT COUNT(*) FROM queue WHERE claimed=0").fetchone()[0]
+            return self._db.execute(f"SELECT COUNT(*) FROM queue WHERE claimed=0{skip}", args).fetchone()[0]
 
     def queued_run_ids(self) -> list[str]:
         """Runs waiting for the model (not the buried ones: those stay `failed` until `--requeue-failed`)."""
         with self._lock:
             return [r["run_id"] for r in self._db.execute("SELECT run_id FROM queue WHERE claimed=0").fetchall()]
 
-    def lowest(self) -> sqlite3.Row | None:
+    def lowest(self, paused: tuple[str, ...] = ()) -> sqlite3.Row | None:
+        skip, args = _unpaused(_QUEUE_REPO, paused)
         with self._lock:
-            return self._db.execute("SELECT run_id, priority FROM queue WHERE claimed=0 "
-                                    "ORDER BY priority ASC, seq DESC LIMIT 1").fetchone()
+            return self._db.execute(f"SELECT run_id, priority FROM queue WHERE claimed=0{skip} "
+                                    "ORDER BY priority ASC, seq DESC LIMIT 1", args).fetchone()
 
-    def claim(self, now: datetime) -> sqlite3.Row | None:
+    def claim(self, now: datetime, paused: tuple[str, ...] = ()) -> sqlite3.Row | None:
         """Take the most urgent change that is ready. The row stays until `complete`, so a crash mid-run leaves it for `requeue_claimed` instead of losing the change. Claiming counts as an attempt, so an input that kills the process cannot loop forever across restarts."""
+        skip, args = _unpaused(_QUEUE_REPO, paused)
         with self._lock:
             row = self._db.execute(
-                "SELECT * FROM queue WHERE claimed=0 AND (not_before IS NULL OR not_before<=?) "
-                "ORDER BY priority DESC, seq ASC LIMIT 1", (_iso(now),)).fetchone()
+                f"SELECT * FROM queue WHERE claimed=0 AND (not_before IS NULL OR not_before<=?){skip} "
+                "ORDER BY priority DESC, seq ASC LIMIT 1", (_iso(now), *args)).fetchone()
             if row:
                 self._db.execute("UPDATE queue SET claimed=1, attempts=attempts+1 WHERE run_id=?", (row["run_id"],))
                 self._db.commit()
@@ -362,9 +385,10 @@ class WatchState:
             self._db.commit()
         return ids
 
-    def pending_alerts(self) -> list[sqlite3.Row]:
+    def pending_alerts(self, paused: tuple[str, ...] = ()) -> list[sqlite3.Row]:
+        skip, args = _unpaused("repo", paused)
         with self._lock:
-            return self._db.execute("SELECT * FROM changes WHERE alert_pending IS NOT NULL").fetchall()
+            return self._db.execute(f"SELECT * FROM changes WHERE alert_pending IS NOT NULL{skip}", args).fetchall()
 
     def drop(self, run_id: str) -> None:
         self._q("DELETE FROM queue WHERE run_id=?", (run_id,))
@@ -543,6 +567,8 @@ class Watcher:
             self._rate_wait_until, self._rate_left = None, None
         self._retry_alerts(report)
         for repo in self.config.repos:
+            if self.config.is_paused(repo):
+                continue
             for kind in ("pull_request", "issue"):
                 try:
                     self._poll_list(repo, kind, report)
@@ -555,7 +581,7 @@ class Watcher:
                 if report.rate_limited:
                     return report
         try:
-            due = self.state.due_checks(self._clock())
+            due = self.state.due_checks(self._clock(), self.config.paused)
         except Exception as exc:  # noqa: BLE001
             report.errors.append(f"due re-checks: {type(exc).__name__}: {exc}")
             return report
@@ -706,7 +732,7 @@ class Watcher:
 
         if not self._emit:
             return
-        for row in self.state.pending_alerts()[:_ALERT_RETRIES_PER_POLL]:
+        for row in self.state.pending_alerts(self.config.paused)[:_ALERT_RETRIES_PER_POLL]:
             run_id = row["alert_pending"]
             try:
                 with open(os.path.join(self.config.out_dir, "screened", f"{run_id}.json"), encoding="utf-8") as fh:
@@ -885,8 +911,8 @@ class Watcher:
         """Whether the change joins the queue (`queued`) or is shed (`shed`), its priority, and the less urgent change to shed to make room when the queue is capped. Decides only: `record_examined` writes it all."""
         prio = _priority(hits, event.get("provenance") or {})
         cap = self.config.max_queue
-        if cap and self.state.queue_size() >= cap:
-            worst = self.state.lowest()
+        if cap and self.state.queue_size(self.config.paused) >= cap:
+            worst = self.state.lowest(self.config.paused)     # a paused repository's queue is kept, never shed
             if worst is not None and worst["priority"] < prio:
                 return "queued", prio, worst["run_id"]      # make room by shedding the least urgent
             return "shed", prio, None
@@ -902,7 +928,7 @@ class Watcher:
         """Take the highest-priority ready change, unless the hourly cap is reached, and mark it running."""
         if not self._may_run():
             return None
-        row = self.state.claim(self._clock())
+        row = self.state.claim(self._clock(), self.config.paused)
         if row is None:
             return None
         try:
