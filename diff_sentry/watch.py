@@ -285,6 +285,8 @@ def consumer_status(state_dir: str, now: datetime) -> tuple[str | None, bool]:
         return f"{path} was written by another diff-sentry build (version {marker.get('version')!r})", False
     if marker.get("runs_model") is not True:
         return f"the `watch` on {state_dir} runs --screen-only, so nothing would run the releases it is handed", False
+    if at.tzinfo is None:                   # every `watch` writes an aware time: a hand-edited one is not to be trusted
+        return None, True
     return None, (now - at).total_seconds() > _CONSUMER_STALE_S
 
 
@@ -619,7 +621,7 @@ class Watcher:
         self.state = WatchState(os.path.join(config.state_dir, "watch.db"))
         self.actors = ActorStore(os.path.join(config.state_dir, "actors.db"), clock=self._clock)
         self.snapshots = SnapshotStore(os.path.join(config.state_dir, "snapshots"))
-        self._lock = _InstanceLock(config.state_dir, required=config.max_deep_per_hour > 0)
+        self._lock = _InstanceLock(config.state_dir, required=config.max_deep_per_hour > 0 and not config.screen_only)
         self._import_lock = threading.Lock()       # the poller and, with workers > 1, the worker thread both import
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -646,7 +648,7 @@ class Watcher:
     def poll_once(self) -> PollReport:
         """One pass: list each repository (cheap, ETag), examine what is new or updated, then the re-checks that have come due. Never raises: a repository that fails is reported and the pass continues."""
         report = PollReport()
-        self._import_quietly(report)        # first: a GitHub rate-limit wait must not hold the releases back
+        self.import_hand_overs(report)        # first: a GitHub rate-limit wait must not hold the releases back
         now = self._clock()
         if self._rate_wait_until and now < self._rate_wait_until:
             report.rate_limited = True
@@ -1125,7 +1127,10 @@ class Watcher:
                 try:
                     with open(os.path.join(accepted, name), encoding="utf-8") as fh:
                         item = json.load(fh)
-                    queued += self._offer(run_id, int(item["priority"]), item["event"])
+                    priority, event = int(item["priority"]), item["event"]
+                    if not isinstance(event, dict) or event.get("kind") != "release":
+                        raise ValueError("not a release")
+                    queued += self._offer(run_id, priority, event)
                 except FileNotFoundError:
                     continue
                 except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -1137,7 +1142,8 @@ class Watcher:
             self._wake.set()
         return queued
 
-    def _import_quietly(self, report: PollReport | None = None) -> None:
+    def import_hand_overs(self, report: PollReport | None = None) -> None:
+        """`import_spool`, logged and counted in `report` instead of raised."""
         try:
             self.import_spool(report)
         except Exception as exc:  # noqa: BLE001 (a failed import leaves the files where they are, for the next pass)
@@ -1246,7 +1252,7 @@ class Watcher:
 
     def _run_pool(self, limit: int | None, *, serving: bool = False) -> int:
         """Run ready changes `workers` at a time until none is left and none is running (`drain`, at most `limit`), or, `serving`, until `stop()`. Returns how many it started. A stop or an interrupt leaves the runs it cuts off claimed for `recover()`; an error settles them, so a long-lived watcher strands nothing."""
-        self._import_quietly()
+        self.import_hand_overs()
         pool = self._new_pool()
         inflight: dict[Future, tuple[sqlite3.Row, dict]] = {}
         ran = 0
@@ -1280,7 +1286,7 @@ class Watcher:
         """Run ready changes until none is left (or `limit`, or the hourly cap). Returns how many ran."""
         if self.config.workers > 1:
             return self._run_pool(limit)
-        self._import_quietly()
+        self.import_hand_overs()
         ran = 0
         while (limit is None or ran < limit) and self.run_next() is not None:
             ran += 1
@@ -1301,7 +1307,7 @@ class Watcher:
             worker.start()
         try:
             while not self._stop.is_set() and self.config.queue_only:   # nothing to poll: hand-overs and the queue only
-                self._import_quietly()
+                self.import_hand_overs()
                 self._stop.wait(min(max(1.0, self._interval), 86_400.0))
             while not self._stop.is_set():
                 try:

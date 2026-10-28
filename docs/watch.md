@@ -23,7 +23,7 @@ poll (ETag) → ingest → snapshot archive → actor store → screen → queue
 
 **Releases from `release-watch --final`.** `release-watch --final` hands a release to this queue as a file under `<state>/final-queue/`; `watch` imports it at the start of each poll and of each queue run, so a release shares the hourly cap and the worker with pull requests and issues, is never shed, and is paused by `DS_WATCH_PAUSED_REPOS`. A release has no change row: its record is its response and trace. `--queue-only` polls nothing and runs only the queue. See [release-watch](release-watch.md#the-models-judgement---final-opt-in).
 
-**An hourly cap needs the lock.** `DS_WATCH_MAX_DEEP_PER_HOUR` holds only while one process claims runs, so on a platform without `fcntl` a `watch` with that cap set refuses to start.
+**An hourly cap needs the lock.** `DS_WATCH_MAX_DEEP_PER_HOUR` holds only while one process claims runs, so on a platform without `fcntl` a `watch` with that cap set refuses to start, unless it runs `--screen-only`.
 
 **Pausing a repository.** Dropping a repository from `DS_WATCH_REPOS` stops only its listing: its due re-checks, its undelivered early alerts and its queued model runs carry on. `DS_WATCH_PAUSED_REPOS` (matched in any case) stops the listing and those three, and changes nothing stored: the queue keeps its rows and their order, nothing is shed, and the watermarks, ETags and archive stay as they were. (A run a stop cut off on its last attempt is still kept as `failed` when the watcher restarts, as for any repository.) The watcher logs what it holds when it starts, and `--stats` counts the held runs (`queued_paused`) within `queued`. Remove it from the list and restart, and the watcher picks up where it stopped.
 

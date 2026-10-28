@@ -576,11 +576,15 @@ def _cmd_watch(args) -> int:
     try:
         if args.once:
             watcher.recover()
-            report = PollReport() if config.queue_only else watcher.poll_once()      # drain imports the hand-overs
+            if config.queue_only:                       # nothing to poll: the hand-overs, counted, then the queue
+                report = PollReport()
+                watcher.import_hand_overs(report)
+            else:
+                report = watcher.poll_once()
             ran = 0 if config.screen_only else watcher.drain()
             print(f"watch --once: listed={report.listed} new={report.new} revised={report.revised} "
                   f"unchanged={report.unchanged} alerts={report.alerts} queued={report.queued} "
-                  f"shed={report.shed} ran={ran} errors={len(report.errors)}")
+                  f"shed={report.shed} imported={report.imported} ran={ran} errors={len(report.errors)}")
             for e in report.errors:
                 print(f"  ! {e}", file=sys.stderr)
             for t in report.truncated:
@@ -725,8 +729,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="deterministic tier only: archive, correlate, alert; never run the model (no creds)")
     w.add_argument("--deep-min-severity", default=None, choices=SEVERITIES,
                    help="only queue for the model when the screen reached this severity (default: info = all)")
-    w.add_argument("--max-queue", type=int, default=None, help="shed the lowest priority beyond this (0 = off)")
-    w.add_argument("--max-deep-per-hour", type=int, default=None, help="cap model runs per hour (0 = off)")
+    w.add_argument("--max-queue", type=int, default=None,
+                   help="shed the lowest priority beyond this (0 = off; a release from release-watch --final is never shed)")
+    w.add_argument("--max-deep-per-hour", type=int, default=None,
+                   help="cap model runs per hour (0 = off); where there is no fcntl lock, a watch with a cap refuses to start unless --screen-only")
     w.add_argument("--workers", type=int, default=None,
                    help="model runs at once, each in a process of its own (DS_WATCH_WORKERS, default 1)")
     w.add_argument("--no-emit", action="store_true", help="do not emit SIEM signals")

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import sys
 from datetime import timedelta
 from types import SimpleNamespace
@@ -189,6 +190,65 @@ def test_the_consumer_marker_is_required_and_goes_stale(make):
     assert "no `watch`" in problem
     make.make().poll_once()
     assert consumer_status(make.state, _T0 + timedelta(hours=2)) == (None, True)
+    marker = os.path.join(make.qdir, ".consumer")
+    for text, expected in (("{broken", "no `watch`"), ('{"version": 9, "runs_model": true, "at": "2026-02-27T05:00:00+00:00"}',
+                                                          "another diff-sentry build")):
+        with open(marker, "w") as fh:
+            fh.write(text)
+        assert expected in consumer_status(make.state, _T0)[0]
+    with open(marker, "w") as fh:                                 # a hand-edited time without a zone
+        fh.write('{"version": 1, "runs_model": true, "at": "2026-02-27T05:00:00"}')
+    assert consumer_status(make.state, _T0) == (None, True)
+
+
+def test_an_import_wakes_the_worker(make):
+    w = make.make()
+    w._wake.clear()
+    _spool(make)
+    w.poll_once()
+    assert w._wake.is_set()
+
+
+def test_a_release_whose_start_cannot_be_recorded_backs_off_and_the_change_behind_it_runs(make, monkeypatch):
+    w = make.make()
+    w.poll_once()
+    make.clock.advance(minutes=1)
+    make.world.pr("acme/widgets", 7)
+    _spool(make, priority=10**6)
+    w.poll_once()
+    real = w.state.note_deep
+
+    def once(now):
+        monkeypatch.setattr(w.state, "note_deep", real)
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(w.state, "note_deep", once)
+    with pytest.raises(RuntimeError):
+        w.drain()
+    assert w.drain() == 1 and [c["run_id"] for c in make.runner.calls] == ["acme__widgets-pr-7"]
+    make.clock.advance(hours=2)
+    assert w.drain() == 1 and make.runner.calls[-1]["run_id"] == _RUN
+
+
+def test_the_cap_never_picks_a_release_to_shed(make):
+    w = make.make()
+    _spool(make, priority=0)
+    w.poll_once()
+    assert w.state.lowest() is None and w.state.queue_size(sheddable=True) == 0 and w.state.queue_size() == 1
+
+
+def test_releases_run_in_the_worker_pool(make):
+    from tests.test_watch_pool import quick_runner
+
+    w = Watcher(_cfg(pathlib.Path(make.state).parent, workers=2), _detect(), list_api=make.world.list_api,
+                api=make.world.api, runner=quick_runner, emit=False, clock=make.clock)
+    try:
+        _spool(make)
+        _spool(make, run_id="pypi__demo-1.1-r1")
+        assert w.drain() == 2 and w.state.queue_size() == 0
+        assert not os.listdir(os.path.join(make.qdir, "accepted"))
+    finally:
+        w.close()
 
 
 def test_queue_only_runs_hand_overs_without_a_watchlist(make):
@@ -214,6 +274,74 @@ def test_an_hourly_cap_without_a_lock_refuses_to_start(make, monkeypatch):
 
 
 # ── release-watch's side ──────────────────────────────────────────────────────────────────────────
+
+def test_without_final_nothing_is_handed_over(tmp_path):
+    pypi = _PyPI()
+    _release("1.0", pypi)
+    w = ReleaseWatcher(["demo"], state_dir=str(tmp_path / "s"), out_dir=str(tmp_path / "o"), fetch=pypi, emit=False)
+    try:
+        w.poll_once()
+        _release("1.1", pypi, payload=True)
+        [result] = w.poll_once()
+        assert result["signal"] and not os.path.exists(final_queue_dir(str(tmp_path / "s")))
+    finally:
+        w.close()
+
+
+def test_a_hand_over_that_fails_is_a_comparison_that_failed(tmp_path):
+    pypi = _PyPI()
+    _release("1.0", pypi)
+    seen = []
+
+    def flaky(event, run_id, response):
+        seen.append(run_id)
+        if len(seen) == 1:
+            raise OSError("disk full")
+
+    w = ReleaseWatcher(["demo"], state_dir=str(tmp_path / "s"), out_dir=str(tmp_path / "o"), fetch=pypi, emit=False,
+                       on_screened=flaky)
+    try:
+        w.poll_once()
+        _release("1.1", pypi, payload=True)
+        assert "error" in w.poll_once()[0]                       # the files are not recorded: judged again
+        assert "error" not in w.poll_once()[0] and seen == [_RUN, _RUN]
+    finally:
+        w.close()
+
+
+def test_a_comparison_given_up_is_not_handed_over(tmp_path):
+    pypi = _PyPI()
+    _release("1.0", pypi)
+    seen = []
+    w = ReleaseWatcher(["demo"], state_dir=str(tmp_path / "s"), out_dir=str(tmp_path / "o"), fetch=pypi, emit=False,
+                       on_screened=lambda event, run_id, response: seen.append(run_id))
+    try:
+        w.poll_once()
+        _release("1.1", pypi, payload=True)
+        pypi.broken.add("demo-1.1")
+        for _ in range(6):
+            w.poll_once()
+        assert seen == []
+    finally:
+        w.close()
+
+
+def test_an_image_judged_is_handed_over_too(tmp_path):
+    from tests.test_images import _ATTACK, _Registry, _seed, _watcher
+
+    reg = _Registry()
+    _seed(reg)
+    seen = []
+    w = _watcher(tmp_path, reg, on_screened=lambda event, run_id, response: seen.append((run_id, event["kind"])))
+    try:
+        w.poll_once()
+        assert seen == []                                         # first sight is the baseline
+        reg.push("v1.107.0", _ATTACK)
+        w.poll_once()
+        assert [k for _, k in seen] == ["release"] and seen[0][0].startswith("oci__ghcr.io_berriai_litellm-v1.107.0-")
+    finally:
+        w.close()
+
 
 def test_only_a_recorded_comparison_is_handed_over(tmp_path):
     pypi = _PyPI()
@@ -265,11 +393,16 @@ def test_release_facts_ride_in_the_untrusted_body_of_a_release_with_files():
     assert body.index("### RELEASE FACTS") > body.rindex("### FILE (untrusted)")
 
 
-def test_release_facts_never_make_a_release_without_files_groundable():
-    facts_only = {"repo": "pypi/demo", "kind": "release", "number": None, "author": "", "body": "", "title": "",
-                  "files": [], "release": _event()["release"]}
-    assert "### RELEASE FACTS" not in normalize_event(facts_only)
-    assert not has_groundable_content(normalize_event(facts_only))
+def test_release_facts_never_decide_whether_a_release_without_files_is_groundable():
+    # a real release without files (a tag comparison, a give-up) has a title, which is content as it always was;
+    # the facts are left out, so they change nothing either way
+    for title in ("demo 1.1 (against its tag)", ""):
+        bare = {"repo": "pypi/demo", "kind": "release", "number": None, "author": "", "body": "", "title": title,
+                "files": []}
+        with_facts = {**bare, "release": _event()["release"]}
+        assert "### RELEASE FACTS" not in normalize_event(with_facts)
+        assert has_groundable_content(normalize_event(with_facts)) == has_groundable_content(normalize_event(bare))
+    assert not has_groundable_content(normalize_event(with_facts))   # no title, no files: still no content
 
 
 def test_a_scan_of_the_release_facts_is_not_evidence_of_the_change(recorded):
@@ -384,3 +517,11 @@ def test_a_release_run_offline_renders_and_exports_with_its_artifact(tmp_path):
     assert resp.source["kind"] == "release"
     exported = export_dataset({_RUN: events})
     assert json.dumps(exported, default=str).count(_RUN) >= 1
+    out = str(tmp_path / "rendered.json")
+    assert cli.main(["render", path, _RUN, "--out", out]) == 0
+    with open(out) as fh:
+        assert json.load(fh)["artifact"] == artifact_echo(event)
+    for e in events:                                              # a trace written before the field
+        if e["type"] == "run_start":
+            e["payload"]["meta"].pop("artifact")
+    assert build_response(verdict_from_events(events), events, _RUN).artifact is None

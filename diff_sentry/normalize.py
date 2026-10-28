@@ -64,7 +64,8 @@ _RELEASE_FACT_KEYS = (
     "tag_differs", "tag_missing", "dependency_sources", "install_scripts_added", "install_scripts_changed",
     "dependencies_run_at_install", "dependencies_young", "notes",
 )
-_IMAGE_FACT_KEYS = ("image", "tag", "digest", "namespace", "provenance", "known", "notes")
+_IMAGE_FACT_KEYS = ("image", "tag", "digest", "namespace", "provenance", "notes", "known")
+_MAX_KNOWN_PER_KIND = 50        # an image's `known` sources, builders and workflows: bounded each, so they never push out the rest
 
 # GitHub-authoritative enums. Constraining the MF1 sandwich to these drops any arbitrary string a host-supplied/pasted `provenance` might try to smuggle into the "trusted" header as free text.
 _GH_AUTHOR_TYPES = frozenset({"User", "Bot", "Organization", "Mannequin"})
@@ -165,10 +166,14 @@ def _release_facts(event: dict) -> dict:
     release = event.get("release")
     if not isinstance(release, dict):
         return {}
-    out = {k: release[k] for k in _RELEASE_FACT_KEYS if release.get(k) not in (None, "", [], {})}
+    out: dict = {}
     image = release.get("image")
-    if isinstance(image, dict):
+    if isinstance(image, dict):         # first: the image's own facts before anything a bound could cut
         out["image"] = {k: image[k] for k in _IMAGE_FACT_KEYS if image.get(k) not in (None, "", [], {})}
+        known = out["image"].get("known")
+        if isinstance(known, dict):
+            out["image"]["known"] = {k: v[:_MAX_KNOWN_PER_KIND] if isinstance(v, list) else v for k, v in known.items()}
+    out.update({k: release[k] for k in _RELEASE_FACT_KEYS if release.get(k) not in (None, "", [], {})})
     return out
 
 
@@ -177,7 +182,7 @@ def normalize_event(event: dict, *, facts: bool = True) -> str:
 
     Layout: METADATA (derived) → the untrusted body/patches → the SAME METADATA again. The head and tail are our computed structure so dspy's preview window can't be colonised by attacker free-text.
 
-    A release with files also gets its RELEASE FACTS after them (before any comment). A release without files gets none, so it still renders as no content (`has_groundable_content`). `facts=False` leaves them out: the text a planner's scan is grounded in (`indicators._Change`), since the facts are the host's, not the change's."""
+    A release with files also gets its RELEASE FACTS after them (before any comment). A release without files gets none, so the facts never decide whether it has groundable content (`has_groundable_content`); its title does, as before. `facts=False` leaves them out: the text a planner's scan is grounded in (`indicators._Change`), since the facts are the host's, not the change's."""
     meta = event_metadata(event)
     header = json.dumps({"_diff_sentry_metadata": meta}, ensure_ascii=False, indent=2)
     body_parts: list[str] = []
