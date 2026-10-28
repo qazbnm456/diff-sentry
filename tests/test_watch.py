@@ -1397,3 +1397,21 @@ def test_a_paused_repository_is_never_shed_to_make_room(rig):
     report = p.poll_once()
     assert report.shed == 0 and report.queued == 1
     assert sorted(p.state.queued_run_ids()) == ["acme__gadgets-pr-2", "acme__widgets-pr-1"]
+
+
+def test_a_pause_holds_its_own_repository_only_whatever_case_it_is_stored_in(rig, caplog):
+    # `acme/widgets-pr`'s run ids (`acme__widgets-pr-pr-7`) start with `acme__widgets-pr-`, as `Acme/Widgets`'s do
+    repos = ("Acme/Widgets", "acme/widgets-pr")
+    w = _start(rig, repos=repos)
+    for repo in repos:
+        rig.world.pr(repo, 7)
+    w.poll_once()
+    w.close()
+    with caplog.at_level("INFO", logger="diff_sentry.watch"):
+        p = rig.make(repos=repos, paused=("acme/widgets",))
+    assert "paused (not polled, re-checked, re-alerted or run): acme/widgets; 1 queued run(s) held" in caplog.text
+    assert p.drain() == 1 and [c["run_id"] for c in rig.runner.calls] == ["acme__widgets-pr-pr-7"]
+    assert p.state.queued_run_ids() == ["Acme__Widgets-pr-7"]
+    stats = p.state.stats(p.config.paused)
+    assert (stats["queued"], stats["queued_paused"], stats["paused"]) == (1, 1, ["acme/widgets"])
+    assert "queued_paused" not in p.state.stats()

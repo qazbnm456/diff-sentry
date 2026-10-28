@@ -207,6 +207,8 @@ def test_classifier_omit_params_refuse_a_parameter_not_on_the_list(clean_env, ra
 
 
 @pytest.mark.parametrize(("var", "value", "omit"), [("DS_CLASSIFIER_LM_KWARGS", '{"temperature": 1}', "temperature"),
+                                                     ("DS_CLASSIFIER_LM_KWARGS", '{"extra_body": {"temperature": 1}}',
+                                                      "temperature"),
                                                      ("DS_CLASSIFIER_MAX_TOKENS", "4096", "max_tokens")])
 def test_classifier_omit_params_refuse_a_parameter_another_setting_asks_for(clean_env, var, value, omit):
     clean_env.setenv("DS_ROOT_LM", "p")

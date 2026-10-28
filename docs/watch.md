@@ -7,6 +7,7 @@ uv run diff-sentry watch --repos owner/name other/name        # poll, screen, qu
 uv run diff-sentry watch --screen-only --repos-file repos.txt # deterministic tier only: no model roles (gh must be logged in)
 uv run diff-sentry watch --once --repos owner/name            # one pass, run the queue, exit
 uv run diff-sentry watch --stats                              # the watcher's state counts (read-only)
+DS_WATCH_PAUSED_REPOS=owner/name uv run diff-sentry watch ...  # hold a repository: its queue waits, nothing cleared
 uv run diff-sentry watch --requeue-failed                     # bring back runs that exhausted their attempts
 uv run diff-sentry actor mallory                              # the dossier of an account it has seen
 uv run diff-sentry archive verify                             # re-hash every object in the snapshot archive
@@ -19,7 +20,7 @@ poll (ETag) → ingest → snapshot archive → actor store → screen → queue
 
 **Time is the cost.** The intended model is a local one, so every change reaches it by default and the deterministic screen only decides the order: highest severity first. The optional caps are off unless you set them: `DS_WATCH_DEEP_MIN_SEVERITY`, `DS_WATCH_MAX_QUEUE`, `DS_WATCH_MAX_DEEP_PER_HOUR`. A change the queue sheds keeps its screened record and a `shed` state. The queue is a table, so a restart loses nothing. The poller and the model worker are separate threads, so a slow model never delays the screen or its alert. One model run takes minutes, so a busy watchlist outruns a single run at a time: `--workers N` (`DS_WATCH_WORKERS`, default 1) runs N at once, each in a process of its own, as many as the model host serves.
 
-**Pausing a repository.** Dropping a repository from `DS_WATCH_REPOS` stops only its listing: its due re-checks, its undelivered early alerts and its queued model runs carry on. `DS_WATCH_PAUSED_REPOS` (matched in any case) holds all four and changes nothing stored: the queue keeps its rows and their order, nothing is marked failed or shed, and the watermarks, ETags and archive stay as they were. Remove it from the list and restart, and the watcher picks up where it stopped.
+**Pausing a repository.** Dropping a repository from `DS_WATCH_REPOS` stops only its listing: its due re-checks, its undelivered early alerts and its queued model runs carry on. `DS_WATCH_PAUSED_REPOS` (matched in any case) stops the listing and those three, and changes nothing stored: the queue keeps its rows and their order, nothing is shed, and the watermarks, ETags and archive stay as they were. (A run a stop cut off on its last attempt is still kept as `failed` when the watcher restarts, as for any repository.) The watcher logs what it holds when it starts, and `--stats` counts the held runs (`queued_paused`) within `queued`. Remove it from the list and restart, and the watcher picks up where it stopped.
 
 **The alert does not wait for the model.** Evidence at the signal floor is emitted the moment the screen finishes (`"stage": "screen"`); the model's own signal follows under the same `run_id` (`"stage": "final"`). A later revision alerts early again only for floor-level evidence no earlier revision already raised, judged by hit id: an edit next to a payload changes the surrounding text that id includes, so it can page again. Each revision is its own run, so it also gets its own final signal.
 

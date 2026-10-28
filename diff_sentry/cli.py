@@ -467,12 +467,14 @@ def _cmd_watch(args) -> int:
             print(f"watch: no state at {db}", file=sys.stderr)
             return 2
         try:
+            env = os.getenv("DS_WATCH_PAUSED_REPOS", "")
+            paused = WatchConfig(paused=parse_repos([env])).paused if env else ()
             state = WatchState(db, read_only=True)
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:
             print(f"watch: {exc}", file=sys.stderr)
             return 2
         try:
-            print(json.dumps(state.stats(), indent=2))
+            print(json.dumps(state.stats(paused), indent=2))
         finally:
             state.close()
         return 0
@@ -654,7 +656,8 @@ def build_parser() -> argparse.ArgumentParser:
     sc.set_defaults(func=_cmd_scan)
 
     w = sub.add_parser("watch", help="monitor a watchlist of repositories (poll, screen, queue for the model)")
-    w.add_argument("--repos", nargs="+", help="owner/name repositories (or set DS_WATCH_REPOS)")
+    w.add_argument("--repos", nargs="+", help="owner/name repositories (or set DS_WATCH_REPOS; DS_WATCH_PAUSED_REPOS "
+                   "holds some without clearing their queue)")
     w.add_argument("--repos-file", help="a file of owner/name entries, one per line (# comments allowed)")
     w.add_argument("--out", default="./output")
     w.add_argument("--state", default=os.getenv("DS_WATCH_STATE_DIR", "./output/state"),

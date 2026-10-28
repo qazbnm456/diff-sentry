@@ -97,7 +97,8 @@ def _classifier_omit_params(lm_kwargs: dict | None) -> tuple[str, ...]:
     if unknown:
         raise ValueError(f"DS_CLASSIFIER_OMIT_PARAMS may name only {', '.join(_CLASSIFIER_OMITTABLE)}, "
                          f"not {', '.join(unknown)}")
-    if "temperature" in names and lm_kwargs and "temperature" in lm_kwargs:
+    sent = set(lm_kwargs or {}) | set((lm_kwargs or {}).get("extra_body") or {})     # extra_body is merged into the request
+    if "temperature" in names and "temperature" in sent:
         raise ValueError("DS_CLASSIFIER_OMIT_PARAMS leaves out temperature, which DS_CLASSIFIER_LM_KWARGS sets")
     if "max_tokens" in names and os.getenv("DS_CLASSIFIER_MAX_TOKENS"):
         raise ValueError("DS_CLASSIFIER_OMIT_PARAMS leaves out max_tokens, which DS_CLASSIFIER_MAX_TOKENS sets")
