@@ -406,15 +406,20 @@ class WatchState:
                                     (_iso(now - timedelta(hours=1)),)).fetchall()
         return [r["started_at"] for r in rows]
 
-    def stats(self) -> dict:
+    def stats(self, paused: tuple[str, ...] = ()) -> dict:
+        """State counts. `queued` counts every waiting run; with `paused`, `queued_paused` says how many of them are held."""
+        held = self.queue_size() - self.queue_size(paused) if paused else 0
         with self._lock:
             states = {r["state"]: r["n"] for r in self._db.execute(
                 "SELECT state, COUNT(*) AS n FROM changes GROUP BY state")}
             queued = self._db.execute("SELECT COUNT(*) FROM queue WHERE claimed=0").fetchone()[0]
             dead = self._db.execute("SELECT COUNT(*) FROM queue WHERE claimed=?", (_DEAD,)).fetchone()[0]
             revised = self._db.execute("SELECT COUNT(*) FROM changes WHERE revision>0").fetchone()[0]
-        return {"changes": sum(states.values()), "states": states, "queued": queued, "failed_runs_kept": dead,
-                "revised": revised}
+        out = {"changes": sum(states.values()), "states": states, "queued": queued, "failed_runs_kept": dead,
+               "revised": revised}
+        if paused:
+            out.update(paused=list(paused), queued_paused=held)
+        return out
 
 
 # ── the watcher ───────────────────────────────────────────────────────────────────────────────────────
@@ -544,6 +549,10 @@ class Watcher:
         self._rate_wait_until: datetime | None = None
         self._rate_left: int | None = None                 # the API budget we believe is left
         self._rate_reset: datetime | None = None
+        if config.paused:       # a pause that names no repository with state holds nothing: say what it holds
+            held = self.state.queue_size() - self.state.queue_size(config.paused)
+            log.info("paused (not polled, re-checked, re-alerted or run): %s; %d queued run(s) held",
+                     ", ".join(config.paused), held)
 
     def recover(self) -> None:
         """Take the state directory's lock and put back whatever a previous process was judging when it stopped. `serve()` and `watch --once` call this; a read-only look at the state does not, so it cannot steal a running change from a live watcher."""
