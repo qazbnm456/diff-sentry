@@ -301,3 +301,86 @@ def test_unread_release_code_lets_the_planner_answer_inconclusive():
     assert not _withheld({**event, "release": {**event["release"], "unread_code": [], "notes": []}})
     assert _withheld({**event, "release": {**event["release"], "unread_code": ["wheel/x.so (native)"]}})
     assert _withheld({**event, "release": {"image": {"notes": ["a layer was not read"]}}})
+
+
+# ── the artifact block ────────────────────────────────────────────────────────────────────────────
+
+def test_the_artifact_names_a_release_and_presents_only_a_configured_repository_as_its_source():
+    from diff_sentry.releases import artifact_echo
+
+    event = _event()
+    art = artifact_echo(event)
+    assert (art["ecosystem"], art["registry"], art["name"], art["version"], art["previous_version"]) == (
+        "pypi", "pypi.org", "demo", "1.1", "1.0")
+    assert art["source_repo"] is None                             # nothing configured: never guessed
+    told = {**event, "release": {**event["release"], "source": "acme/demo", "source_configured": True}}
+    read_off = {**event, "release": {**event["release"], "source": "attacker/demo", "source_configured": False}}
+    assert artifact_echo(told)["source_repo"] == "acme/demo" and artifact_echo(read_off)["source_repo"] is None
+    npm = {"repo": "npm/@scope/x", "kind": "release", "release": {"package": "@scope/x", "version": "2.0.0"}}
+    assert artifact_echo(npm)["registry"] == "registry.npmjs.org"
+    image = {"repo": "oci/ghcr.io/acme/app", "kind": "release", "release": {
+        "image": {"image": "ghcr.io/acme/app", "tag": "v2", "digest": "sha256:ab",
+                  "provenance": [{"source": "acme/app"}, {"source": "acme/app"}]}, "previous": "sha256:aa"}}
+    assert artifact_echo(image) == {"ecosystem": "ghcr", "registry": "ghcr.io", "name": "acme/app", "tag": "v2",
+                                    "digest": "sha256:ab", "previous_digest": "sha256:aa", "source_repo": None,
+                                    "claimed_source": ["acme/app"]}
+    assert artifact_echo({"repo": "acme/app", "kind": "pull_request", "number": 1}) is None
+
+
+def test_the_screen_and_its_payload_carry_the_artifact_and_a_pull_requests_do_not(tmp_path):
+    from diff_sentry.config import DetectConfig
+    from diff_sentry.emit import signal_payload
+    from diff_sentry.schema import DetectionResponse
+
+    config = DetectConfig.screen_from_env()
+    art = cli.screen(_event(), run_id=_RUN, outdir=str(tmp_path), config=config, emit=False)
+    assert art.response.artifact["name"] == "demo" and signal_payload(art.response)["artifact"]["version"] == "1.1"
+    pr = {"repo": "acme/app", "kind": "pull_request", "number": 1, "title": "t", "body": "", "files": []}
+    plain = cli.screen(pr, run_id="pr", outdir=str(tmp_path), config=config, emit=False)
+    assert plain.response.artifact is None and "artifact" not in signal_payload(plain.response)
+    stored = json.loads((tmp_path / "screened" / f"{_RUN}.json").read_text())
+    stored.pop("artifact")                                        # a screened record written before the field
+    assert DetectionResponse.model_validate(stored).artifact is None
+
+
+def test_a_release_run_offline_renders_and_exports_with_its_artifact(tmp_path):
+    """The whole read path for a release's trajectory: a scripted run whose meta is built as `cli.run` builds it, then the response it renders to and the reward-free export."""
+    import asyncio
+
+    from rlm_harness import RLMConfig, TraceRecorder, configure
+    from rlm_harness.testing import ScriptedInterpreter, scripted_lm, submit
+    from rlm_harness.trace import load_events
+
+    from diff_sentry.assemble import verdict_from_events
+    from diff_sentry.config import DetectConfig
+    from diff_sentry.detect import ClassifyChange
+    from diff_sentry.releases import artifact_echo
+    from diff_sentry.response import build_response
+    from diff_sentry.rl_export import export_dataset
+
+    event = _event()
+    from tests.conftest import MALICIOUS_VERDICT as verdict
+
+    configure(RLMConfig(main_model="x", sub_model="x", interpreter="mock", observe=False, max_iterations=4),
+              main_lm=scripted_lm([{"reasoning": "r", "code": "SUBMIT(...)"}]),
+              sub_lm=scripted_lm([{"reasoning": "r", "verdict": "{}"}]))
+    cfg = DetectConfig(main_model="x", sub_model="x", interpreter="mock", classifier_model="x")
+    task = ClassifyChange(config=cfg, interpreter=ScriptedInterpreter([submit({"verdict": verdict})]), event=event)
+    text = normalize_event(event)
+    meta = {"event": text, "instructions": task.instructions, "source": cli._source_echo(event),
+            **cli._artifact_meta(event), "baseline_indicators": cli._baseline_indicators(event),
+            "emit_on": ["suspicious", "malicious"], "planner": "p", "analyst": "a", "classifier": "c",
+            "max_iterations": 4}
+    path = str(tmp_path / f"{_RUN}.jsonl")
+
+    async def go():
+        with TraceRecorder(path, run_id=_RUN, meta=meta):
+            return await task.arun(event=text)
+
+    asyncio.run(go())
+    events = load_events(path, _RUN)
+    resp = build_response(verdict_from_events(events), events, _RUN)
+    assert resp.verdict == "malicious" and resp.signal and resp.artifact == artifact_echo(event)
+    assert resp.source["kind"] == "release"
+    exported = export_dataset({_RUN: events})
+    assert json.dumps(exported, default=str).count(_RUN) >= 1

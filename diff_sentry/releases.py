@@ -840,6 +840,7 @@ def release_event(package: str, version: str, files: list[ReleaseFile], fetch: F
         source = repos.pop() if len(repos) == 1 and _REPO_RE.fullmatch(next(iter(repos))) else None
     if source and not npm:
         facts.update(tag_facts(name, version, prev, new, old, source, fetch, notes, configured=configured))
+        facts["source_configured"] = configured      # `--sources`, not read off a publisher (`artifact_echo`)
     facts["notes"] = notes[:50]
     return {
         "repo": f"{registry}/{name}", "kind": "release", "number": None, "author": "",
@@ -1025,7 +1026,33 @@ def tag_event(package: str, version: str, files: list[ReleaseFile], fetch: Fetch
         facts = _compare_tag(facts, trees, new, arts(prev))
     return {"repo": f"pypi/{name}", "kind": "release", "number": None, "author": "", "body": "", "files": [],
             "title": f"{name} {version} (against its tag)", "created_at": None,
-            "release": {"package": name, "version": version, "previous": prev, **facts, "notes": notes[:50]}}
+            "release": {"package": name, "version": version, "previous": prev, **facts, "source_configured": configured,
+                        "notes": notes[:50]}}
+
+
+_REGISTRY_HOSTS = {"pypi": "pypi.org", "npm": "registry.npmjs.org"}
+
+
+def artifact_echo(event: dict) -> dict | None:
+    """What a release or image is, for the response and the SIEM payload: ecosystem, registry, name, version or tag, digest, and what it was compared with. Only a configured `--sources` repository is `source_repo`; a Trusted Publisher names who uploaded (`publisher`), and an image's `vcs:source` is what its unsigned provenance claims (`claimed_source`), so neither is presented as the source. None for an event that is not a release."""
+    release = event.get("release") if event.get("kind") == "release" else None
+    if not isinstance(release, dict):
+        return None
+    image = release.get("image")
+    if isinstance(image, dict):
+        host, _, name = str(image.get("image") or "").partition("/")
+        claimed = sorted({str(p.get("source")) for p in image.get("provenance") or []
+                          if isinstance(p, dict) and p.get("source")})
+        return {"ecosystem": "ghcr" if host == "ghcr.io" else "dockerhub", "registry": host, "name": name,
+                "tag": image.get("tag"), "digest": image.get("digest") or None,
+                "previous_digest": release.get("previous") or None, "source_repo": None,
+                "claimed_source": claimed or None}
+    ecosystem = str(event.get("repo") or "").partition("/")[0]
+    return {"ecosystem": ecosystem, "registry": _REGISTRY_HOSTS.get(ecosystem), "name": release.get("package"),
+            "version": release.get("version"), "previous_version": release.get("previous") or None,
+            "source_repo": release.get("source") if release.get("source_configured") else None,
+            "publisher": release.get("publishers") or None,
+            "previous_publishers": release.get("previous_publishers") or None}
 
 
 def run_id_for(package: str, version: str, revision: int = 0, registry: str = "pypi") -> str:
@@ -1258,7 +1285,8 @@ class ReleaseWatcher:
         for row in self.db.execute("SELECT * FROM tag_checks WHERE state='pending'").fetchall():
             name = normalize_name(row["package"])
             waited = (self.now() - datetime.fromisoformat(row["first_seen"])).total_seconds()
-            base = {"package": name, "version": row["version"], "source": row["source"]}
+            base = {"package": name, "version": row["version"], "source": row["source"],
+                    "source_configured": bool(row["configured"])}
             try:
                 tags = tag_commits(self.fetch, row["source"])
                 if tags is None and not row["configured"]:

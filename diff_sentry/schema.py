@@ -275,6 +275,10 @@ class DetectionResponse(BaseModel):
     # None in a stored response that predates the field, where every hit counted: read it as the max there.
     floor_indicator_severity: str | None = None
     source: dict | None = Field(default=None, description="Echoed change metadata (repo/kind/number).")
+    artifact: dict | None = Field(
+        default=None, description="A release's or image's identity (`releases.artifact_echo`): ecosystem, registry, "
+        "name, version or tag, digest, what it was compared with. None for a PR, an issue, or a stored response "
+        "that predates it.")
     refusal: RefusalInfo | None = None
     process: ProcessInfo = Field(default_factory=ProcessInfo)
     rubric: RubricReport | None = Field(

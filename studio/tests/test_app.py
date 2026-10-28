@@ -278,7 +278,8 @@ def test_the_consoles_siem_payload_names_every_field_the_emitter_sends():
     from diff_sentry.schema import IndicatorHit
 
     hit = IndicatorHit(id="ind-x-1", rule="x", severity="high", title="t", evidence="e")
-    sent = signal_payload(DetectionResponse(id="r", status="classified", signal=True, indicators=[hit]))
+    sent = signal_payload(DetectionResponse(id="r", status="classified", signal=True, indicators=[hit],
+                                            artifact={"ecosystem": "pypi", "name": "demo"}))
     js = pathlib.Path(appmod.__file__).parent.parent.joinpath("static", "app.js").read_text()
     mirror = js[js.index("function siemPayload"):js.index("// ── skeleton")]
     for key in [*sent, *sent["indicators"][0]]:

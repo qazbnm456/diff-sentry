@@ -56,6 +56,8 @@ async def detect_from_event(
             "instructions": task.instructions,
             # The change under review: echoed into the response envelope + the SIEM signal.
             "source": _source_echo(event),
+            # What a release or image is (`releases.artifact_echo`), echoed the same way; absent for a PR or issue.
+            **_artifact_meta(event),
             # The host-derived facts about the author and the event (account age as of the event, profile, timestamps, fork, commit offsets), so an offline reader sees what the ingest saw.
             **({"provenance": event["provenance"]} if event.get("provenance") else {}),
             # The deterministic baseline: assemble unions this with every scan_indicators tool call.
@@ -110,6 +112,13 @@ _SOURCE_KEYS = ("repo", "kind", "number", "author", "title", "file_count", "cont
 def _source_echo(event: dict) -> dict:
     meta_source = event_metadata(event)
     return {k: meta_source.get(k) for k in _SOURCE_KEYS}
+
+
+def _artifact_meta(event: dict) -> dict:
+    from .releases import artifact_echo
+
+    artifact = artifact_echo(event)
+    return {"artifact": artifact} if artifact else {}
 
 
 def _write(path_parts: tuple[str, str], content: str) -> str:
@@ -204,6 +213,7 @@ def screen(
     meta = {
         "event": normalize_event(event),
         "source": _source_echo(event),
+        **_artifact_meta(event),
         "baseline_indicators": baseline if baseline is not None else _baseline_indicators(event),
         "emit_on": list(config.emit_on),
         **({"provenance": event["provenance"]} if event.get("provenance") else {}),

@@ -281,6 +281,7 @@
       techniques: r.techniques, suspect_files: r.suspect_files, summary: r.summary,
       indicators: hits.map((h) => ({ id: h.id, rule: h.rule, severity: h.severity, title: h.title, location: h.location, grounded: grounded(h) })),
       indicator_count: (r.indicators || []).length,
+      ...(r.artifact ? { artifact: r.artifact } : {}),     // a release's or image's identity; absent for a PR or issue
     };
   }
 
