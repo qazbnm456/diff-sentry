@@ -177,11 +177,11 @@ def test_a_claim_that_fails_leaves_the_runs_in_flight_alone(make):
     w = make.make(slow_runner, 3, workers=3)
     real, calls = w.state.claim, []
 
-    def flaky(now):
+    def flaky(now, *rest):
         calls.append(now)
         if len(calls) == 2:
             raise RuntimeError("database is locked")
-        return real(now)
+        return real(now, *rest)
 
     w.state.claim = flaky
     w.drain()
@@ -343,3 +343,16 @@ def test_shedding_is_written_with_the_change_that_takes_its_place(make):
     states = {n: w.state.change("acme/widgets", "pull_request", n)["state"] for n in (1, 2, 3)}
     assert sorted(states.values()) == ["queued", "queued", "shed"] and states[3] == "queued"
     assert w.state.queue_size() == 2
+
+
+def test_the_pool_claims_nothing_of_a_paused_repository(make):
+    w = make.make(quick_runner, 2, workers=2)
+    w.close()
+    p = Watcher(_cfg(make.tmp, workers=2, paused=("Acme/Widgets",)), _detect(), list_api=make.world.list_api,
+                api=make.world.api, runner=quick_runner, emit=False, clock=make.clock)
+    try:
+        p.recover()
+        assert p.drain() == 0 and _runs(make.tmp) == []
+        assert p.state.stats()["states"] == {"queued": 2} and p.state.queue_size() == 2
+    finally:
+        p.close()

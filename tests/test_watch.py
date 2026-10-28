@@ -265,6 +265,18 @@ def test_a_bad_severity_is_rejected():
         WatchConfig(deep_min_severity="urgent")
 
 
+def test_paused_repos_are_parsed_deduplicated_and_matched_in_any_case(monkeypatch):
+    monkeypatch.setenv("DS_WATCH_PAUSED_REPOS", "BerriAI/litellm, berriai/LiteLLM # held\na/b")
+    cfg = WatchConfig.from_env()
+    assert cfg.paused == ("berriai/litellm", "a/b")
+    assert cfg.is_paused("BerriAI/LiteLLM") and cfg.is_paused("A/B") and not cfg.is_paused("a/c")
+    monkeypatch.setenv("DS_WATCH_PAUSED_REPOS", "not-a-repo")
+    with pytest.raises(ValueError):
+        WatchConfig.from_env()
+    monkeypatch.delenv("DS_WATCH_PAUSED_REPOS")
+    assert WatchConfig.from_env().paused == ()
+
+
 # ── polling ────────────────────────────────────────────────────────────────────────────────────────────
 
 def test_existing_changes_are_not_analyzed_on_first_sight(rig):
@@ -1332,3 +1344,56 @@ def test_a_failing_bookkeeping_step_does_not_leave_the_change_running(rig):
     assert w.drain() == 1
     assert w.state.change("acme/widgets", "pull_request", 7)["state"] == "done"
     assert w.state.queued_run_ids() == [] and w.state.queue_size() == 0
+
+
+# ── pausing a repository ───────────────────────────────────────────────────────────────────────────────
+
+def test_a_paused_repository_is_held_as_it_is_and_resumes_where_it_stopped(rig):
+    repos = ("acme/widgets", "acme/gadgets")
+    w = _start(rig, repos=repos)
+    rig.siem.mode = "down"                                   # leaves an early alert of each pending
+    for repo in repos:
+        rig.world.pr(repo, 7, body=_PAYLOAD)
+    w.poll_once()
+    held = run_id_for("acme/widgets", "pull_request", 7, 0)
+    assert w.state.queue_size() == 2 and w.state.change("acme/widgets", "pull_request", 7)["alert_pending"] == held
+    marks = {(r, k): w.state.watermark(r, k) for r in repos for k in ("pull_request", "issue")}
+    w.close()
+
+    rig.siem.mode = "up"
+    rig.clock.advance(minutes=20)                            # the 15-minute re-checks are due
+    rig.world.pr("acme/widgets", 8)
+    rig.world.edit("acme/widgets", "pull_request", 7, body="hello")
+    rig.world.list_calls.clear()
+    p = rig.make(repos=repos, paused=("ACME/Widgets",))
+    report = p.poll_once()
+    assert not [c for c in rig.world.list_calls if "acme/widgets" in c[0]]        # not polled
+    assert report.alerts == 1 and [x["run_id"] for x in rig.sent] == ["acme__gadgets-pr-7"]   # its alert stays pending
+    assert report.revised == 0 and report.new == 0                                   # nor re-checked
+    assert p.drain() == 1 and [c["run_id"] for c in rig.runner.calls] == ["acme__gadgets-pr-7"]
+    assert p.state.queued_run_ids() == [held]                                        # kept, not failed or shed
+    row = p.state.change("acme/widgets", "pull_request", 7)
+    assert (row["state"], row["alert_pending"], row["checks"]) == ("queued", held, 0)
+    assert {k: p.state.watermark(*k) for k in marks} == marks
+    p.close()
+
+    r = rig.make(repos=repos)                                # resumed: the queue, the alert and the poll go on
+    r.recover()
+    report = r.poll_once()
+    assert held in [x["run_id"] for x in rig.sent[1:]]       # (the edit that dropped the payload alerts too)
+    assert report.new == 1 and report.revised == 1
+    r.drain()
+    assert {c["run_id"] for c in rig.runner.calls[1:]} == {held, "acme__widgets-pr-8", "acme__widgets-pr-7-r1"}
+
+
+def test_a_paused_repository_is_never_shed_to_make_room(rig):
+    w = _start(rig, repos=("acme/widgets", "acme/gadgets"))
+    rig.world.pr("acme/widgets", 1, assoc="MEMBER")
+    w.poll_once()
+    w.close()
+    rig.clock.advance(minutes=1)
+    p = rig.make(repos=("acme/widgets", "acme/gadgets"), paused=("acme/widgets",), max_queue=1)
+    rig.world.pr("acme/gadgets", 2, body=_PAYLOAD)
+    report = p.poll_once()
+    assert report.shed == 0 and report.queued == 1
+    assert sorted(p.state.queued_run_ids()) == ["acme__gadgets-pr-2", "acme__widgets-pr-1"]
