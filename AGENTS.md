@@ -16,7 +16,7 @@ rlm-harness is an exact PyPI pin (`rlm-harness==X.Y.Z` in `pyproject.toml`, lock
 
 - Run via `cli` (`pr` / `issue` / `classify`), never an ad-hoc script. `cli.run(event, …)` is the programmatic entry: it records `<out>/traces/{run_id}.jsonl` (dropping a stale one first, since TraceRecorder appends), writes `<out>/responses/{run_id}.json`, and emits the SIEM signal host-side after the run. It never raises: a crash still writes a `status=failed` response that can signal off the evidence floor. Extend `cli.py` rather than driving `detect_from_event` / `build_response` directly.
 - Offline: `python -m diff_sentry render <trace> <run_id>` re-renders a response; `python -m diff_sentry export "output/traces/*.jsonl" ds.json` exports the reward-free dataset; `actor <login>` prints an account's dossier and `archive verify` re-hashes the snapshot archive.
-- Continuous collection goes through `watch` and `release-watch`, which call `cli.run` (model) or `cli.screen` (deterministic, no creds) and never `detect_from_event` directly. `--screen-only` needs no model roles.
+- Continuous collection goes through `watch` and `release-watch`, which call `cli.run` (model) or `cli.screen` (deterministic, no creds) and never `detect_from_event` directly. `--screen-only` needs no model roles. `release-watch` only screens; with `--final` it hands a release to `watch`'s queue (a spool file under the state directory), and `watch` runs it.
 
 ## Hard invariants: do not break
 

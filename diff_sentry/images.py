@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import quote, urlsplit
 
 from .dbutil import open_versioned
@@ -579,8 +580,10 @@ class ImageWatcher:
 
     def __init__(self, images: list[str], *, state_dir: str, out_dir: str, floating: tuple[str, ...] = ("latest",),
                  fetch: Fetch | None = None, emit: bool = True, poster=None, config=None,
-                 now: Callable[[], datetime] | None = None):
+                 now: Callable[[], datetime] | None = None,
+                 on_screened: Callable[[dict, str, Any], None] | None = None):
         self.refs = [parse_image(i) for i in images]
+        self.on_screened = on_screened      # as `ReleaseWatcher.on_screened`
         os.makedirs(state_dir, exist_ok=True)
         self.floating = tuple(floating)
         self.out_dir = out_dir
@@ -693,6 +696,8 @@ class ImageWatcher:
                 event["release"].update({"previous": previous, "unread_code": unread, "notes": layer_notes})
             run_id = image_run_id(ref, tag, digest)
             art = screen(event, run_id=run_id, outdir=self.out_dir, config=self.config, emit=self.emit, poster=self.poster)
+            if record and self.on_screened is not None:
+                self.on_screened(event, run_id, art.response)
         except RateLimited as exc:                 # not a failure of the image: the next poll tries again
             log.warning("image %s:%s: %s", ref.label, tag, exc)
             return {"image": ref.label, "tag": tag, "rate_limited": True}

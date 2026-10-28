@@ -9,7 +9,7 @@ uv run diff-sentry release-watch --check litellm 1.106.2                # judge 
 uv run diff-sentry release-watch --packages litellm --sources litellm=BerriAI/litellm   # also compare each release with its git tag
 ```
 
-It needs no model, and no GitHub credentials unless it compares many releases with their tags. Set `DS_SIEM_WEBHOOK_URL` to receive alerts; `DS_RELEASE_PACKAGES` and `DS_RELEASE_INTERVAL` take the place of the flags. A package whose files are larger than 256 MB raises an alert that it was not compared; raise `DS_RELEASE_MAX_ARTIFACT_MB` for it.
+It needs no model (`--final`, below, hands the riskiest releases to the model through `watch`), and no GitHub credentials unless it compares many releases with their tags. Set `DS_SIEM_WEBHOOK_URL` to receive alerts; `DS_RELEASE_PACKAGES` and `DS_RELEASE_INTERVAL` take the place of the flags. A package whose files are larger than 256 MB raises an alert that it was not compared; raise `DS_RELEASE_MAX_ARTIFACT_MB` for it.
 
 ## What it does
 
@@ -77,6 +77,21 @@ Without credentials, GitHub's API allows 60 requests an hour, and each release t
 
 Without `--sources`, the watch uses the repository of the previous release's Trusted Publisher. That needs the previous release to be attested, and it names the repository whose workflow uploaded, so a private releaser repository compares nothing.
 
+## The model's judgement (`--final`, opt-in)
+
+By default `release-watch` only screens. With `--final` (or `DS_RELEASE_FINAL=1`), a release whose screen reaches `high` on content it read is also handed to the model, as a pull request is by `watch`:
+
+```bash
+uv run diff-sentry watch --queue-only --state ./output/state --out ./output     # or a watch that also polls repositories
+uv run diff-sentry release-watch --final --packages litellm --state ./output/state --out ./output
+```
+
+- **`watch` runs it, not `release-watch`.** `release-watch` writes the release to `<state>/final-queue/` and never opens `watch.db`; the `watch` on the same `--state` imports it into its queue, so pull requests, issues and releases share one queue, one hourly cap (`DS_WATCH_MAX_DEEP_PER_HOUR`), one worker pool, the same retries and `--requeue-failed`, and `DS_WATCH_PAUSED_REPOS` (`pypi/<name>` and an unscoped `npm/<name>`; not yet a scoped npm package or an image). Run both with the same `--state` and `--out`. `watch --queue-only` runs the queue without polling any repository. `release-watch --final` refuses to start unless a `watch` that runs the model has used that state directory, and warns while none has looked for an hour; what it hands over waits until one does.
+- **What is handed over.** A recorded comparison (never a `--check`) with files, whose grounded evidence reaches `high` (`DS_RELEASE_FINAL_MIN_SEVERITY`, `high` or `critical`) on something other than a note of what was not read (`release-not-fully-read`, `release-code-not-read`, `release-tag-missing`, `image-owner-unresolved`: the model would be handed the same unread content), and that renders to at most 8 MiB. A release is never shed by `DS_WATCH_MAX_QUEUE`.
+- **The alert is unchanged.** The screen's `stage=screen` alert is sent as ever; the run's own follows as `stage=final` under the same run id, with the signal derived as for any change: the verdict, or the evidence at the floor. A consumer that wants only a model's `malicious` filters on `stage` and `verdict`.
+- **What the model sees.** The files of the change, and after them the release's facts (publishers, attestations, an image's provenance and what it is known to be built from, what was not read), marked as the publisher's untrusted strings. A scan of those facts is not evidence of the change. Its own scans keep the release scope above.
+- **Not yet validated.** No eval has measured the model on releases yet; until one has, treat a final verdict on a release as a second opinion, not as the alert.
+
 ## What it does not do
 
 - It sees a release only while PyPI lists it. A release removed within minutes of upload can be gone before the next poll.
@@ -87,4 +102,5 @@ Without `--sources`, the watch uses the repository of the previous release's Tru
 - A legitimate change of publisher alerts too: a renamed or transferred repository, a renamed workflow, a new deployment environment. So does a project that stops attesting its releases.
 - It does not compare an npm version with its git tag, and it reads the public registry only.
 - A changed native binary in an image (an ELF under `usr/bin`, a `.so` under a name the previous image had) is compared but not read: a rebuild changes them all, so they alert only as a new native module.
-- It does not run the model on a release. The screened response under `screened/` is the record.
+- Without `--final` it does not run the model on a release. The screened response under `screened/` is the record.
+- With `--final`, an image two tags point at is judged once per tag: the run id holds the tag.

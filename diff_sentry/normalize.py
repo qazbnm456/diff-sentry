@@ -55,6 +55,16 @@ OUTSIDER_ASSOCIATIONS = frozenset({"FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NON
 
 # Bound on the host-derived actor history rendered for the planner. Generous on purpose: the planner holds the event as a REPL variable, so its context is not the constraint; this only keeps one actor's history from swamping the change itself.
 _MAX_ACTOR_HISTORY_CHARS = 20_000
+# The host-derived facts of a release or an image shown to the planner (`_release_facts`): what the screen judged it on. Registry and provenance strings inside are the publisher's, so they ride in the untrusted body, never in the MF1 metadata.
+_RELEASE_FACTS_HEADING = "### RELEASE FACTS"
+_MAX_RELEASE_FACTS_CHARS = 20_000
+_RELEASE_FACT_KEYS = (
+    "package", "version", "previous", "attested", "previous_attested", "publishers", "previous_publishers", "yanked",
+    "new_roots", "new_requires", "shadowed", "unread_code", "source", "tag", "previous_tag", "tag_compared",
+    "tag_differs", "tag_missing", "dependency_sources", "install_scripts_added", "install_scripts_changed",
+    "dependencies_run_at_install", "dependencies_young", "notes",
+)
+_IMAGE_FACT_KEYS = ("image", "tag", "digest", "namespace", "provenance", "known", "notes")
 
 # GitHub-authoritative enums. Constraining the MF1 sandwich to these drops any arbitrary string a host-supplied/pasted `provenance` might try to smuggle into the "trusted" header as free text.
 _GH_AUTHOR_TYPES = frozenset({"User", "Bot", "Organization", "Mannequin"})
@@ -150,10 +160,24 @@ def event_metadata(event: dict) -> dict[str, Any]:
     return meta
 
 
-def normalize_event(event: dict) -> str:
+def _release_facts(event: dict) -> dict:
+    """The allow-listed facts of a release (`event["release"]`), an image's under `image`: what `scan_release` and `scan_image` judged it on."""
+    release = event.get("release")
+    if not isinstance(release, dict):
+        return {}
+    out = {k: release[k] for k in _RELEASE_FACT_KEYS if release.get(k) not in (None, "", [], {})}
+    image = release.get("image")
+    if isinstance(image, dict):
+        out["image"] = {k: image[k] for k in _IMAGE_FACT_KEYS if image.get(k) not in (None, "", [], {})}
+    return out
+
+
+def normalize_event(event: dict, *, facts: bool = True) -> str:
     """Render a change event as the untrusted `event: str` the RLM holds as a REPL variable.
 
-    Layout: METADATA (derived) → the untrusted body/patches → the SAME METADATA again. The head and tail are our computed structure so dspy's preview window can't be colonised by attacker free-text."""
+    Layout: METADATA (derived) → the untrusted body/patches → the SAME METADATA again. The head and tail are our computed structure so dspy's preview window can't be colonised by attacker free-text.
+
+    A release with files also gets its RELEASE FACTS after them (before any comment). A release without files gets none, so it still renders as no content (`has_groundable_content`). `facts=False` leaves them out: the text a planner's scan is grounded in (`indicators._Change`), since the facts are the host's, not the change's."""
     meta = event_metadata(event)
     header = json.dumps({"_diff_sentry_metadata": meta}, ensure_ascii=False, indent=2)
     body_parts: list[str] = []
@@ -166,6 +190,12 @@ def normalize_event(event: dict) -> str:
     for f in _files(event):
         head = f"### FILE (untrusted): {f['filename']}  [{f['status']} +{f['additions']} -{f['deletions']}]"
         body_parts.append(f"{head}\n{f['patch']}")
+    release = _release_facts(event) if facts and _files(event) else {}
+    if release:
+        # json.dumps escapes every line break, so nothing inside can start a line of its own
+        rendered = json.dumps(release, ensure_ascii=False, default=str)[:_MAX_RELEASE_FACTS_CHARS]
+        body_parts.append(f"{_RELEASE_FACTS_HEADING} (host-derived from the registry; package, publisher and "
+                          f"provenance strings inside are the publisher's and untrusted)\n{rendered}")
     for c in _comments(event):
         who = f"{c['author']} [{c['association'] or 'n/a'}] {c['created_at']}".strip()
         body_parts.append(f"### COMMENT (untrusted) by {who}\n{c['body']}")

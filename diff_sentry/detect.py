@@ -168,9 +168,12 @@ def setup(config: DetectConfig) -> DetectConfig:
 
 
 def _withheld(event: dict) -> bool:
-    """GitHub sent part of the change without its text: a file with changed lines and no patch, or a file list cut at its cap."""
+    """Part of the change came without its text: from GitHub, a file with changed lines and no patch, or a file list cut at its cap; from a registry, a release's code that was not read (`unread_code`) or a note of what was not (`notes`), whose members show no lines at all."""
     provenance = event.get("provenance")
-    return (isinstance(provenance, dict) and bool(provenance.get("files_truncated"))) or any(
+    release = event.get("release")
+    return (isinstance(provenance, dict) and bool(provenance.get("files_truncated"))) or (
+        isinstance(release, dict) and bool(release.get("unread_code") or release.get("notes") or (
+            isinstance(release.get("image"), dict) and release["image"].get("notes")))) or any(
         not f["patch"] and (f["additions"] or f["deletions"]) for f in _files(event))
 
 
