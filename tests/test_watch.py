@@ -20,6 +20,7 @@ from diff_sentry.watch import (
     ListResult,
     WatchConfig,
     Watcher,
+    parse_paused,
     parse_repos,
     run_id_for,
 )
@@ -275,6 +276,24 @@ def test_paused_repos_are_parsed_deduplicated_and_matched_in_any_case(monkeypatc
         WatchConfig.from_env()
     monkeypatch.delenv("DS_WATCH_PAUSED_REPOS")
     assert WatchConfig.from_env().paused == ()
+
+
+def test_a_pause_names_a_release_as_its_queue_row_does(monkeypatch):
+    assert parse_paused(["npm/@Scope/Name, OCI/ghcr.io/BerriAI/litellm oci/registry-1.docker.io/x/y"]) == (
+        "npm/@Scope/Name", "oci/ghcr.io/berriai/litellm", "oci/docker.io/x/y")
+    assert parse_paused(["oci/python oci/docker.io/library/python"]) == ("oci/python", "oci/docker.io/library/python")
+    assert parse_paused(["pypi/Foo_Bar"]) == ("pypi/Foo_Bar", "pypi/foo-bar")       # also a GitHub repository
+    assert parse_paused(["npm/left-pad", "acme/widgets"]) == ("npm/left-pad", "acme/widgets")
+    for github in ("oci/foo_", "oci/.foo", "npm/.foo", "npm/_foo"):     # not a release, still a repository
+        assert parse_paused([github]) == (github,)
+    for bad in ("npm/@a", "oci/quay.io/x/y", "oci/ghcr.io/x/y:latest", "a/b/c", "pypi/", "pypi/a/b", "not-a-repo"):
+        with pytest.raises(ValueError, match="owner/name"):
+            parse_paused([bad])
+    monkeypatch.setenv("DS_WATCH_PAUSED_REPOS", "npm/@acme/widget, oci/ghcr.io/a/b")
+    assert WatchConfig.from_env().paused == ("npm/@acme/widget", "oci/ghcr.io/a/b")
+    monkeypatch.setenv("DS_WATCH_REPOS", "npm/@acme/widget")                    # polled repositories stay owner/name
+    with pytest.raises(ValueError):
+        WatchConfig.from_env()
 
 
 # ── polling ────────────────────────────────────────────────────────────────────────────────────────────

@@ -240,6 +240,9 @@ def test_stats_is_read_only_and_needs_neither_model_roles_nor_a_watchlist(tmp_pa
     monkeypatch.setenv("DS_WATCH_PAUSED_REPOS", "Acme/Widgets")
     assert cli.main(["watch", "--stats", "--state", state]) == 0
     assert json.loads(capsys.readouterr().out)["queued_paused"] == 0
+    monkeypatch.setenv("DS_WATCH_PAUSED_REPOS", "npm/@acme/widget oci/ghcr.io/a/b")
+    assert cli.main(["watch", "--stats", "--state", state]) == 0
+    assert json.loads(capsys.readouterr().out)["paused"] == ["npm/@acme/widget", "oci/ghcr.io/a/b"]
     monkeypatch.setenv("DS_WATCH_PAUSED_REPOS", "not-a-repo")
     assert cli.main(["watch", "--stats", "--state", state]) == 2 and "owner/name" in capsys.readouterr().err
 

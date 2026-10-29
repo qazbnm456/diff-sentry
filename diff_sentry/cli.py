@@ -515,7 +515,7 @@ def _cmd_watch(args) -> int:
     import logging
     import signal
 
-    from .watch import PollReport, WatchConfig, Watcher, WatchState, parse_repos, requeue_failed
+    from .watch import PollReport, WatchConfig, Watcher, WatchState, parse_paused, parse_repos, requeue_failed
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.stats:
@@ -525,7 +525,7 @@ def _cmd_watch(args) -> int:
             return 2
         try:
             env = os.getenv("DS_WATCH_PAUSED_REPOS", "")
-            paused = WatchConfig(paused=parse_repos([env])).paused if env else ()
+            paused = WatchConfig(paused=parse_paused([env])).paused if env else ()
             state = WatchState(db, read_only=True)
         except (RuntimeError, ValueError) as exc:
             print(f"watch: {exc}", file=sys.stderr)
@@ -720,7 +720,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     w = sub.add_parser("watch", help="monitor a watchlist of repositories (poll, screen, queue for the model)")
     w.add_argument("--repos", nargs="+", help="owner/name repositories (or set DS_WATCH_REPOS; DS_WATCH_PAUSED_REPOS "
-                   "holds some without clearing their queue)")
+                   "holds repositories, and releases as pypi/<package>, npm/<package> or oci/<image>, "
+                   "without clearing their queue)")
     w.add_argument("--repos-file", help="a file of owner/name entries, one per line (# comments allowed)")
     w.add_argument("--out", default="./output")
     w.add_argument("--state", default=os.getenv("DS_WATCH_STATE_DIR", "./output/state"),
