@@ -129,6 +129,45 @@ def parse_repos(values: list[str]) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _artifact_pause(entry: str) -> str | None:
+    """The queue `repo` a `pypi/`, `npm/` or `oci/` pause names (`pypi/<normalized name>`, `npm/<name>`, `oci/<image label>`), or None when the entry is not one."""
+    from .images import parse_image
+    from .npm import parse_npm_packages
+    from .releases import parse_packages
+
+    namespace, _, name = entry.partition("/")
+    namespace = namespace.lower()
+    try:
+        if namespace == "pypi":
+            return f"pypi/{parse_packages([name])[0]}"
+        if namespace == "npm":
+            return f"npm/{parse_npm_packages([name])[0]}"
+        if namespace == "oci":
+            return f"oci/{parse_image(name).label}"
+    except (ValueError, IndexError):
+        return None
+    return None
+
+
+def parse_paused(values: list[str]) -> tuple[str, ...]:
+    """`DS_WATCH_PAUSED_REPOS`: `parse_repos`' entries, and the releases `release-watch --final` hands over as their queue rows name them: `pypi/<package>` (normalized), `npm/<package>` or `npm/@scope/<package>`, `oci/<registry>/<image>` (`parse_image`'s label). An `owner/name` entry is always kept as written, since it can be a GitHub repository; the release it also names is added beside it."""
+    out: list[str] = []
+    for value in values:
+        for line in value.splitlines():
+            for part in re.split(r"[,\s]+", line.split("#", 1)[0]):
+                if not part:
+                    continue
+                artifact = _artifact_pause(part)
+                if not _REPO_RE.match(part) and artifact is None:
+                    raise ValueError(
+                        f"not an owner/name repository or a release: {part!r} (pypi/<package>, npm/<package>, "
+                        "npm/@scope/<package>, or oci/<registry>/<image> without a tag or digest, Docker Hub as docker.io/…)")
+                for entry in (part if _REPO_RE.match(part) else None, artifact):
+                    if entry is not None and entry not in out:
+                        out.append(entry)
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class WatchConfig:
     repos: tuple[str, ...] = ()
@@ -153,7 +192,7 @@ class WatchConfig:
         paused = os.getenv("DS_WATCH_PAUSED_REPOS", "")
         base: dict[str, Any] = {
             "repos": parse_repos([env]) if env else (),
-            "paused": parse_repos([paused]) if paused else (),
+            "paused": parse_paused([paused]) if paused else (),
             "state_dir": os.getenv("DS_WATCH_STATE_DIR", "./output/state"),
             "poll_interval_s": _env_float("DS_WATCH_INTERVAL", 60.0),
             "backfill_s": int(_env_float("DS_WATCH_BACKFILL_HOURS", 0.0) * 3600),

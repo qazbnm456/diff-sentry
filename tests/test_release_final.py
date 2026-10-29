@@ -266,6 +266,20 @@ def test_a_paused_package_holds_its_release(make):
     assert w.drain() == 0 and w.state.queued_run_ids() == [_RUN]
 
 
+def test_a_paused_scoped_package_or_image_holds_its_release(make, monkeypatch):
+    image = {**_event(), "repo": "oci/ghcr.io/berriai/litellm"}
+    scoped = {**_event(), "repo": "npm/@acme/widget"}
+    _spool(make, image, run_id="oci__ghcr.io_berriai_litellm-v1-abc")
+    _spool(make, scoped, run_id="npm___acme_widget-1.1")
+    monkeypatch.setenv("DS_WATCH_PAUSED_REPOS", "OCI/ghcr.io/BerriAI/litellm npm/@Acme/widget")
+    paused = WatchConfig.from_env().paused
+    w = make.make(paused=paused)
+    w.poll_once()
+    assert w.drain() == 0 and w.state.stats(paused)["queued_paused"] == 2
+    w.close()
+    assert make.make().drain() == 2
+
+
 def test_an_hourly_cap_without_a_lock_refuses_to_start(make, monkeypatch):
     monkeypatch.setitem(sys.modules, "fcntl", None)              # a platform without fcntl
     with pytest.raises(RuntimeError, match="no fcntl"):
