@@ -24,6 +24,7 @@ Pure stdlib + the package's own modules; no dspy at import (the default runner i
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import math
@@ -240,7 +241,7 @@ def _unpaused(column: str, paused: tuple[str, ...]) -> tuple[str, tuple]:
     return f" AND lower({column}) NOT IN ({','.join('?' * len(paused))})", paused
 
 
-# A queue row's repository is its event's: a run id's `owner__name-` prefix is also that of `owner/name-pr`'s.
+# A queue row's repository is its event's, never read from its run id: `owner__name-` is also the prefix of `owner/name-pr`'s ids.
 _QUEUE_REPO = "json_extract(event_json, '$.repo')"
 # A release handed over by `release-watch --final` is never shed and never counts toward `max_queue`: eligibility already bounds them, and a shed one would leave no record anywhere.
 _SHEDDABLE = " AND coalesce(json_extract(event_json, '$.kind'), '') != 'release'"
@@ -269,6 +270,45 @@ def spool_final(state_dir: str, run_id: str, priority: int, event: dict) -> str:
     """Hand a release to the model queue: written by `release-watch --final`, imported by the `watch` that holds `state_dir`. `release-watch` never opens `watch.db`, so a busy or older one cannot fail its comparison, and an older `watch` never sees the file."""
     return _write_json_atomically(final_queue_dir(state_dir), f"{run_id}.json",
                                   {"run_id": run_id, "priority": priority, "event": event})
+
+
+def _image_marker(state_dir: str, event: dict) -> str | None:
+    """`final-queue/images/<sha256>` of an image handed over, keyed by the comparison the model is shown: the image, its digest and the image it was compared with. None for a release that is not an image."""
+    release = event.get("release") or {}
+    image = release.get("image")
+    if not isinstance(image, dict):
+        return None
+    key = json.dumps([image.get("image"), image.get("digest"), release.get("previous") or ""])
+    return os.path.join(final_queue_dir(state_dir), "images", hashlib.sha256(key.encode()).hexdigest())
+
+
+def image_handed_over(state_dir: str, event: dict) -> str | None:
+    """The run id under which the same image, compared with the same image, was already handed over (another tag of it), unless the `watch` refused that one. Best-effort: a marker that cannot be read is none."""
+    path = _image_marker(state_dir, event)
+    if path is None:
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            run_id = str(json.load(fh)["run_id"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if os.path.exists(os.path.join(final_queue_dir(state_dir), "rejected", f"{run_id}.json")):
+        return None
+    return run_id
+
+
+def mark_image_handed_over(state_dir: str, event: dict, run_id: str) -> None:
+    """Remember an image handed over (`image_handed_over`), after its spool file is written. Best-effort: a marker that cannot be written only lets a later tag of the image be handed over too."""
+    path = _image_marker(state_dir, event)
+    if path is None:
+        return
+    image = event["release"]["image"]
+    try:
+        _write_json_atomically(os.path.dirname(path), os.path.basename(path),
+                               {"run_id": run_id, "image": image.get("image"), "digest": image.get("digest"),
+                                "previous": event["release"].get("previous")})
+    except OSError as exc:
+        log.warning("could not remember that %s was handed over: %s", run_id, exc)
 
 
 def consumer_status(state_dir: str, now: datetime) -> tuple[str | None, bool]:
@@ -404,9 +444,9 @@ class WatchState:
             return self._db.execute("SELECT 1 FROM queue WHERE run_id=?", (run_id,)).fetchone() is not None
 
     def names_change(self, run_id: str) -> bool:
-        """Whether a change the watcher polls already uses this run id (a GitHub owner named `pypi`, `npm` or `oci`)."""
+        """Whether a change the watcher polls already uses this run id, in any case (one file on a case-insensitive file system). Only a change stored before `run_id_for` gave the owners `pypi`, `npm` and `oci` their `_gh` form can."""
         with self._lock:
-            return self._db.execute("SELECT 1 FROM changes WHERE run_id=?", (run_id,)).fetchone() is not None
+            return self._db.execute("SELECT 1 FROM changes WHERE lower(run_id)=lower(?)", (run_id,)).fetchone() is not None
 
     def queued_run_ids(self) -> list[str]:
         """Runs waiting for the model (not the buried ones: those stay `failed` until `--requeue-failed`)."""
@@ -515,9 +555,16 @@ class PollReport:
     imported: int = 0                   # releases `release-watch --final` handed over, now queued
 
 
+# The run-id prefixes of releases and images (`pypi__`, `npm__`, `oci__`): a GitHub owner of these names gets `<owner>_gh__`.
+_ARTIFACT_NAMESPACES = frozenset({"pypi", "npm", "oci"})
+
+
 def run_id_for(repo: str, kind: str, number: int, revision: int) -> str:
-    """`owner__name-pr-7` (`-r1` for a later revision). Owners cannot contain `_`, so the first `__` always splits owner from name and two different repositories can never share an id (`a-b/c` vs `a/b-c`)."""
-    base = f"{repo.replace('/', '__')}-{'pr' if kind == 'pull_request' else 'issue'}-{number}"
+    """`owner__name-pr-7` (`-r1` for a later revision). Owners cannot contain `_`, so the first `__` always splits owner from name and two different repositories can never share an id (`a-b/c` vs `a/b-c`). An owner named `pypi`, `npm` or `oci` (in any case: a case-insensitive file system holds `PyPI__x` and `pypi__x` as one file) is written `<owner>_gh__`, which no owner and no release's or image's id (`pypi__<name>-<version>`) can begin with."""
+    owner, _, name = repo.partition("/")
+    if owner.lower() in _ARTIFACT_NAMESPACES:
+        owner += "_gh"
+    base = f"{owner}__{name.replace('/', '__')}-{'pr' if kind == 'pull_request' else 'issue'}-{number}"
     return base if revision == 0 else f"{base}-r{revision}"
 
 

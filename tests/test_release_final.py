@@ -525,3 +525,171 @@ def test_a_release_run_offline_renders_and_exports_with_its_artifact(tmp_path):
         if e["type"] == "run_start":
             e["payload"]["meta"].pop("artifact")
     assert build_response(verdict_from_events(events), events, _RUN).artifact is None
+
+
+# ── an image two tags point at goes to the model once ────────────────────────────────────────────────
+
+def _image_hand_over(tmp_path, latest="v1.106.2"):
+    from tests.test_images import _Registry, _seed, _watcher
+
+    reg = _Registry()
+    _seed(reg)
+    reg.tags["latest"] = reg.tags[latest]
+    state = str(tmp_path / "hand")
+    return reg, _watcher(tmp_path, reg, on_screened=cli._final_hand_over(state, "high")), final_queue_dir(state)
+
+
+def _push_bad(reg, tag="v1.107.0"):
+    from tests.test_images import _BASE, _PAYLOAD_PTH, _RELEASE, _app
+
+    return reg.push(tag, _RELEASE, layers=(_BASE, _app("2", _PAYLOAD_PTH)))
+
+
+def _spooled(qdir) -> list[str]:
+    return sorted(n for n in os.listdir(qdir) if n.endswith(".json")) if os.path.isdir(qdir) else []
+
+
+def test_an_image_two_tags_point_at_is_handed_over_once(tmp_path, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="diff_sentry.releases")
+    reg, w, qdir = _image_hand_over(tmp_path)
+    try:
+        w.poll_once()
+        reg.tags["latest"] = _push_bad(reg)                      # a release, and `latest` moved onto it
+        results = w.poll_once()
+        assert {r["tag"] for r in results if r.get("signal")} == {"v1.107.0", "latest"}       # both screened
+        assert all(os.path.exists(os.path.join(tmp_path / "o", "screened", f"{r['run_id']}.json")) for r in results)
+        first = [r["run_id"] for r in results if r["tag"] == "v1.107.0"]
+        assert _spooled(qdir) == [f"{first[0]}.json"]
+        assert any("already handed over" in m and first[0] in m for m in caplog.messages)
+        assert len(os.listdir(os.path.join(qdir, "images"))) == 1
+    finally:
+        w.close()
+
+
+def test_a_tag_moved_onto_an_image_on_a_later_poll_is_not_handed_over_again(tmp_path):
+    reg, w, qdir = _image_hand_over(tmp_path)
+    try:
+        w.poll_once()
+        bad = _push_bad(reg)
+        w.poll_once()
+        reg.tags["latest"] = bad
+        assert any(r["tag"] == "latest" and r["signal"] for r in w.poll_once())
+        assert len(_spooled(qdir)) == 1
+    finally:
+        w.close()
+
+
+def test_the_same_image_compared_with_another_image_is_handed_over_again(tmp_path):
+    reg, w, qdir = _image_hand_over(tmp_path, latest="v1.106.1")      # `latest` lags a release behind
+    try:
+        w.poll_once()
+        reg.tags["latest"] = _push_bad(reg)
+        w.poll_once()
+        assert len(_spooled(qdir)) == 2                           # other files changed: another comparison
+    finally:
+        w.close()
+
+
+def test_an_image_marker_that_cannot_be_written_hands_over_as_before(tmp_path):
+    reg, w, qdir = _image_hand_over(tmp_path)
+    try:
+        w.poll_once()
+        os.makedirs(qdir)
+        pathlib.Path(qdir, "images").write_text("not a directory")
+        reg.tags["latest"] = _push_bad(reg)
+        results = w.poll_once()
+        assert all("error" not in r for r in results) and len(_spooled(qdir)) == 2
+        assert w.db.execute("SELECT COUNT(*) FROM image_judgments WHERE state='error'").fetchone()[0] == 0
+        assert w.db.execute("SELECT digest FROM tags WHERE tag='latest'").fetchone()[0] == reg.tags["latest"]
+    finally:
+        w.close()
+
+
+def test_an_image_whose_hand_over_failed_is_not_remembered(tmp_path, monkeypatch):
+    from diff_sentry import watch
+
+    real, calls = watch.spool_final, []
+
+    def flaky(state_dir, run_id, priority, event):
+        calls.append(run_id)
+        if len(calls) == 1:
+            raise OSError("disk full")
+        return real(state_dir, run_id, priority, event)
+
+    monkeypatch.setattr(watch, "spool_final", flaky)
+    reg, w, qdir = _image_hand_over(tmp_path)
+    try:
+        w.poll_once()
+        reg.tags["latest"] = _push_bad(reg)
+        results = {r["tag"]: r for r in w.poll_once()}
+        assert "error" in results["v1.107.0"]                     # the comparison failed: retried next poll
+        assert _spooled(qdir) == [f"{results['latest']['run_id']}.json"]     # the next tag was not skipped
+        marker = os.listdir(os.path.join(qdir, "images"))
+        assert len(marker) == 1
+        assert json.loads(pathlib.Path(qdir, "images", marker[0]).read_text())["run_id"] == results["latest"]["run_id"]
+    finally:
+        w.close()
+
+
+def test_an_image_marker_names_the_first_run_unless_it_was_refused(tmp_path):
+    from diff_sentry.watch import _image_marker, image_handed_over, mark_image_handed_over
+
+    state = str(tmp_path / "s")
+    image = {"release": {"image": {"image": "ghcr.io/a/b", "digest": "sha256:1"}, "previous": "sha256:0"}}
+    assert image_handed_over(state, image) is None
+    mark_image_handed_over(state, image, "oci__a-v1-1")
+    assert image_handed_over(state, image) == "oci__a-v1-1"
+    assert image_handed_over(state, {"release": {**image["release"], "previous": "sha256:9"}}) is None
+    os.makedirs(os.path.join(final_queue_dir(state), "rejected"))
+    pathlib.Path(final_queue_dir(state), "rejected", "oci__a-v1-1.json").write_text("{}")
+    assert image_handed_over(state, image) is None              # refused: the next tag goes through
+    pathlib.Path(_image_marker(state, image)).write_text("{not json")
+    assert image_handed_over(state, image) is None
+    for release in (_event(), {"repo": "npm/@x/y", "release": {"package": "@x/y", "version": "1.0"}}):
+        assert _image_marker(state, release) is None
+        mark_image_handed_over(state, release, "npm___x_y-1.0")
+    assert len(os.listdir(os.path.join(final_queue_dir(state), "images"))) == 1
+
+
+def test_the_import_never_reads_an_image_marker(make):
+    from diff_sentry.watch import mark_image_handed_over
+
+    w = make.make()
+    event = {"release": {"image": {"image": "ghcr.io/a/b", "digest": "sha256:1"}}}
+    mark_image_handed_over(make.state, event, "oci__a-v1-1")
+    markers = os.path.join(make.qdir, "images")
+    before = {n: pathlib.Path(markers, n).read_text() for n in os.listdir(markers)}
+    assert w.poll_once().imported == 0 and w.state.queue_size() == 0
+    assert {n: pathlib.Path(markers, n).read_text() for n in os.listdir(markers)} == before
+    assert not os.path.exists(os.path.join(make.qdir, "rejected"))
+
+
+# ── a polled change never takes a release's run id ───────────────────────────────────────────────────
+
+def test_a_pull_request_of_an_owner_named_pypi_never_replaces_a_release(make):
+    w = make.make(repos=("pypi/x",))
+    w.poll_once()
+    run_id = "pypi__x-pr-7"                                     # package `x-pr`, version 7
+    os.makedirs(os.path.join(make.out, "screened"), exist_ok=True)
+    screened = os.path.join(make.out, "screened", f"{run_id}.json")
+    pathlib.Path(screened).write_text('{"release": true}')       # what release-watch wrote
+    _spool(make, {**_event(), "repo": "pypi/x-pr"}, run_id=run_id)
+    make.world.pr("pypi/x", 7)
+    make.clock.advance(minutes=5)
+    report = w.poll_once()
+    assert report.imported == 1 and report.new == 1
+    queued = dict(w.state._db.execute("SELECT run_id, json_extract(event_json, '$.kind') FROM queue").fetchall())
+    assert queued == {run_id: "release", "pypi_gh__x-pr-7": "pull_request"}
+    assert pathlib.Path(screened).read_text() == '{"release": true}'
+    assert os.path.exists(os.path.join(make.out, "screened", "pypi_gh__x-pr-7.json"))
+
+
+def test_a_change_stored_under_an_id_of_another_case_still_refuses_the_release(make):
+    w = make.make()
+    w.state.upsert_change("PyPI/demo", "pull_request", 1, run_id="PyPI__demo-1.2", state="queued",
+                          first_seen=make.clock.now.isoformat())
+    _spool(make, run_id="pypi__demo-1.2")
+    assert w.poll_once().imported == 0
+    assert os.listdir(os.path.join(make.qdir, "rejected")) == ["pypi__demo-1.2.json"]

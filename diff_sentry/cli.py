@@ -345,17 +345,25 @@ def _cmd_scan(args) -> int:
 
 
 def _final_hand_over(state_dir: str, min_severity: str):
-    """`release-watch --final`: a recorded comparison that `final_eligible` passes is handed to the `watch` on `state_dir` (`watch.spool_final`), which queues it for the model under its own hourly cap. The screen and its alert are unchanged."""
+    """`release-watch --final`: a recorded comparison that `final_eligible` passes is handed to the `watch` on `state_dir` (`watch.spool_final`), which queues it for the model under its own hourly cap. An image another tag already handed over, compared with the same image, is not handed over again (`watch.image_handed_over`). The screen and its alert are unchanged."""
     import logging
 
     from .releases import final_eligible
-    from .watch import _priority, spool_final
+    from .watch import _priority, image_handed_over, mark_image_handed_over, spool_final
+
+    log = logging.getLogger("diff_sentry.releases")
 
     def hand_over(event: dict, run_id: str, response) -> None:
         hits = list(response.indicators)
-        if final_eligible(event, hits, min_severity):
-            spool_final(state_dir, run_id, _priority(hits, {}), event)
-            logging.getLogger("diff_sentry.releases").info("release %s handed to the model queue", run_id)
+        if not final_eligible(event, hits, min_severity):
+            return
+        first = image_handed_over(state_dir, event)
+        if first is not None and first != run_id:   # another tag of the same image, compared with the same image
+            log.info("image %s is the image %s already handed over: not handed over again", run_id, first)
+            return
+        spool_final(state_dir, run_id, _priority(hits, {}), event)
+        mark_image_handed_over(state_dir, event, run_id)
+        log.info("release %s handed to the model queue", run_id)
 
     return hand_over
 

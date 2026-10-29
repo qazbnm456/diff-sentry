@@ -989,6 +989,27 @@ def test_two_repositories_never_share_a_run_id():
     assert run_id_for("a/b__c", "issue", 1, 0) == "a__b__c-issue-1"      # owners have no `_`: the first `__` splits
 
 
+def test_a_repository_never_shares_a_run_id_with_a_release_or_an_image():
+    from diff_sentry.images import ImageRef, image_run_id
+    from diff_sentry.releases import run_id_for as release_run_id
+
+    assert run_id_for("pypi/x", "pull_request", 7, 0) == "pypi_gh__x-pr-7"
+    assert run_id_for("PyPI/x", "issue", 3, 1) == "PyPI_gh__x-issue-3-r1"
+    assert run_id_for("npm/x", "pull_request", 7, 0) == "npm_gh__x-pr-7"
+    assert run_id_for("OCI/x", "pull_request", 7, 0) == "OCI_gh__x-pr-7"
+    for owner in ("pypi-x", "pypix", "xpypi", "acme"):                   # only the exact owner, case-folded
+        assert run_id_for(f"{owner}/w", "pull_request", 7, 0) == f"{owner}__w-pr-7"
+    artifacts = {release_run_id("x-pr", "7"), release_run_id("x-issue", "3", 1), release_run_id("x-pr", "7", 2),
+                 release_run_id("x-pr", "7", registry="npm"), release_run_id("@x/y-pr", "7", registry="npm"),
+                 image_run_id(ImageRef("ghcr.io", "x/y"), "pr", "sha256:123456789012")}
+    github = {run_id_for(f"{owner}/{name}", kind, n, rev)
+              for owner in ("pypi", "PyPI", "PYPI", "npm", "Npm", "oci", "OCI")
+              for name in ("x", "_x", "ghcr.io_x_y") for kind in ("pull_request", "issue")
+              for n in (3, 7, 123456789012) for rev in (0, 1, 2)}
+    assert not {a.lower() for a in artifacts} & {g.lower() for g in github}   # one file on a case-insensitive disk
+    assert not any(g.lower().startswith(("pypi__", "npm__", "oci__")) for g in github)
+
+
 def _fake_gh(monkeypatch, stdout, returncode=0, capture=None):
     import subprocess
 
