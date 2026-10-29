@@ -24,6 +24,7 @@ Pure stdlib + the package's own modules; no dspy at import (the default runner i
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import math
@@ -269,6 +270,45 @@ def spool_final(state_dir: str, run_id: str, priority: int, event: dict) -> str:
     """Hand a release to the model queue: written by `release-watch --final`, imported by the `watch` that holds `state_dir`. `release-watch` never opens `watch.db`, so a busy or older one cannot fail its comparison, and an older `watch` never sees the file."""
     return _write_json_atomically(final_queue_dir(state_dir), f"{run_id}.json",
                                   {"run_id": run_id, "priority": priority, "event": event})
+
+
+def _image_marker(state_dir: str, event: dict) -> str | None:
+    """`final-queue/images/<sha256>` of an image handed over, keyed by the comparison the model is shown: the image, its digest and the image it was compared with. None for a release that is not an image."""
+    release = event.get("release") or {}
+    image = release.get("image")
+    if not isinstance(image, dict):
+        return None
+    key = json.dumps([image.get("image"), image.get("digest"), release.get("previous") or ""])
+    return os.path.join(final_queue_dir(state_dir), "images", hashlib.sha256(key.encode()).hexdigest())
+
+
+def image_handed_over(state_dir: str, event: dict) -> str | None:
+    """The run id under which the same image, compared with the same image, was already handed over (another tag of it), unless the `watch` refused that one. Best-effort: a marker that cannot be read is none."""
+    path = _image_marker(state_dir, event)
+    if path is None:
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            run_id = str(json.load(fh)["run_id"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if os.path.exists(os.path.join(final_queue_dir(state_dir), "rejected", f"{run_id}.json")):
+        return None
+    return run_id
+
+
+def mark_image_handed_over(state_dir: str, event: dict, run_id: str) -> None:
+    """Remember an image handed over (`image_handed_over`), after its spool file is written. Best-effort: a marker that cannot be written only lets a later tag of the image be handed over too."""
+    path = _image_marker(state_dir, event)
+    if path is None:
+        return
+    image = event["release"]["image"]
+    try:
+        _write_json_atomically(os.path.dirname(path), os.path.basename(path),
+                               {"run_id": run_id, "image": image.get("image"), "digest": image.get("digest"),
+                                "previous": event["release"].get("previous")})
+    except OSError as exc:
+        log.warning("could not remember that %s was handed over: %s", run_id, exc)
 
 
 def consumer_status(state_dir: str, now: datetime) -> tuple[str | None, bool]:
