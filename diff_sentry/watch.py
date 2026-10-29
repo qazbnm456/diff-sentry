@@ -1,4 +1,4 @@
-"""The watcher: continuous monitoring of a watchlist of repositories for the attacks that arrive as a PR or an issue.
+"""The watcher: continuous monitoring of a watchlist of repositories for the attacks that arrive as a PR or an issue, and the model queue that also runs the releases `release-watch --final` hands over (`spool_final`, `Watcher.import_spool`).
 
     python -m diff_sentry watch --repos owner/name other/name        # poll, screen, queue for the model python -m diff_sentry watch --screen-only --repos-file repos.txt # deterministic tier only, no model
 
@@ -23,6 +23,7 @@ Pure stdlib + the package's own modules; no dspy at import (the default runner i
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -64,6 +65,12 @@ _ALERT_RETRIES_PER_POLL = 5  # so a hanging SIEM (15 s a POST) cannot stall poll
 _BACKOFF_CAP_S = 3600
 SCHEMA_VERSION = 2
 _DEAD = 2                   # `queue.claimed` value for a run that exhausted its attempts (kept for --requeue-failed)
+# The hand-over from `release-watch --final` (`spool_final`): a release's event as a file, imported into the queue by `Watcher.import_spool`.
+FINAL_QUEUE = "final-queue"
+_CONSUMER = ".consumer"         # written by every `watch` that imports: whether it runs the model, and when it last looked
+_CONSUMER_VERSION = 1
+_CONSUMER_STALE_S = 3600
+_MAX_IMPORTS_PER_PASS = 20
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS etags (url TEXT PRIMARY KEY, etag TEXT NOT NULL);
@@ -137,6 +144,7 @@ class WatchConfig:
     rate_reserve: int = 200             # stop polling when the API's remaining budget falls below this
     workers: int = 1                    # model runs at once; above 1, each in a process of its own
     paused: tuple[str, ...] = ()        # repositories held: not polled, re-checked, re-alerted or run (kept as they are)
+    queue_only: bool = False            # poll nothing: import what `release-watch --final` hands over, and run the queue
 
     @classmethod
     def from_env(cls, **overrides: Any) -> WatchConfig:
@@ -161,6 +169,8 @@ class WatchConfig:
     def __post_init__(self) -> None:
         if self.workers < 1:
             raise ValueError(f"workers must be at least 1, got {self.workers}")
+        if self.queue_only and self.screen_only:
+            raise ValueError("queue_only runs the model queue, which screen_only never does: pass one of them")
         if severity_rank(self.deep_min_severity) < 0:
             raise ValueError(f"deep_min_severity must be one of info/low/medium/high/critical, "
                              f"got {self.deep_min_severity!r}")
@@ -232,6 +242,52 @@ def _unpaused(column: str, paused: tuple[str, ...]) -> tuple[str, tuple]:
 
 # A queue row's repository is its event's: a run id's `owner__name-` prefix is also that of `owner/name-pr`'s.
 _QUEUE_REPO = "json_extract(event_json, '$.repo')"
+# A release handed over by `release-watch --final` is never shed and never counts toward `max_queue`: eligibility already bounds them, and a shed one would leave no record anywhere.
+_SHEDDABLE = " AND coalesce(json_extract(event_json, '$.kind'), '') != 'release'"
+
+
+def final_queue_dir(state_dir: str) -> str:
+    return os.path.join(state_dir, FINAL_QUEUE)
+
+
+def _write_json_atomically(directory: str, name: str, obj: dict) -> str:
+    """Write `<directory>/<name>` whole or not at all. The temporary file is `.tmp-<name>-<pid>` with no `.json` suffix, so an import never reads a half-written one."""
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, name)
+    tmp = os.path.join(directory, f".tmp-{name.removesuffix('.json')}-{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, ensure_ascii=False, default=str)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return path
+
+
+def spool_final(state_dir: str, run_id: str, priority: int, event: dict) -> str:
+    """Hand a release to the model queue: written by `release-watch --final`, imported by the `watch` that holds `state_dir`. `release-watch` never opens `watch.db`, so a busy or older one cannot fail its comparison, and an older `watch` never sees the file."""
+    return _write_json_atomically(final_queue_dir(state_dir), f"{run_id}.json",
+                                  {"run_id": run_id, "priority": priority, "event": event})
+
+
+def consumer_status(state_dir: str, now: datetime) -> tuple[str | None, bool]:
+    """`(problem, stale)` of the `watch` that would run what `release-watch --final` spools: a problem when no `watch` that imports and runs the model has used `state_dir`, stale when it has not looked for over an hour. A plain file read: no database is opened."""
+    path = os.path.join(final_queue_dir(state_dir), _CONSUMER)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            marker = json.load(fh)
+        at = datetime.fromisoformat(str(marker["at"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return (f"no `watch` that runs the model has used {state_dir} ({path} is missing or unreadable): start "
+                "`watch` (or `watch --queue-only`) on the same --state first"), False
+    if marker.get("version") != _CONSUMER_VERSION:
+        return f"{path} was written by another diff-sentry build (version {marker.get('version')!r})", False
+    if marker.get("runs_model") is not True:
+        return f"the `watch` on {state_dir} runs --screen-only, so nothing would run the releases it is handed", False
+    if at.tzinfo is None:                   # every `watch` writes an aware time: a hand-edited one is not to be trusted
+        return None, True
+    return None, (now - at).total_seconds() > _CONSUMER_STALE_S
 
 
 def _iso(dt: datetime) -> str:
@@ -330,11 +386,27 @@ class WatchState:
         self._q("INSERT OR REPLACE INTO queue (run_id, priority, enqueued_at, event_json) VALUES (?,?,?,?)",
                 (run_id, priority, _iso(now), json.dumps(event, ensure_ascii=False, default=str)))
 
-    def queue_size(self, paused: tuple[str, ...] = ()) -> int:
-        """Changes waiting for the model (the one being run is not waiting), those of `paused` repositories aside."""
+    def queue_size(self, paused: tuple[str, ...] = (), *, sheddable: bool = False) -> int:
+        """Changes waiting for the model (the one being run is not waiting), those of `paused` repositories aside; with `sheddable`, only those the queue cap may shed (no release)."""
         skip, args = _unpaused(_QUEUE_REPO, paused)
+        if sheddable:
+            skip += _SHEDDABLE
         with self._lock:
             return self._db.execute(f"SELECT COUNT(*) FROM queue WHERE claimed=0{skip}", args).fetchone()[0]
+
+    def offer(self, run_id: str, priority: int, event: dict, now: datetime) -> bool:
+        """Queue a run unless its id is already in the queue (waiting, running or buried): never `INSERT OR REPLACE`, which would reset a claimed row. True when it was added."""
+        return self._q("INSERT OR IGNORE INTO queue (run_id, priority, enqueued_at, event_json) VALUES (?,?,?,?)",
+                       (run_id, priority, _iso(now), json.dumps(event, ensure_ascii=False, default=str))).rowcount == 1
+
+    def has_run(self, run_id: str) -> bool:
+        with self._lock:
+            return self._db.execute("SELECT 1 FROM queue WHERE run_id=?", (run_id,)).fetchone() is not None
+
+    def names_change(self, run_id: str) -> bool:
+        """Whether a change the watcher polls already uses this run id (a GitHub owner named `pypi`, `npm` or `oci`)."""
+        with self._lock:
+            return self._db.execute("SELECT 1 FROM changes WHERE run_id=?", (run_id,)).fetchone() is not None
 
     def queued_run_ids(self) -> list[str]:
         """Runs waiting for the model (not the buried ones: those stay `failed` until `--requeue-failed`)."""
@@ -344,16 +416,18 @@ class WatchState:
     def lowest(self, paused: tuple[str, ...] = ()) -> sqlite3.Row | None:
         skip, args = _unpaused(_QUEUE_REPO, paused)
         with self._lock:
-            return self._db.execute(f"SELECT run_id, priority FROM queue WHERE claimed=0{skip} "
+            return self._db.execute(f"SELECT run_id, priority FROM queue WHERE claimed=0{skip}{_SHEDDABLE} "
                                     "ORDER BY priority ASC, seq DESC LIMIT 1", args).fetchone()
 
     def claim(self, now: datetime, paused: tuple[str, ...] = ()) -> sqlite3.Row | None:
         """Take the most urgent change that is ready. The row stays until `complete`, so a crash mid-run leaves it for `requeue_claimed` instead of losing the change. Claiming counts as an attempt, so an input that kills the process cannot loop forever across restarts."""
         skip, args = _unpaused(_QUEUE_REPO, paused)
         with self._lock:
-            row = self._db.execute(
-                f"SELECT * FROM queue WHERE claimed=0 AND (not_before IS NULL OR not_before<=?){skip} "
+            # the chosen run id first, then its row: only that one event is read
+            pick = self._db.execute(
+                f"SELECT run_id FROM queue WHERE claimed=0 AND (not_before IS NULL OR not_before<=?){skip} "
                 "ORDER BY priority DESC, seq ASC LIMIT 1", (_iso(now), *args)).fetchone()
+            row = self._db.execute("SELECT * FROM queue WHERE run_id=?", (pick["run_id"],)).fetchone() if pick else None
             if row:
                 self._db.execute("UPDATE queue SET claimed=1, attempts=attempts+1 WHERE run_id=?", (row["run_id"],))
                 self._db.commit()
@@ -438,6 +512,7 @@ class PollReport:
     errors: list[str] = field(default_factory=list)
     truncated: list[str] = field(default_factory=list)   # listings deeper than one pass could read
     rate_limited: bool = False
+    imported: int = 0                   # releases `release-watch --final` handed over, now queued
 
 
 def run_id_for(repo: str, kind: str, number: int, revision: int) -> str:
@@ -465,14 +540,18 @@ def _flags(event: dict) -> str:
 class _InstanceLock:
     """One `watch` per state directory. Two processes on the same files would each requeue the other's running change and could run one run id twice. An advisory `flock`; a platform without `fcntl` runs unguarded."""
 
-    def __init__(self, state_dir: str):
+    def __init__(self, state_dir: str, *, required: bool = False):
         self._path = os.path.join(state_dir, "watch.lock")
         self._fh = None
+        self._required = required       # an hourly cap holds only while one process claims: no lock, no start
 
     def acquire(self) -> None:
         try:
             import fcntl
         except ImportError:
+            if self._required:
+                raise RuntimeError("this platform has no fcntl, so `watch` cannot hold its state directory alone and "
+                                   "DS_WATCH_MAX_DEEP_PER_HOUR would not hold: refusing to start") from None
             return
         self._fh = open(self._path, "a")  # noqa: SIM115 (held for the life of the lock)
         try:
@@ -542,7 +621,8 @@ class Watcher:
         self.state = WatchState(os.path.join(config.state_dir, "watch.db"))
         self.actors = ActorStore(os.path.join(config.state_dir, "actors.db"), clock=self._clock)
         self.snapshots = SnapshotStore(os.path.join(config.state_dir, "snapshots"))
-        self._lock = _InstanceLock(config.state_dir)
+        self._lock = _InstanceLock(config.state_dir, required=config.max_deep_per_hour > 0 and not config.screen_only)
+        self._import_lock = threading.Lock()       # the poller and, with workers > 1, the worker thread both import
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._interval = config.poll_interval_s
@@ -568,6 +648,7 @@ class Watcher:
     def poll_once(self) -> PollReport:
         """One pass: list each repository (cheap, ETag), examine what is new or updated, then the re-checks that have come due. Never raises: a repository that fails is reported and the pass continues."""
         report = PollReport()
+        self.import_hand_overs(report)        # first: a GitHub rate-limit wait must not hold the releases back
         now = self._clock()
         if self._rate_wait_until and now < self._rate_wait_until:
             report.rate_limited = True
@@ -920,7 +1001,7 @@ class Watcher:
         """Whether the change joins the queue (`queued`) or is shed (`shed`), its priority, and the less urgent change to shed to make room when the queue is capped. Decides only: `record_examined` writes it all."""
         prio = _priority(hits, event.get("provenance") or {})
         cap = self.config.max_queue
-        if cap and self.state.queue_size(self.config.paused) >= cap:
+        if cap and self.state.queue_size(self.config.paused, sheddable=True) >= cap:
             worst = self.state.lowest(self.config.paused)     # a paused repository's queue is kept, never shed
             if worst is not None and worst["priority"] < prio:
                 return "queued", prio, worst["run_id"]      # make room by shedding the least urgent
@@ -934,24 +1015,151 @@ class Watcher:
         return not cap or len(self.state.deep_last_hour(self._clock())) < cap
 
     def _claim(self) -> tuple[sqlite3.Row, dict] | None:
-        """Take the highest-priority ready change, unless the hourly cap is reached, and mark it running."""
-        if not self._may_run():
-            return None
-        row = self.state.claim(self._clock(), self.config.paused)
-        if row is None:
-            return None
+        """Take the highest-priority ready change, unless the hourly cap is reached, and mark it running. A handed-over release's full event is read from `final-queue/accepted/` here; one that cannot be read is buried at once (nothing brings it back). A claim whose bookkeeping fails backs off like a failed run, so the row does not come first again on the next claim and hold up every one behind it."""
+        while self._may_run():
+            row = self.state.claim(self._clock(), self.config.paused)
+            if row is None:
+                return None
+            try:
+                event = json.loads(row["event_json"])
+            except ValueError:
+                log.error("queued run %s holds no readable event — kept as failed", row["run_id"])
+                self.state.bury(row["run_id"])
+                continue
+            if event.get("spooled"):
+                try:
+                    event = self._accepted_event(row["run_id"])
+                except (OSError, ValueError) as exc:
+                    log.error("release %s cannot be read from %s (%s) — kept as failed", row["run_id"], FINAL_QUEUE, exc)
+                    self.state.bury(row["run_id"])
+                    continue
+            try:
+                self._mark(row["run_id"], event, "running")
+                self.state.note_deep(self._clock())
+            except Exception:
+                attempts = row["attempts"] + 1               # `claim` counted this one
+                if attempts >= _MAX_ATTEMPTS:
+                    self.state.bury(row["run_id"])
+                else:
+                    self.state.retry(row["run_id"], attempts, self._clock() + _backoff(attempts))
+                with contextlib.suppress(Exception):         # the store itself may be what fails
+                    self._mark(row["run_id"], event, "failed" if attempts >= _MAX_ATTEMPTS else "queued")
+                raise
+            return row, event
+        return None
+
+    # ── what `release-watch --final` hands over ────────────────────────────────────────────────────
+
+    def _accepted(self, run_id: str) -> str:
+        return os.path.join(final_queue_dir(self.config.state_dir), "accepted", f"{run_id}.json")
+
+    def _accepted_event(self, run_id: str) -> dict:
+        with open(self._accepted(run_id), encoding="utf-8") as fh:
+            event = json.load(fh)["event"]
+        if not isinstance(event, dict):
+            raise ValueError("the handed-over file holds no event")
+        return event
+
+    def _drop_accepted(self, row: sqlite3.Row) -> None:
         try:
-            event = json.loads(row["event_json"])
-            self._mark(row["run_id"], event, "running")
-            self.state.note_deep(self._clock())
-        except Exception:
-            self.state.unclaim(row["run_id"])            # nothing ran: give back the attempt it counted
-            raise
-        return row, event
+            if json.loads(row["event_json"]).get("spooled"):
+                os.remove(self._accepted(row["run_id"]))
+        except (OSError, ValueError):
+            pass
+
+    def _responded(self, run_id: str) -> bool:
+        return os.path.exists(os.path.join(self.config.out_dir, "responses", f"{run_id}.json"))
+
+    def _reject(self, path: str, why: str) -> None:
+        log.error("%s: %s — moved to %s/rejected", os.path.basename(path), why, FINAL_QUEUE)
+        rejected = os.path.join(final_queue_dir(self.config.state_dir), "rejected")
+        os.makedirs(rejected, exist_ok=True)
+        try:
+            os.replace(path, os.path.join(rejected, os.path.basename(path)))
+        except FileNotFoundError:
+            pass
+
+    def import_spool(self, report: PollReport | None = None) -> int:
+        """Queue the releases `release-watch --final` handed over (`spool_final`), at most `_MAX_IMPORTS_PER_PASS` a pass, and say that this `watch` looks (`.consumer`). Each file moves to `accepted/` and its queue row holds only a stub (`spooled`), so neither the claim nor the cap reads a large event; the event is read when the run is claimed. A run that already has a response is not queued again, a run id a polled change already uses is refused, and an accepted file with no queue row (a stop between the move and the queue write) is queued again. Under `--screen-only` nothing is imported. Returns how many were queued."""
+        qdir = final_queue_dir(self.config.state_dir)
+        with self._import_lock:
+            _write_json_atomically(qdir, _CONSUMER, {"version": _CONSUMER_VERSION, "runs_model": not self.config.screen_only,
+                                                     "at": _iso(self._clock())})
+            if self.config.screen_only:
+                return 0
+            accepted = os.path.join(qdir, "accepted")
+            os.makedirs(accepted, exist_ok=True)
+            queued = 0
+            spooled = sorted(n for n in os.listdir(qdir) if n.endswith(".json"))[:_MAX_IMPORTS_PER_PASS]
+            for name in spooled:
+                path = os.path.join(qdir, name)
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        item = json.load(fh)
+                    run_id, priority, event = item["run_id"], int(item["priority"]), item["event"]
+                    if f"{run_id}.json" != name or not isinstance(event, dict) or event.get("kind") != "release":
+                        raise ValueError("not a release handed over under its own run id")
+                except FileNotFoundError:
+                    continue                                    # another thread took it
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    self._reject(path, f"unreadable ({type(exc).__name__}: {exc})")
+                    continue
+                if self._responded(run_id):                     # already run: a release-watch stopped before it recorded
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(path)
+                    continue
+                if self.state.names_change(run_id):
+                    self._reject(path, "its run id is a polled change's")
+                    continue
+                try:
+                    os.replace(path, os.path.join(accepted, name))
+                except FileNotFoundError:
+                    continue
+                queued += self._offer(run_id, priority, event)
+            for name in sorted(n for n in os.listdir(accepted) if n.endswith(".json")):
+                run_id = name.removesuffix(".json")
+                if self.state.has_run(run_id):
+                    continue
+                if self._responded(run_id):                     # run, and its row completed: nothing left to do
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(os.path.join(accepted, name))
+                    continue
+                try:
+                    with open(os.path.join(accepted, name), encoding="utf-8") as fh:
+                        item = json.load(fh)
+                    priority, event = int(item["priority"]), item["event"]
+                    if not isinstance(event, dict) or event.get("kind") != "release":
+                        raise ValueError("not a release")
+                    queued += self._offer(run_id, priority, event)
+                except FileNotFoundError:
+                    continue
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    self._reject(os.path.join(accepted, name), f"unreadable ({type(exc).__name__}: {exc})")
+        if queued:
+            log.info("queued %d release(s) handed over by release-watch --final", queued)
+            if report is not None:
+                report.imported += queued
+            self._wake.set()
+        return queued
+
+    def import_hand_overs(self, report: PollReport | None = None) -> None:
+        """`import_spool`, logged and counted in `report` instead of raised."""
+        try:
+            self.import_spool(report)
+        except Exception as exc:  # noqa: BLE001 (a failed import leaves the files where they are, for the next pass)
+            if report is not None:
+                report.errors.append(f"import {FINAL_QUEUE}: {type(exc).__name__}: {exc}")
+            log.warning("importing %s failed: %s", FINAL_QUEUE, exc)
+
+    def _offer(self, run_id: str, priority: int, event: dict) -> int:
+        stub = {"repo": str(event.get("repo") or ""), "kind": "release", "number": None, "spooled": run_id}
+        return int(self.state.offer(run_id, priority, stub, self._clock()))
 
     def _mark(self, run_id: str, event: dict, state: str) -> None:
-        """Set the change's state, but only for its latest revision: an older one finishing, failing or starting again is not the state of the change."""
+        """Set the change's state, but only for its latest revision: an older one finishing, failing or starting again is not the state of the change. A release has no change row: its record is its response and trace."""
         repo, kind, number = event["repo"], event["kind"], event["number"]
+        if kind == "release":
+            return
         latest = self.state.change(repo, kind, number)
         if latest is None or latest["run_id"] == run_id:
             self.state.upsert_change(repo, kind, number, state=state)
@@ -974,9 +1182,11 @@ class Watcher:
         try:
             if outcome is not None:
                 verdict, signal, top = outcome
-                self.actors.finalize(run_id, verdict=verdict, signal=signal, max_severity=top)
+                if event.get("kind") != "release":          # a release is no account's sighting
+                    self.actors.finalize(run_id, verdict=verdict, signal=signal, max_severity=top)
                 self._mark(run_id, event, "done")
                 self.state.complete(run_id)
+                self._drop_accepted(row)
             elif row["attempts"] + 1 < _MAX_ATTEMPTS:
                 delay = _backoff(row["attempts"] + 1)
                 self.state.retry(run_id, row["attempts"] + 1, self._clock() + delay)
@@ -991,6 +1201,7 @@ class Watcher:
             # The run itself happened; only the bookkeeping failed. Do not leave the row claimed for ever, and do not leave the change reading `running`.
             log.exception("bookkeeping for %s failed", run_id)
             self.state.complete(run_id)
+            self._drop_accepted(row)
             try:
                 self.state.set_state_of_run(run_id, "done")
             except Exception:  # noqa: BLE001,S110 (the store itself is failing; the log line above is the record)
@@ -1041,6 +1252,7 @@ class Watcher:
 
     def _run_pool(self, limit: int | None, *, serving: bool = False) -> int:
         """Run ready changes `workers` at a time until none is left and none is running (`drain`, at most `limit`), or, `serving`, until `stop()`. Returns how many it started. A stop or an interrupt leaves the runs it cuts off claimed for `recover()`; an error settles them, so a long-lived watcher strands nothing."""
+        self.import_hand_overs()
         pool = self._new_pool()
         inflight: dict[Future, tuple[sqlite3.Row, dict]] = {}
         ran = 0
@@ -1074,6 +1286,7 @@ class Watcher:
         """Run ready changes until none is left (or `limit`, or the hourly cap). Returns how many ran."""
         if self.config.workers > 1:
             return self._run_pool(limit)
+        self.import_hand_overs()
         ran = 0
         while (limit is None or ran < limit) and self.run_next() is not None:
             ran += 1
@@ -1093,6 +1306,9 @@ class Watcher:
         if not self.config.screen_only:
             worker.start()
         try:
+            while not self._stop.is_set() and self.config.queue_only:   # nothing to poll: hand-overs and the queue only
+                self.import_hand_overs()
+                self._stop.wait(min(max(1.0, self._interval), 86_400.0))
             while not self._stop.is_set():
                 try:
                     report = self.poll_once()

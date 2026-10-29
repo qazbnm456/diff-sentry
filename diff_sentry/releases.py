@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 from packaging.version import InvalidVersion, Version
 
 from .dbutil import open_versioned
-from .schema import IndicatorHit
+from .schema import IndicatorHit, severity_rank
 
 log = logging.getLogger(__name__)
 
@@ -612,6 +612,29 @@ def release_scope(hits: list[IndicatorHit]) -> list[IndicatorHit]:
             if h.severity in ("high", "critical") and h.rule in _MENTION_RULES else h for h in hits]
 
 
+# The rules that say only that something was not read: the model would be handed the same unread content, so they alone never send a release to it (`final_eligible`).
+_NOT_READ_RULES = frozenset({"release-not-fully-read", "release-code-not-read", "release-tag-missing",
+                             "image-owner-unresolved"})
+_MAX_FINAL_EVENT_CHARS = 8 << 20    # an image of many platforms can hold far more; the model run holds it whole
+
+
+def final_eligible(event: dict, hits: list[IndicatorHit], min_severity: str = "high") -> bool:
+    """Whether `release-watch --final` hands a screened release to the model: it has files, a grounded hit at `min_severity` or above that is not only a note of what was not read, and a rendered size the run can hold. A queue gate, as `deep_min_severity` is for a change: the signal is derived as ever."""
+    if not event.get("files"):
+        return False
+    floor = severity_rank(min_severity)
+    if not any(h.grounded and severity_rank(h.severity) >= floor and h.rule not in _NOT_READ_RULES for h in hits):
+        return False
+    from .normalize import normalize_event
+
+    size = len(normalize_event(event))
+    if size > _MAX_FINAL_EVENT_CHARS:
+        log.warning("release %s is too large for the model (%d characters rendered): screened only",
+                    event.get("title", ""), size)
+        return False
+    return True
+
+
 def scan_release_change(event: dict) -> list[IndicatorHit]:
     """`scan_change` for a release event, with the mention rules below the floor (`release_scope`)."""
     from .indicators import scan_change
@@ -817,6 +840,7 @@ def release_event(package: str, version: str, files: list[ReleaseFile], fetch: F
         source = repos.pop() if len(repos) == 1 and _REPO_RE.fullmatch(next(iter(repos))) else None
     if source and not npm:
         facts.update(tag_facts(name, version, prev, new, old, source, fetch, notes, configured=configured))
+        facts["source_configured"] = configured      # `--sources`, not read off a publisher (`artifact_echo`)
     facts["notes"] = notes[:50]
     return {
         "repo": f"{registry}/{name}", "kind": "release", "number": None, "author": "",
@@ -1002,7 +1026,33 @@ def tag_event(package: str, version: str, files: list[ReleaseFile], fetch: Fetch
         facts = _compare_tag(facts, trees, new, arts(prev))
     return {"repo": f"pypi/{name}", "kind": "release", "number": None, "author": "", "body": "", "files": [],
             "title": f"{name} {version} (against its tag)", "created_at": None,
-            "release": {"package": name, "version": version, "previous": prev, **facts, "notes": notes[:50]}}
+            "release": {"package": name, "version": version, "previous": prev, **facts, "source_configured": configured,
+                        "notes": notes[:50]}}
+
+
+_REGISTRY_HOSTS = {"pypi": "pypi.org", "npm": "registry.npmjs.org"}
+
+
+def artifact_echo(event: dict) -> dict | None:
+    """What a release or image is, for the response and the SIEM payload: ecosystem, registry, name, version or tag, digest, and what it was compared with. Only a configured `--sources` repository is `source_repo`; a Trusted Publisher names who uploaded (`publisher`), and an image's `vcs:source` is what its unsigned provenance claims (`claimed_source`), so neither is presented as the source. None for an event that is not a release."""
+    release = event.get("release") if event.get("kind") == "release" else None
+    if not isinstance(release, dict):
+        return None
+    image = release.get("image")
+    if isinstance(image, dict):
+        host, _, name = str(image.get("image") or "").partition("/")
+        claimed = sorted({str(p.get("source")) for p in image.get("provenance") or []
+                          if isinstance(p, dict) and p.get("source")})
+        return {"ecosystem": "ghcr" if host == "ghcr.io" else "dockerhub", "registry": host, "name": name,
+                "tag": image.get("tag"), "digest": image.get("digest") or None,
+                "previous_digest": release.get("previous") or None, "source_repo": None,
+                "claimed_source": claimed or None}
+    ecosystem = str(event.get("repo") or "").partition("/")[0]
+    return {"ecosystem": ecosystem, "registry": _REGISTRY_HOSTS.get(ecosystem), "name": release.get("package"),
+            "version": release.get("version"), "previous_version": release.get("previous") or None,
+            "source_repo": release.get("source") if release.get("source_configured") else None,
+            "publisher": release.get("publishers") or None,
+            "previous_publishers": release.get("previous_publishers") or None}
 
 
 def run_id_for(package: str, version: str, revision: int = 0, registry: str = "pypi") -> str:
@@ -1059,9 +1109,12 @@ class ReleaseWatcher:
 
     def __init__(self, packages: list[str], *, state_dir: str, out_dir: str, fetch: Fetch | None = None,
                  emit: bool = True, poster=None, config=None, archive: bool = True,
-                 now: Callable[[], datetime] | None = None, sources: dict[str, str] | None = None):
+                 now: Callable[[], datetime] | None = None, sources: dict[str, str] | None = None,
+                 on_screened: Callable[[dict, str, Any], None] | None = None):
         os.makedirs(state_dir, exist_ok=True)
         self.packages = packages
+        # called with (event, run_id, response) after each recorded comparison is screened (`release-watch --final`)
+        self.on_screened = on_screened
         self.sources = sources or {}
         self.out_dir = out_dir
         self.fetch = fetch or _httpx_fetch()
@@ -1163,6 +1216,8 @@ class ReleaseWatcher:
                     "files": [f.__dict__ for f in files if f.version in (version, event["release"]["previous"])]})
             art = screen(event, run_id=run_id, outdir=self.out_dir, config=self.config, emit=self.emit,
                          poster=self.poster)
+            if record and self.on_screened is not None:     # before the files are recorded: a stop in between judges again
+                self.on_screened(event, run_id, art.response)
         except Exception as exc:  # noqa: BLE001 (a comparison that fails is retried, then kept as `error`)
             log.warning("release %s %s: %s", package, version, exc)
             self.db.execute(
@@ -1230,7 +1285,8 @@ class ReleaseWatcher:
         for row in self.db.execute("SELECT * FROM tag_checks WHERE state='pending'").fetchall():
             name = normalize_name(row["package"])
             waited = (self.now() - datetime.fromisoformat(row["first_seen"])).total_seconds()
-            base = {"package": name, "version": row["version"], "source": row["source"]}
+            base = {"package": name, "version": row["version"], "source": row["source"],
+                    "source_configured": bool(row["configured"])}
             try:
                 tags = tag_commits(self.fetch, row["source"])
                 if tags is None and not row["configured"]:

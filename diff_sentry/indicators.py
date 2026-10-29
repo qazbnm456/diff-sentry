@@ -3781,7 +3781,8 @@ class _Change:
     def __init__(self, event: dict) -> None:
         from .normalize import content_segments_ex, normalize_event
 
-        texts = [normalize_event(event)] + [text for _, text, _, _ in content_segments_ex(event)]
+        # without a release's RELEASE FACTS: they are the host's, so a region copied from them is not the change's
+        texts = [normalize_event(event, facts=False)] + [text for _, text, _, _ in content_segments_ex(event)]
         lines = [_ground_line(line) for t in texts for line in _lf(t).split("\n")]
         self.lines = frozenset(lines)
         self.text = "\n".join(lines)
@@ -3845,6 +3846,9 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
     from rlm_harness.trace import record_tool_call
 
     change = _Change(event) if event is not None else None
+    release = event is not None and event.get("kind") == "release"
+    if release:
+        from .releases import release_scope
     try:
         windows = _maintainer_windows(event) if event is not None else frozenset()
     except Exception:  # noqa: BLE001 (fail CLOSED): a planner scan keeps every `inline-code-exec` as found
@@ -3895,6 +3899,8 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
             if quoted:      # what the baseline judged in the maintainer's text, read again
                 hits = [h.model_copy(update={"severity": "medium", "title": f"{h.title} — {_INLINE_EXEC_TRUSTED_WHY}"})
                         if h.rule == "inline-code-exec" and h.severity == "high" else h for h in hits]
+        if release:     # the scope the baseline gives a release (`releases.release_scope`), so a re-scan keeps its floor
+            hits = release_scope(hits)
         if not copied and grounded and _squeeze(text):
             change.remember(text)       # a decoded value: the next layer of a multi-layer encoding comes from it
         if not grounded:

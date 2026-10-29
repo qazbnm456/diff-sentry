@@ -17,6 +17,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from . import __version__
 from .config import DetectConfig
@@ -55,6 +56,8 @@ async def detect_from_event(
             "instructions": task.instructions,
             # The change under review: echoed into the response envelope + the SIEM signal.
             "source": _source_echo(event),
+            # What a release or image is (`releases.artifact_echo`), echoed the same way; absent for a PR or issue.
+            **_artifact_meta(event),
             # The host-derived facts about the author and the event (account age as of the event, profile, timestamps, fork, commit offsets), so an offline reader sees what the ingest saw.
             **({"provenance": event["provenance"]} if event.get("provenance") else {}),
             # The deterministic baseline: assemble unions this with every scan_indicators tool call.
@@ -109,6 +112,13 @@ _SOURCE_KEYS = ("repo", "kind", "number", "author", "title", "file_count", "cont
 def _source_echo(event: dict) -> dict:
     meta_source = event_metadata(event)
     return {k: meta_source.get(k) for k in _SOURCE_KEYS}
+
+
+def _artifact_meta(event: dict) -> dict:
+    from .releases import artifact_echo
+
+    artifact = artifact_echo(event)
+    return {"artifact": artifact} if artifact else {}
 
 
 def _write(path_parts: tuple[str, str], content: str) -> str:
@@ -203,6 +213,7 @@ def screen(
     meta = {
         "event": normalize_event(event),
         "source": _source_echo(event),
+        **_artifact_meta(event),
         "baseline_indicators": baseline if baseline is not None else _baseline_indicators(event),
         "emit_on": list(config.emit_on),
         **({"provenance": event["provenance"]} if event.get("provenance") else {}),
@@ -333,18 +344,49 @@ def _cmd_scan(args) -> int:
     return 1 if failed else 0
 
 
+def _final_hand_over(state_dir: str, min_severity: str):
+    """`release-watch --final`: a recorded comparison that `final_eligible` passes is handed to the `watch` on `state_dir` (`watch.spool_final`), which queues it for the model under its own hourly cap. The screen and its alert are unchanged."""
+    import logging
+
+    from .releases import final_eligible
+    from .watch import _priority, spool_final
+
+    def hand_over(event: dict, run_id: str, response) -> None:
+        hits = list(response.indicators)
+        if final_eligible(event, hits, min_severity):
+            spool_final(state_dir, run_id, _priority(hits, {}), event)
+            logging.getLogger("diff_sentry.releases").info("release %s handed to the model queue", run_id)
+
+    return hand_over
+
+
 def _cmd_release_watch(args) -> int:
     import logging
     import signal
 
+    from .config import _env_bool
     from .images import ImageWatcher
     from .npm import NpmWatcher, parse_npm_packages
     from .releases import ReleaseWatcher, parse_packages, parse_sources
+    from .watch import consumer_status
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if not math.isfinite(args.interval) or args.interval <= 0:
         print("release-watch: --interval must be a positive number of seconds", file=sys.stderr)
         return 2
+    on_screened = None
+    final = (args.final or _env_bool("DS_RELEASE_FINAL", False)) and not args.check
+    if final:
+        min_severity = os.getenv("DS_RELEASE_FINAL_MIN_SEVERITY", "high").strip().lower()
+        if min_severity not in ("high", "critical"):
+            print(f"release-watch: DS_RELEASE_FINAL_MIN_SEVERITY must be high or critical, not {min_severity!r}",
+                  file=sys.stderr)
+            return 2
+        problem, _stale = consumer_status(args.state, datetime.now(UTC))
+        if problem:
+            print(f"release-watch --final: {problem}", file=sys.stderr)
+            return 2
+        on_screened = _final_hand_over(args.state, min_severity)
     texts = list(args.packages) + [os.getenv("DS_RELEASE_PACKAGES", "")]
     try:
         if args.packages_file:
@@ -359,16 +401,17 @@ def _cmd_release_watch(args) -> int:
         images = [i for text in [*args.images, os.getenv("DS_RELEASE_IMAGES", "")] for i in text.replace(",", " ").split()]
         floating = tuple(args.image_tags or os.getenv("DS_RELEASE_IMAGE_TAGS", "latest").replace(",", " ").split())
         image_watcher = ImageWatcher([] if args.check else images, state_dir=args.state, out_dir=args.out,
-                                     floating=floating, emit=not args.no_emit)
+                                     floating=floating, emit=not args.no_emit, on_screened=on_screened)
         try:
             sources = parse_sources([*args.sources, os.getenv("DS_RELEASE_SOURCES", "")])
             watcher = ReleaseWatcher(packages, state_dir=args.state, out_dir=args.out, emit=not args.no_emit,
-                                     sources=sources)
+                                     sources=sources, on_screened=on_screened)
         except BaseException:
             image_watcher.close()
             raise
         try:
-            npm_watcher = NpmWatcher(npm, state_dir=args.state, out_dir=args.out, emit=not args.no_emit)
+            npm_watcher = NpmWatcher(npm, state_dir=args.state, out_dir=args.out, emit=not args.no_emit,
+                                     on_screened=on_screened)
         except BaseException:
             image_watcher.close()
             watcher.close()
@@ -394,6 +437,12 @@ def _cmd_release_watch(args) -> int:
         try:
             while not stopping:
                 started = time.monotonic()
+                if final:       # what it hands over waits in the spool; say so when nothing is taking it
+                    problem, stale = consumer_status(args.state, datetime.now(UTC))
+                    if problem or stale:
+                        logging.getLogger("diff_sentry.releases").warning(
+                            "release-watch --final: %s", problem or f"the `watch` on {args.state} has not looked "
+                            "for handed-over releases for over an hour; they wait until it does")
                 watcher.poll_once()
                 npm_watcher.poll_once()
                 image_watcher.poll_once()
@@ -458,7 +507,7 @@ def _cmd_watch(args) -> int:
     import logging
     import signal
 
-    from .watch import WatchConfig, Watcher, WatchState, parse_repos, requeue_failed
+    from .watch import PollReport, WatchConfig, Watcher, WatchState, parse_repos, requeue_failed
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.stats:
@@ -501,13 +550,15 @@ def _cmd_watch(args) -> int:
             "recheck_s": int(args.recheck_hours * 3600) if args.recheck_hours is not None else None,
             "screen_only": args.screen_only or None, "deep_min_severity": args.deep_min_severity,
             "max_queue": args.max_queue, "max_deep_per_hour": args.max_deep_per_hour, "workers": args.workers,
+            "queue_only": args.queue_only or None,
         }
         config = WatchConfig.from_env(**overrides)     # also parses DS_WATCH_REPOS and the other env knobs
     except (ValueError, OSError, OverflowError) as exc:
         print(f"watch: {exc}", file=sys.stderr)
         return 2
-    if not config.repos:
-        print("watch: no repositories — pass --repos / --repos-file or set DS_WATCH_REPOS", file=sys.stderr)
+    if not config.repos and not config.queue_only:
+        print("watch: no repositories — pass --repos / --repos-file, set DS_WATCH_REPOS, or run --queue-only",
+              file=sys.stderr)
         return 2
     try:
         detect = DetectConfig.screen_from_env() if config.screen_only else DetectConfig.from_env()
@@ -525,11 +576,15 @@ def _cmd_watch(args) -> int:
     try:
         if args.once:
             watcher.recover()
-            report = watcher.poll_once()
+            if config.queue_only:                       # nothing to poll: the hand-overs, counted, then the queue
+                report = PollReport()
+                watcher.import_hand_overs(report)
+            else:
+                report = watcher.poll_once()
             ran = 0 if config.screen_only else watcher.drain()
             print(f"watch --once: listed={report.listed} new={report.new} revised={report.revised} "
                   f"unchanged={report.unchanged} alerts={report.alerts} queued={report.queued} "
-                  f"shed={report.shed} ran={ran} errors={len(report.errors)}")
+                  f"shed={report.shed} imported={report.imported} ran={ran} errors={len(report.errors)}")
             for e in report.errors:
                 print(f"  ! {e}", file=sys.stderr)
             for t in report.truncated:
@@ -667,12 +722,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="on first sight of a repo, also examine changes updated this recently (default 0)")
     w.add_argument("--recheck-hours", type=float, default=None,
                    help="re-examine a change for edits / a deleted fork or account for this long (default 24)")
+    w.add_argument("--queue-only", action="store_true",
+                   help="poll nothing: run the model queue and the releases `release-watch --final` hands over "
+                        "(needs no --repos)")
     w.add_argument("--screen-only", action="store_true",
                    help="deterministic tier only: archive, correlate, alert; never run the model (no creds)")
     w.add_argument("--deep-min-severity", default=None, choices=SEVERITIES,
                    help="only queue for the model when the screen reached this severity (default: info = all)")
-    w.add_argument("--max-queue", type=int, default=None, help="shed the lowest priority beyond this (0 = off)")
-    w.add_argument("--max-deep-per-hour", type=int, default=None, help="cap model runs per hour (0 = off)")
+    w.add_argument("--max-queue", type=int, default=None,
+                   help="shed the lowest priority beyond this (0 = off; a release from release-watch --final is never shed)")
+    w.add_argument("--max-deep-per-hour", type=int, default=None,
+                   help="cap model runs per hour (0 = off); where there is no fcntl lock, a watch with a cap refuses to start unless --screen-only")
     w.add_argument("--workers", type=int, default=None,
                    help="model runs at once, each in a process of its own (DS_WATCH_WORKERS, default 1)")
     w.add_argument("--no-emit", action="store_true", help="do not emit SIEM signals")
@@ -685,7 +745,7 @@ def build_parser() -> argparse.ArgumentParser:
     w.set_defaults(func=_cmd_watch)
 
     rw = sub.add_parser("release-watch",
-                        help="compare each new release of watched PyPI packages with the one before it (no model)")
+                        help="compare each new release of watched PyPI packages with the one before it (no model; --final hands the riskiest to watch's queue)")
     rw.add_argument("--packages", nargs="+", default=[], help="PyPI project names (or set DS_RELEASE_PACKAGES)")
     rw.add_argument("--packages-file", help="a file of project names, one per line (# comments allowed)")
     rw.add_argument("--npm", nargs="+", default=[], help="npm package names, @scope/name included (or set DS_RELEASE_NPM)")
@@ -704,6 +764,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="seconds between polls (DS_RELEASE_INTERVAL, default 300)")
     rw.add_argument("--no-emit", action="store_true", help="do not emit SIEM signals")
     rw.add_argument("--once", action="store_true", help="one poll, then exit")
+    rw.add_argument("--final", action="store_true",
+                    help="hand a release whose screen reaches high (DS_RELEASE_FINAL_MIN_SEVERITY) on content it read to "
+                         "the model, through the queue of the `watch` on the same --state and --out (or set "
+                         "DS_RELEASE_FINAL=1; off by default; not yet validated by an eval)")
     rw.add_argument("--check", nargs=2, metavar=("PACKAGE", "VERSION"),
                     help="judge one release against the one before it now, print the result, and exit "
                          "(npm:NAME for an npm package)")

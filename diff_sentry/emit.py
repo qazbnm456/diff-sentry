@@ -57,6 +57,8 @@ def signal_payload(response: DetectionResponse, *, stage: str = "final") -> dict
                             key=lambda h: (not h.grounded, -severity_rank(h.severity)))[:_MAX_SIGNAL_INDICATORS]
         ],
         "indicator_count": len(response.indicators),
+        # a release's or image's identity; absent for a PR or an issue, so their payload is as before
+        **({"artifact": response.artifact} if response.artifact else {}),
     }
 
 

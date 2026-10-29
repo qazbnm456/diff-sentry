@@ -288,7 +288,7 @@ def test_an_older_revision_never_sets_the_state_of_the_change(tmp_path):
         w.close()
 
 
-def test_a_queued_change_always_has_its_row_and_a_failed_claim_is_given_back(make):
+def test_a_queued_change_always_has_its_row_and_a_failed_claim_backs_off(make):
     w = make.make(quick_runner, 1, workers=2)
     row = w.state.change("acme/widgets", "pull_request", 1)
     assert row is not None and row["state"] == "queued"
@@ -301,7 +301,9 @@ def test_a_queued_change_always_has_its_row_and_a_failed_claim_is_given_back(mak
     with pytest.raises(RuntimeError):
         w._claim()
     w.state.note_deep = real
-    assert w.state.queue_size() == 1                                   # back in the queue, its attempt returned
+    assert w.state.queue_size() == 1 and w.state.stats()["states"] == {"queued": 1}       # back in the queue
+    assert w.drain() == 0                       # backing off, as a failed run does: it cannot come first again at once
+    make.clock.advance(hours=2)
     assert w.drain() == 1 and w.state.stats()["states"] == {"done": 1}
 
 

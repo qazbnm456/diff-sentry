@@ -34,6 +34,11 @@ def _source(events: list[dict]) -> dict | None:
     return src if isinstance(src, dict) else None
 
 
+def _artifact(events: list[dict]) -> dict | None:
+    art = _meta(events).get("artifact")
+    return art if isinstance(art, dict) else None
+
+
 def _models(events: list[dict]) -> dict:
     m = _meta(events)
     return {k: m.get(k) for k in ("planner", "analyst", "classifier") if m.get(k)}
@@ -112,7 +117,7 @@ def build_response(assembled: AssembledVerdict, events: list[dict], run_id: str)
     created = int(min(ts)) if ts else 0
     common = {
         "id": run_id, "created": created, "model": _models(events), "source": _source(events),
-        "process": _process(events),
+        "artifact": _artifact(events), "process": _process(events),
         "rubric": _rubric(events),  # ATLAS TF/TA/TG/PA reward-free labels (surfaced, not judged)
     }
     if status != "classified":
@@ -152,7 +157,7 @@ def build_screened_response(run_id: str, events: list[dict]) -> DetectionRespons
     """The deterministic SCREEN of a change the model has not judged (yet): the baseline evidence and the floor-derived signal, with `status="inconclusive"` and `reason="not_escalated"`. It is the early alert a watcher can raise while the change waits in the model queue, and the standing record if it is never run."""
     hits, top, floor, signal = _floor_signal(events)
     return DetectionResponse(
-        id=run_id, status="inconclusive", model=_models(events), source=_source(events),
+        id=run_id, status="inconclusive", model=_models(events), source=_source(events), artifact=_artifact(events),
         signal=signal, indicators=hits, max_indicator_severity=top, floor_indicator_severity=floor,
         refusal=RefusalInfo(reason="not_escalated", indicators=hits,
                             detail="Deterministic screen only — the model has not judged this change."),
@@ -165,7 +170,7 @@ def build_failed_response(run_id: str, events: list[dict], detail: str, *, reaso
     """The crash path (or a trace with no result event): no verdict, but still carries the deterministic indicators gathered and the derived signal (a run that crashed AFTER a critical indicator fired must STILL be able to alert)."""
     hits, top, floor, signal = _floor_signal(events)
     return DetectionResponse(
-        id=run_id, status="failed", model=_models(events), source=_source(events),
+        id=run_id, status="failed", model=_models(events), source=_source(events), artifact=_artifact(events),
         signal=signal, indicators=hits, max_indicator_severity=top, floor_indicator_severity=floor,
         refusal=RefusalInfo(reason=reason, detail=detail, indicators=hits),
         process=_process(events),
