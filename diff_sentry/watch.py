@@ -240,7 +240,7 @@ def _unpaused(column: str, paused: tuple[str, ...]) -> tuple[str, tuple]:
     return f" AND lower({column}) NOT IN ({','.join('?' * len(paused))})", paused
 
 
-# A queue row's repository is its event's: a run id's `owner__name-` prefix is also that of `owner/name-pr`'s.
+# A queue row's repository is its event's, never read from its run id: `owner__name-` is also the prefix of `owner/name-pr`'s ids.
 _QUEUE_REPO = "json_extract(event_json, '$.repo')"
 # A release handed over by `release-watch --final` is never shed and never counts toward `max_queue`: eligibility already bounds them, and a shed one would leave no record anywhere.
 _SHEDDABLE = " AND coalesce(json_extract(event_json, '$.kind'), '') != 'release'"
@@ -404,9 +404,9 @@ class WatchState:
             return self._db.execute("SELECT 1 FROM queue WHERE run_id=?", (run_id,)).fetchone() is not None
 
     def names_change(self, run_id: str) -> bool:
-        """Whether a change the watcher polls already uses this run id (a GitHub owner named `pypi`, `npm` or `oci`)."""
+        """Whether a change the watcher polls already uses this run id, in any case (one file on a case-insensitive file system). Only a change stored before `run_id_for` gave the owners `pypi`, `npm` and `oci` their `_gh` form can."""
         with self._lock:
-            return self._db.execute("SELECT 1 FROM changes WHERE run_id=?", (run_id,)).fetchone() is not None
+            return self._db.execute("SELECT 1 FROM changes WHERE lower(run_id)=lower(?)", (run_id,)).fetchone() is not None
 
     def queued_run_ids(self) -> list[str]:
         """Runs waiting for the model (not the buried ones: those stay `failed` until `--requeue-failed`)."""
@@ -515,9 +515,16 @@ class PollReport:
     imported: int = 0                   # releases `release-watch --final` handed over, now queued
 
 
+# The run-id prefixes of releases and images (`pypi__`, `npm__`, `oci__`): a GitHub owner of these names gets `<owner>_gh__`.
+_ARTIFACT_NAMESPACES = frozenset({"pypi", "npm", "oci"})
+
+
 def run_id_for(repo: str, kind: str, number: int, revision: int) -> str:
-    """`owner__name-pr-7` (`-r1` for a later revision). Owners cannot contain `_`, so the first `__` always splits owner from name and two different repositories can never share an id (`a-b/c` vs `a/b-c`)."""
-    base = f"{repo.replace('/', '__')}-{'pr' if kind == 'pull_request' else 'issue'}-{number}"
+    """`owner__name-pr-7` (`-r1` for a later revision). Owners cannot contain `_`, so the first `__` always splits owner from name and two different repositories can never share an id (`a-b/c` vs `a/b-c`). An owner named `pypi`, `npm` or `oci` (in any case: a case-insensitive file system holds `PyPI__x` and `pypi__x` as one file) is written `<owner>_gh__`, which no owner and no release's or image's id (`pypi__<name>-<version>`) can begin with."""
+    owner, _, name = repo.partition("/")
+    if owner.lower() in _ARTIFACT_NAMESPACES:
+        owner += "_gh"
+    base = f"{owner}__{name.replace('/', '__')}-{'pr' if kind == 'pull_request' else 'issue'}-{number}"
     return base if revision == 0 else f"{base}-r{revision}"
 
 

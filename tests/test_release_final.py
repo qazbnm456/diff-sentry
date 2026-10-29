@@ -525,3 +525,32 @@ def test_a_release_run_offline_renders_and_exports_with_its_artifact(tmp_path):
         if e["type"] == "run_start":
             e["payload"]["meta"].pop("artifact")
     assert build_response(verdict_from_events(events), events, _RUN).artifact is None
+
+
+# ── a polled change never takes a release's run id ───────────────────────────────────────────────────
+
+def test_a_pull_request_of_an_owner_named_pypi_never_replaces_a_release(make):
+    w = make.make(repos=("pypi/x",))
+    w.poll_once()
+    run_id = "pypi__x-pr-7"                                     # package `x-pr`, version 7
+    os.makedirs(os.path.join(make.out, "screened"), exist_ok=True)
+    screened = os.path.join(make.out, "screened", f"{run_id}.json")
+    pathlib.Path(screened).write_text('{"release": true}')       # what release-watch wrote
+    _spool(make, {**_event(), "repo": "pypi/x-pr"}, run_id=run_id)
+    make.world.pr("pypi/x", 7)
+    make.clock.advance(minutes=5)
+    report = w.poll_once()
+    assert report.imported == 1 and report.new == 1
+    queued = dict(w.state._db.execute("SELECT run_id, json_extract(event_json, '$.kind') FROM queue").fetchall())
+    assert queued == {run_id: "release", "pypi_gh__x-pr-7": "pull_request"}
+    assert pathlib.Path(screened).read_text() == '{"release": true}'
+    assert os.path.exists(os.path.join(make.out, "screened", "pypi_gh__x-pr-7.json"))
+
+
+def test_a_change_stored_under_an_id_of_another_case_still_refuses_the_release(make):
+    w = make.make()
+    w.state.upsert_change("PyPI/demo", "pull_request", 1, run_id="PyPI__demo-1.2", state="queued",
+                          first_seen=make.clock.now.isoformat())
+    _spool(make, run_id="pypi__demo-1.2")
+    assert w.poll_once().imported == 0
+    assert os.listdir(os.path.join(make.qdir, "rejected")) == ["pypi__demo-1.2.json"]
