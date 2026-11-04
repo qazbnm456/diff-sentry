@@ -16,7 +16,7 @@ import os
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from . import __version__
@@ -278,6 +278,8 @@ def _cmd_classify(args) -> int:
     from .ingest import event_from_payload
 
     config = DetectConfig.from_env()
+    if args.run_tag is not None:
+        config = replace(config, run_tag=args.run_tag.strip() or None)
     with open(args.payload, "r", encoding="utf-8") as fh:
         payload = json.load(fh)
     event = event_from_payload(payload)
@@ -702,6 +704,8 @@ def build_parser() -> argparse.ArgumentParser:
     cl.add_argument("--run-id", default=None)
     cl.add_argument("--out", default="./output")
     cl.add_argument("--no-emit", action="store_true", help="do not emit a SIEM signal")
+    cl.add_argument("--run-tag", default=None,
+                    help="a label stamped on every planner call the trace records (overrides DS_RUN_TAG)")
     cl.set_defaults(func=_cmd_classify)
 
     sc = sub.add_parser("scan", help="deterministic indicator scan over text/diff (offline, no creds)")
