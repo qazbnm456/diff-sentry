@@ -224,6 +224,7 @@ class ClassifyChange(RLMTask):
             )
         # Intercept the analyst (tracing only, zero transforms) so every llm_query escalation is a sub_call in the trace.
         kw.setdefault("sub_lm", intercept_sub_lm(get_sub_lm(), name="analyst"))
+        kw.setdefault("run_tag", config.run_tag)
         super().__init__(**kw)
 
     def _build_rlm(self) -> dspy.RLM:

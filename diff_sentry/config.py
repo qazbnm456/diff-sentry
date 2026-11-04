@@ -142,6 +142,8 @@ class DetectConfig:
     max_iterations: int = 25
     max_llm_calls: int = 8          # caps ONLY analyst (llm_query) escalations
     max_output_chars: int = 10_000  # head+tail char cap dspy.RLM applies to each REPL output
+    # A caller's label (e.g. a teacher run's budget/temperature), stamped by rlm-harness on the trace's `rlm_setup` and every recorded planner call. A label only: nothing reads it back.
+    run_tag: str | None = None
 
     # ── Enrichment fetch (opt-in, GitHub-allowlisted, MF2) ──────────────────────────────────────
     enable_fetch: bool = False      # OFF by default: fetch on attacker input is an exfil surface
@@ -243,6 +245,7 @@ class DetectConfig:
             max_iterations=int(os.getenv("DS_MAX_ITERATIONS", "25")),
             max_llm_calls=int(os.getenv("DS_MAX_LLM_CALLS", "8")),
             max_output_chars=int(os.getenv("DS_MAX_OUTPUT_CHARS", "10000")),
+            run_tag=os.getenv("DS_RUN_TAG", "").strip() or None,
             enable_fetch=_env_bool("DS_ENABLE_FETCH", False),
             fetch_timeout=float(os.getenv("DS_FETCH_TIMEOUT", "20")),
             fetch_max_bytes=int(os.getenv("DS_FETCH_MAX_BYTES", "400000")),
