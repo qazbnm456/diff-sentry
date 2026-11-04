@@ -2,6 +2,25 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.16.0
+
+Upgrade from 0.15.0: `release-watch --final` can hand the riskiest releases to the model through `watch`, and `rlm-harness` moves to `==1.25.0`, whose traces record every request the planner was sent. The GitHub Action's scan is unchanged and nothing needs configuring. If you watch a repository whose GitHub owner is named `pypi`, `npm` or `oci`, its new runs get new run ids (see Fixed).
+
+### Added
+- **`release-watch --final` hands a screened release to the model.** With `--final` (or `DS_RELEASE_FINAL=1`), a release or image whose screen reaches `high` (`DS_RELEASE_FINAL_MIN_SEVERITY`) on content it read is queued for the `watch` on the same state directory, so releases share one queue, hourly cap, worker pool, retries and pause with pull requests and issues. The screen's alert is sent as before, and the model's follows as `stage=final` under the same run id. An image that two tags point at, compared with the same image, is run once. `watch --queue-only` runs the queue without polling. See [release-watch](docs/release-watch.md#the-models-judgement---final-opt-in).
+- **A release or image is named in its response and SIEM payload.** `artifact` carries the ecosystem, registry, name, version or tag, digest, and what it was compared with. A publisher or an image's unsigned provenance rides as `publisher` and `claimed_source`, never as the source. A pull request's or issue's payload is unchanged.
+- **`DS_WATCH_PAUSED_REPOS` pauses a watched repository without clearing its state.** Its polling, re-checks, undelivered early alerts and queued model runs wait, nothing stored is touched, and removing it from the list resumes where it stopped. It also pauses a release's model runs, named `pypi/<package>`, `npm/<package>`, `npm/@scope/<package>` or `oci/<registry>/<image>`. `watch --stats` counts the held runs as `queued_paused`.
+- **`DS_CLASSIFIER_OMIT_PARAMS`** leaves `temperature` and/or `max_tokens` out of the classifier's request, for an endpoint that refuses them.
+- **`DS_RUN_TAG`, or `classify --run-tag`, labels every planner call a trace records**, for example with a teacher run's budget or temperature.
+
+### Changed
+- **`rlm-harness==1.25.0`.** Each trace now records what every planner call was sent (an `rlm_setup` event, the raw completion and reasoning of each call, and an `extract` event when the iteration budget runs out), so `rlm_harness.dataset.export_sft_turns(..., render="adapter")` rebuilds those requests exactly. Metrics and labels from `export` keep their meaning.
+
+### Fixed
+- **A GitHub owner named `pypi`, `npm` or `oci` no longer shares run ids with a release.** Pull request 7 of `pypi/x` was `pypi__x-pr-7`, the run id of package `x-pr` version 7, so one could overwrite the other's response and trace. Those owners' runs are now `<owner>_gh__…`; every other repository's and release's ids are unchanged.
+- **Setting `temperature` in `DS_CLASSIFIER_LM_KWARGS`'s `extra_body` while `DS_CLASSIFIER_OMIT_PARAMS` names it is refused at startup**, as a top-level one already was.
+- **A crafted, deeply nested `__pycache__` path in a wheel or image no longer slows the release screen.**
+
 ## 0.15.0
 
 Upgrade from 0.14.0: `watch` weighs slash commands by the target repository's own workflows, and can look up an author's older public history if you turn that on. The GitHub Action's scan is unchanged, nothing needs configuring, and `rlm-harness==1.24.0` is unchanged.
