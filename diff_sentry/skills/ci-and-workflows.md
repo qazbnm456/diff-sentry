@@ -31,7 +31,7 @@ CI runs with the repository's secrets and write token. An attack here makes CI r
 
 ## Verify (read, never run)
 
-1. List every workflow's triggers. For each privileged trigger, trace whether any PR-controlled value (ref, checkout, expression, artifact, cache) reaches `run:`, a checkout, or an agent prompt. An expression in `env:` that `run:` reads as `"$VAR"` is safe; the same expression inlined in `run:` is injectable.
+1. List every workflow's triggers. For each privileged trigger, trace whether any PR-controlled value (ref, checkout, expression, artifact, cache) reaches `run:`, a checkout, or an agent prompt. An expression in `env:` that `run:` reads as `"$VAR"` is safe; the same expression inlined in `run:` is injectable. Before concluding that a workflow inlines nothing, quote each `run:` line, each `actions/github-script` `script:` line, and each use of a composite action's `inputs` inside `run:` that holds `${{ }}` of a pull request, issue or comment field.
 2. Expand author strings the way a shell would: replace `${IFS}`/`$IFS` with a space, expand `{a,b,c}` into words, base64-decode, then `scan_indicators(decoded, decoded_from=<span>)`.
 3. Diff `permissions:` and `uses:` before and after. Note any guard that disappears.
 4. For a secret-naming workflow: where does each `secrets.*` go? A vendor CLI the repo already uses is a deploy step; an unrelated host is exfiltration.

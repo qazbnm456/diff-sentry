@@ -18,9 +18,12 @@ Once a payload runs, it usually does one of three things: fetch and run a second
 - `spawn(..., {detached: true}).unref()`, `child_process` with `stdio: 'ignore'`, `node -e <string>`, `eval`/`new Function` on a decoded or fetched string, `exec(compile(...))`.
 - A decoder (base64, XOR, char codes, string-array) whose output flows into one of the above.
 
+**Deserialising fetched bytes** (loading is running: these formats execute code as they load)
+- `pickle.loads`/`pickle.load`, `marshal.loads`, `joblib.load`, `dill`, `shelve`, `yaml.load` with an unsafe loader, `torch.load(..., weights_only=False)` (or on a torch the project pins below 2.6), PHP `unserialize`, on bytes read from a URL or a socket.
+
 **Secret collection and exfiltration**
 - Sources (they count when they reach any sink below, or when the read has no reason in the change's purpose; passing the environment to a child process or loading `.env` is ordinary): `process.env`/`os.environ` read whole, `printenv`, `~/.npmrc`, `~/.aws/credentials`, `~/.ssh`, `/proc/<pid>/environ` or `/proc/<pid>/mem`, browser profile and wallet paths, `gh auth token`, secret scanners (`trufflehog filesystem`).
-- Sinks: `curl -d @-`, `--data-binary`, `fetch(..., {method: 'POST'})`, DNS lookups with data in the name, creating a public repository or gist, writing to the CI log.
+- Sinks: `curl -d @-`, `--data-binary`, `fetch(..., {method: 'POST'})`, a request header, query string, cookie or user-agent carrying the value (a GET sends data too), DNS lookups with data in the name, creating a public repository or gist, writing to the CI log.
 - Local AI CLIs driven with permission-skipping flags and a prompt to inventory secrets.
 
 ## Verify (read, never run)
@@ -36,6 +39,7 @@ Once a payload runs, it usually does one of three things: fetch and run a second
 - A DevTools or test client fetching `127.0.0.1` / `localhost`.
 - A repro in an issue that uses `node -e` to show a bug.
 - A deploy step sending a secret to the vendor CLI the repository already uses.
+- Loading a model, checkpoint or fixture from the project's own releases or from a model hub it already uses (`from_pretrained`, `hf_hub_download`), or unpickling a local cache the same code wrote.
 - An official installer line in a project's own README (`curl -LsSf https://astral.sh/uv/install.sh | sh` in uv's docs): the host is the project's own.
 
 ## Rules that fire here
