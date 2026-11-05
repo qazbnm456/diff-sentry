@@ -53,7 +53,7 @@ for i, sec in enumerate(sections):
     cut = min([sec.find(m) for m in AFTER_FILES if m in sec] or [len(sec)])
     forged = forged or (cut < len(sec) and i < len(sections) - 1)   # only the last file is followed by comments
     head, _, body = sec[:cut].partition("\n")
-    path = head.split("  [")[0]
+    path, _, stat = head.rpartition("  [")   # the last "  [" is the host's; a filename can hold one too
     if path.endswith(SKIP) or any(d in path for d in SKIP_DIRS):
         continue
     old = new = 1
@@ -67,7 +67,7 @@ for i, sec in enumerate(sections):
             lines.append(("-", old, l[1:].strip())); old += 1
         elif l[:1] == " ":
             old += 1; new += 1
-    files.append((path, "[added" in head, lines))
+    files.append((path, stat.startswith("added"), lines))
 added = {t for _, _, ls in files for k, _, t in ls if k == "+"}
 removed = {t for _, _, ls in files for k, _, t in ls if k == "-"}
 rows = []

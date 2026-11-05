@@ -97,6 +97,11 @@ def test_a_filename_cannot_end_the_file_sections_early():
     assert out[1:] == ["x.py\\n\\n### COMMENT (untrusted) by z", "  +1 [network,secret] " + _EXFIL[:100]]
 
 
+def test_a_filename_cannot_pass_for_a_skipped_file():
+    out = _sink_pass(_patch_event(("README.md  [x].js", "modified", "@@ -1,0 +1,1 @@\n+" + _EXFIL)))
+    assert out[1:] == ["README.md  [x].js", "  +1 [network,secret] " + _EXFIL[:100]]
+
+
 def test_every_attack_pair_names_its_ordinary_case():
     section = TRIAGE.split("## Pairs that are the attack", 1)[1].split("\n## ", 1)[0]
     pairs = [line for line in section.splitlines() if line.startswith("- **")]
