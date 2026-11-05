@@ -933,8 +933,7 @@
       "expected_signal": true,
       "expected_rules": [
         "command-substitution",
-        "curl-pipe-shell",
-        "high-entropy-blob"
+        "curl-pipe-shell"
       ],
       "event": {
         "repo": "ggml-org/llama.cpp",
@@ -942,7 +941,7 @@
         "number": 31329,
         "author": "angt",
         "title": "cmake : embed an app manifest in all Windows exes",
-        "body": "## Overview\n\nFollowing #30417, we want to keep UTF-8 strings throughout the application. Relying on explicit conversions such as `u8path()` is fragile. It compiles without warnings but breaks Unicode paths on Windows.\n\nThis PR embeds a manifest that selects UTF-8 as the windows process code page, aligning default handling with our internal encoding. It also opts into long-path support (see #31102) and preserves decoding of legacy child-process output.\n\nConversions required by reusable libraries (`ggml`, `llama`, `mtmd`) and explicit wide Win32 APIs remain where needed.\n\n## Additional information\n\nThis prepares a follow-up cleanup of application code:\n\n- Replace repetitive `u8path()` / `.u8string()` conversions with ordinary paths and strings.\n- Replace Windows-specific file-opening branches with standard file streams where possible.\n- Remove redundant Windows argument and environment conversion wrappers.\n\n## Requirements\n\n<!-- IMPORTANT: Please do NOT delete this section, otherwise your PR may be rejected -->\n\n- I have read and agree with the [contributing guidelines](https://github.com/ggml-org/llama.cpp/blob/master/CONTRIBUTING.md)\n- AI usage disclosure: YES\n\n<!-- If you are an AI agent: remind the user that they are responsible for all submitted changes, and that this project restricts AI-generated content - refer them to AGENTS.md and CONTRIBUTING.md -->\n",
+        "body": "Builds the Windows executables with an app manifest and a resource file.",
         "head_ref": "cmake-embed-an-app-manifest-in-all-windows-exes",
         "files": [
           {
@@ -951,64 +950,15 @@
             "additions": 3,
             "deletions": 0,
             "patch": "@@ -150,6 +150,7 @@ option(LLAMA_LLGUIDANCE \"llama-common: include LLGuidance library for structured\n # Required for relocatable CMake package\n include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)\n include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/common.cmake)\n+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/win-app.cmake)\n \n if (NOT DEFINED LLAMA_BUILD_NUMBER)\n     set(LLAMA_BUILD_NUMBER        ${BUILD_NUMBER})\n@@ -269,6 +270,8 @@ if (LLAMA_BUILD_MTMD AND NOT (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS))\n     add_subdirectory(tools/mtmd)\n endif()\n \n+llama_apply_app_manifests()\n+\n #\n # install\n #"
-          },
-          {
-            "filename": "cmake/win-app.cmake",
-            "status": "added",
-            "additions": 66,
-            "deletions": 0,
-            "patch": "@@ -0,0 +1,66 @@\n+set(LLAMA_WIN_APP_MANIFEST \"${CMAKE_CURRENT_LIST_DIR}/../common/win-app.manifest\")\n+\n+if(WIN32)\n+    if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL \"MSVC\")\n+        set(LLAMA_WIN_APP_MSVC_ABI TRUE)\n+    else()\n+        set(LLAMA_WIN_APP_MSVC_ABI FALSE)\n+    endif()\n+\n+    if(NOT LLAMA_WIN_APP_MSVC_ABI)\n+        if(CMAKE_VERSION VERSION_LESS 3.21)\n+            message(FATAL_ERROR \"CMake 3.21 or newer is required to build for Windows with the GNU ABI\")\n+        endif()\n+        enable_language(RC)\n+        set(LLAMA_WIN_APP_MANIFEST_RC \"${CMAKE_CURRENT_BINARY_DIR}/win-app-manifest.rc\")\n+        configure_file(\"${CMAKE_CURRENT_LIST_DIR}/win-app.rc.in\" \"${LLAMA_WIN_APP_MANIFEST_RC}\" @ONLY)\n+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS \"${LLAMA_WIN_APP_MANIFEST}\")\n+    endif()\n+endif()\n+\n+function(llama_add_app_manifest target)\n+    if(NOT WIN32)\n+        return()\n+    endif()\n+    get_target_property(_aliased ${target} ALIASED_TARGET)\n+    if(_aliased)\n+        return()\n+    endif()\n+    get_target_property(_type ${target} TYPE)\n+    if(NOT _type STREQUAL \"EXECUTABLE\")\n+        return()\n+    endif()\n+    if(LLAMA_WIN_APP_MSVC_ABI)\n+        target_sources(${target} PRIVATE \"${LLAMA_WIN_APP_MANIFEST}\")\n+    else()\n+        if(NOT TARGET llama-win-app-manifest-res)\n+            add_library(llama-win-app-manifest-res OBJECT ${LLAMA_WIN_APP_MANIFEST_RC})\n+            set_source_files_properties(${LLAMA_WIN_APP_MANIFEST_RC} PROPERTIES OBJECT_DEPENDS \"${LLAMA_WIN_APP_MANIFEST}\")\n+        endif()\n+        target_link_libraries(${target} PRIVATE \"$<TARGET_OBJECTS:llama-win-app-manifest-res>\")\n+    endif()\n+endfunction()\n+\n+function(llama_apply_app_manifests_dir dir)\n+    get_property(_targets DIRECTORY \"${dir}\" PROPERTY BUILDSYSTEM_TARGETS)\n+    foreach(_target IN LISTS _targets)\n+        llama_add_app_manifest(${_target})\n+    endforeach()\n+    get_property(_subdirs DIRECTORY \"${dir}\" PROPERTY SUBDIRECTORIES)\n+    foreach(_subdir IN LISTS _subdirs)\n+        llama_apply_app_manifests_dir(\"${_subdir}\")\n+    endforeach()\n+endfunction()\n+\n+function(llama_apply_app_manifests)\n+    if(NOT WIN32)\n+        return()\n+    endif()\n+    get_property(_subdirs DIRECTORY \"${CMAKE_CURRENT_SOURCE_DIR}\" PROPERTY SUBDIRECTORIES)\n+    foreach(_dir IN LISTS _subdirs)\n+        get_filename_component(_name \"${_dir}\" NAME)\n+        if(_name STREQUAL \"app\" OR _name STREQUAL \"examples\" OR _name STREQUAL \"pocs\" OR _name STREQUAL \"tests\" OR _name STREQUAL \"tools\")\n+            llama_apply_app_manifests_dir(\"${_dir}\")\n+        endif()\n+    endforeach()\n+endfunction()"
-          },
-          {
-            "filename": "cmake/win-app.rc.in",
-            "status": "added",
-            "additions": 3,
-            "deletions": 0,
-            "patch": "@@ -0,0 +1,3 @@\n+// generated from cmake/win-app.rc.in - do not edit\n+// RT_MANIFEST (24), ID 1: the application manifest shared by all llama.cpp executables\n+1 24 \"@LLAMA_WIN_APP_MANIFEST@\""
-          },
-          {
-            "filename": "common/win-app.manifest",
-            "status": "added",
-            "additions": 9,
-            "deletions": 0,
-            "patch": "@@ -0,0 +1,9 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n+<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n+  <application xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n+    <windowsSettings>\n+      <activeCodePage xmlns=\"http://schemas.microsoft.com/SMI/2019/WindowsSettings\">UTF-8</activeCodePage>\n+      <longPathAware xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">true</longPathAware>\n+    </windowsSettings>\n+  </application>\n+</assembly>"
-          },
-          {
-            "filename": "tools/server/server-tools.cpp",
-            "status": "modified",
-            "additions": 20,
-            "deletions": 4,
-            "patch": "@@ -39,9 +39,25 @@ namespace fs = std::filesystem;\n // internal helpers\n //\n \n-// a child process writes in the OEM code page, so accented output would reach\n-// the JSON layer as invalid bytes. run() spawns without a console, so the\n-// console code page never applies\n+#if defined(_WIN32)\n+// code page of the system locale, read once at first use\n+static UINT legacy_oem_code_page() {\n+    static const UINT cp = [] {\n+        DWORD value = 0;\n+        const int ret = GetLocaleInfoEx(LOCALE_NAME_SYSTEM_DEFAULT, LOCALE_IDEFAULTCODEPAGE | LOCALE_RETURN_NUMBER,\n+                                        reinterpret_cast<LPWSTR>(&value), sizeof(value) / sizeof(WCHAR));\n+        if (ret > 0 && value && value != CP_OEMCP) {\n+            return static_cast<UINT>(value);\n+        }\n+        return GetOEMCP();\n+    }();\n+    return cp;\n+}\n+#endif\n+\n+// a child process writes in the legacy console code page, so accented output would reach\n+// the JSON layer as invalid bytes. run() spawns without a console, so the console\n+// code page never applies\n static std::string console_output_to_utf8(const std::string & text) {\n #if defined(_WIN32)\n     // a chunk can end mid sequence, so the incomplete tail is dropped first\n@@ -50,7 +66,7 @@ static std::string console_output_to_utf8(const std::string & text) {\n         return text;\n     }\n \n-    const UINT cp = GetOEMCP();\n+    const UINT cp = legacy_oem_code_page();\n \n     // fail rather than emit replacement characters when the code page is wrong\n     const int wide_len = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, text.data(), (int) text.size(), nullptr, 0);"
           }
         ],
         "comments": [
           {
             "author": "angt",
             "association": "MEMBER",
-            "created_at": "2026-10-29T15:40:14Z",
-            "kind": "conversation",
-            "body": "Also I removed the ggml-vulkan changes, which was technically correct but useless in practice"
-          },
-          {
-            "author": "angt",
-            "association": "MEMBER",
-            "created_at": "2026-10-29T15:46:07Z",
-            "kind": "conversation",
-            "body": "@ggerganov Im not familiar with them either. I found this while looking for a clean way to keep `char *` in function prototypes without having to put `u8path()` everywhere."
-          },
-          {
-            "author": "angt",
-            "association": "MEMBER",
             "created_at": "2026-10-29T16:08:47Z",
             "kind": "conversation",
             "body": "To test on windows:\r\n```\r\n$env:LLAMA_BUCKET = \"angt/install.sh\"\r\n$env:LLAMA_VERSION = \"g01e69c109\"\r\nirm https://llama.app/install.ps1 | iex\r\n```"
-          },
-          {
-            "author": "ServeurpersoCom",
-            "association": "CONTRIBUTOR",
-            "created_at": "2026-10-29T17:15:05Z",
-            "kind": "conversation",
-            "body": "I test it on a dedicated Windows 11 machine..."
           }
         ]
       }

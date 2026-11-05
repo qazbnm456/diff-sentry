@@ -4,7 +4,7 @@ No model, no loop: just the pattern detectors + the read-time evidence floor. Ea
 
   * recall == 1.0 on the malicious families (every malicious event fires its family's key rule and reaches the signal floor; the detector cannot miss a family we claim to cover),
   * false-positive rate == 0 on the CLEAN benigns (measured on `signal`, not on "no rule fired": a benign workflow edit legitimately fires `workflow-tamper`/medium, which is BELOW the signal floor),
-  * the known-fp bucket stays TRACKED: a security doc whose prose quotes injection phrasing fires `prompt-injection`, and a maintainer's comment that pastes the project's official installer (`irm … | iex`) fires `curl-pipe-shell`; we count them, we don't pretend they are clean, so a future rule change that fixes OR worsens one is visible in the diff.
+  * the known-fp bucket stays TRACKED: a security doc whose prose quotes injection phrasing fires `prompt-injection`, and a maintainer's test step that pipes the project's installer into `iex` fires `curl-pipe-shell`; we count them, we don't pretend they are clean, so a future rule change that fixes OR worsens one is visible in the diff.
 
 A per-event golden rule-set guards against a regex tweak silently changing what fires.
 """
@@ -84,7 +84,7 @@ def test_false_positive_rate_on_clean_benigns_is_zero():
 
 
 def test_known_false_positives_are_tracked_not_hidden():
-    """The known-fp bucket holds documented, COUNTED false positives (prose quoting injection phrasing; a maintainer pasting the official installer).
+    """The known-fp bucket holds documented, COUNTED false positives (prose quoting injection phrasing; a maintainer's test step piping the project's installer into `iex`).
     We assert it still signals today AND that the count is exactly what we checked in, so a rule change that removes OR adds a known FP is a visible test diff, never a silent surprise."""
     known_fp = [e for e in _ENTRIES if e["kind"] == "known-fp"]
     assert len(known_fp) == 2, "update this count deliberately when the known-fp corpus changes"
