@@ -193,7 +193,9 @@ def normalize_event(event: dict, *, facts: bool = True) -> str:
     if event.get("head_ref"):
         body_parts.append(f"### BRANCH (untrusted)\n{event['head_ref']}")
     for f in _files(event):
-        head = f"### FILE (untrusted): {f['filename']}  [{f['status']} +{f['additions']} -{f['deletions']}]"
+        # Git allows a line break in a filename; escaped here, it cannot end the header line and forge the next section
+        name = f["filename"].replace("\r", "\\r").replace("\n", "\\n")
+        head = f"### FILE (untrusted): {name}  [{f['status']} +{f['additions']} -{f['deletions']}]"
         body_parts.append(f"{head}\n{f['patch']}")
     release = _release_facts(event) if facts and _files(event) else {}
     if release:
