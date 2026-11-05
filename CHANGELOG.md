@@ -2,6 +2,19 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.17.0
+
+Upgrade from 0.16.0: the planner now reads every added and removed line for sinks before it decides, not only the lines the scanner flagged. The GitHub Action's scan is unchanged, nothing needs configuring, and `rlm-harness==1.25.0` is unchanged.
+
+### Changed
+- **The planner runs a sink pass before any verdict.** One REPL step lists every added or removed line in the change's files that holds a network call, an exec or shell, a deserialiser, a secret read, a workflow expression, a permission or guard, or a hidden value, with trigger files first and lock, minified, vendored and documentation files skipped. Code moved from one place to another is marked as moved. With a 30B planner, malicious recall on the repository's test corpus rose from 0.974 to 1.000, with no new false positive.
+- **What a change says about itself no longer clears a line.** The title, body, comments, commit messages, names and code comments are the author's account; when they disagree with what a line does, the line wins. Five pairings are named as the attack whatever the description says (a secret reaching an outbound channel, fetched bytes being deserialised or run, an attacker-controlled value reaching a privileged shell or prompt, a hidden value reaching exec or the network, and a grant by an author without write access), each with the facts that make it ordinary.
+- **A `benign` rationale names the new sinks the pass found** and why each is ordinary, and any claim about a line quotes that line.
+
+### Fixed
+- **A line break in a filename can no longer end its file section early.** The planner sees it as `\n`, so a crafted name cannot spell a comment or another file's header and hide its own patch.
+- **The package-hook skill's examples are no longer copied from the test corpus.**
+
 ## 0.16.0
 
 Upgrade from 0.15.0: `release-watch --final` can hand the riskiest releases to the model through `watch`, and `rlm-harness` moves to `==1.25.0`, whose traces record every request the planner was sent. The GitHub Action's scan is unchanged and nothing needs configuring. If you watch a repository whose GitHub owner is named `pypi`, `npm` or `oci`, its new runs get new run ids (see Fixed).
