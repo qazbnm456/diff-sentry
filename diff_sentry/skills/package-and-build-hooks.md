@@ -11,7 +11,7 @@ Installing or building a project runs code nobody reads: lifecycle scripts, buil
 
 **Run entries**
 - npm lifecycle hooks run without anyone naming them: `preinstall`, `install`, `postinstall`, `prepare`, `prepublish`, `prepublishOnly`, `prepack`, `postpack`. A new or changed one is the first thing to read.
-- An existing script with a new command put IN FRONT of its old one (`"start": "node api.js && node ./out/index.js"`): the payload rides a command people run anyway.
+- An existing script with a new command put IN FRONT of its old one (`"build": "node tools/prep.js && tsc"`, where `tools/prep.js` is new): the payload rides a command people run anyway.
 - A run entry whose target the same change adds, especially a large single-line file, a file under a test, fixture or asset directory, or a file whose extension is not code.
 - `setup.py` / `setup.cfg` / `pyproject.toml` build backends running code at install; `build.rs`; Makefile, `justfile` and `Taskfile` default targets; Dockerfile `RUN` lines; `conftest.py` and `.pth` files (Python runs them on test or interpreter start).
 - `chmod +x` on a file the change adds, then running it.
@@ -34,7 +34,7 @@ Installing or building a project runs code nobody reads: lifecycle scripts, buil
 
 ## Look-alikes (benign, seen in practice)
 
-- A codegen script added with its npm entry (`"gen:icons": "node scripts/gen-icons.mjs"`).
+- A codegen script added with its npm entry (`"gen:types": "node scripts/gen-types.mjs"`).
 - `husky install`, `prisma generate`, `node-gyp rebuild`, `patch-package`, native-binary fetchers (`esbuild`, `sharp`) in `postinstall`.
 - Upstream refactors that repoint scripts at moved files, or append a check after an existing one.
 - Registry mirror rewrites across a whole lockfile, made by a maintainer.
