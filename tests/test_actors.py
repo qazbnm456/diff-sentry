@@ -813,3 +813,11 @@ def test_tag_characters_are_stripped_from_the_dossier(store):
     ev["head_ref"] = "dev" + "".join(chr(0xE0000 + ord(c)) for c in "hidden")
     _record(store, ev, [_hit()], run_id="org-a-1")
     assert not any(0xE0000 <= ord(c) <= 0xE007F for c in format_dossier(store.dossier("mallory")))
+
+
+def test_a_branch_hit_gone_while_the_list_is_truncated_is_scrubbed(store):
+    # only a file can sit past GitHub's list; a branch name is always shown
+    hit = _at("branch:feat/x")
+    _record(store, _rev([]), [hit], run_id="r0")
+    facts, _ = store.correlate(_rev([], files_truncated=True), [])
+    assert facts["evidence_scrubbed"] == [hit.id] and "evidence_unseen" not in facts

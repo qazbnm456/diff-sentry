@@ -2865,7 +2865,7 @@ def _scope_to_file(hits: list[IndicatorHit], path: str, text: str, kind: str = "
             h = h.model_copy(update={"severity": "high", "title": h.title[: -len(f" — {_BARE_PHRASE_WHY}")]})
         elif h.rule == "prompt-injection" and phrase_why and h.severity == "high":
             # judged over the whole file, so one imperative anywhere in it keeps every hit of the file `high`
-            bare = _bare_system_prompt(text, "file") if bare is None else bare
+            bare = _bare_system_prompt(_lf(text), "file") if bare is None else bare
             if bare:
                 h = h.model_copy(update={"severity": "medium", "title": f"{h.title} — {phrase_why}"})
         elif h.rule == "inline-code-exec" and exec_why:
