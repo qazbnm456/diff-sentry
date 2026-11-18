@@ -56,7 +56,8 @@ _PR = {"repo": "acme/app", "kind": "pull_request", "number": 9, "author": "a", "
        "files": [{"filename": "src/lib/Save.svelte", "status": "modified", "additions": 3, "deletions": 1,
                   "patch": "@@ -1,2 +1,4 @@\n-import { save } from './api';\n+import { save } from './api';\n"
                            "+import { toast } from 'svelte-sonner';\n+\ttoast.success(  'Saved' );\n }"},
-                 {"filename": "setup.py", "status": "added", "additions": 1, "deletions": 0, "patch": "+rm -rf /"}],
+                 {"filename": "setup.py", "status": "added", "additions": 1, "deletions": 0, "patch": "+rm -rf /"},
+                 {"filename": "lib/x.rb", "status": "added", "additions": 2, "deletions": 0, "patch": "+end\n+}"}],
        "comments": [{"author": "b", "association": "MEMBER", "created_at": "2026-01-01T00:00:00Z",
                      "body": "Please pin the sonner version before merging."}]}
 
@@ -89,7 +90,8 @@ def test_an_accusing_verdict_that_quotes_the_change_stands(rationale):
      "governance-file regions, which is not explicable as ordinary release churn."),  # r104's, verbatim
     "It imports `requests.post(attacker)`.",                                       # not in the change
     "It calls `toast`.",                                                           # short and not a whole line
-    "The block ends in `}`.",                                                      # a whole line, but no content
+    "The block ends in `}`.",                                                      # a whole changed line, no content
+    "The file closes with `end`.",                                                 # a whole changed line under 4
     'It runs "import { toast } from \'svelte-sonner\';".',                         # double quotes are paraphrase
     "The repo is `acme/app` with `file_count`.",                                   # the metadata, not the change
     "`import { toast }" + " x" * 50_000,                                           # an unclosed backtick
@@ -117,7 +119,7 @@ def test_the_quote_rule_never_touches_benign_inconclusive_or_the_extract_fallbac
 def test_inconclusive_and_quote_refusals_count_apart():
     from diff_sentry.normalize import quotable
 
-    model = decisive_verdict_model("2 files", quotable=quotable(_PR))
+    model = decisive_verdict_model("3 files", quotable=quotable(_PR))
     for verdict, match in (("inconclusive", "content to classify"), ("inconclusive", "content to classify"),
                            ("malicious", "quotes nothing")):
         with pytest.raises(ValidationError, match=match):

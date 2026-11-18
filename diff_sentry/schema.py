@@ -161,7 +161,7 @@ _ACCUSING = frozenset({"suspicious", "malicious"})
 
 
 def _backtick_spans(text: str) -> list[str]:
-    """The spans a run of backticks opens and a run of the same length closes, as Markdown pairs them; a fence's info string is dropped."""
+    """The spans a run of backticks opens and the next run of the same length closes; a fence's info string is dropped. Stricter than Markdown: an opener with no closer of its length swallows the spans after it, which costs at most one refusal."""
     spans, i, n, opener = [], 0, len(text), None
     while i < n and len(spans) < _MAX_QUOTES:
         if text[i] != "`":
