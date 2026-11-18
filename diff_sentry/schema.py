@@ -12,7 +12,7 @@ import contextvars
 from collections.abc import Iterator
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # reward-free rubric TYPES: rlm-harness's shared, taxonomy-agnostic primitives, re-exported so `from .schema import Criterion, ...` resolves here.
 from rlm_harness.rubric import Criterion, CriterionFact, RubricCriteria  # noqa: F401 (re-export)
@@ -152,10 +152,56 @@ def no_refusal() -> Iterator[None]:
         _REFUSING.reset(token)
 
 
-def decisive_verdict_model(facts: str, refusals: int = _INCONCLUSIVE_REFUSALS) -> type[ChangeVerdict]:
-    """`ChangeVerdict` for a change that has content to read: an `inconclusive` verdict is refused `refusals` times with a message naming that content (`facts`), except under `no_refusal`. Same name, fields and schema.
-    A planner whose own long print comes back cut can read the cut as a truncated change and SUBMIT `inconclusive` on a large PR."""
-    left = [refusals]
+# A `suspicious` or `malicious` SUBMIT whose rationale quotes nothing from the change is refused this many times per run.
+_QUOTE_REFUSALS = 1
+_MIN_QUOTE = 12            # characters of a quote that may sit anywhere in the change
+_MIN_WHOLE_LINE = 4        # non-blank characters of a shorter quote that is a whole changed line or a path
+_MAX_QUOTES = 50           # backtick spans of one rationale that are looked up
+_ACCUSING = frozenset({"suspicious", "malicious"})
+
+
+def _backtick_spans(text: str) -> list[str]:
+    """The spans a run of backticks opens and the next run of the same length closes; a fence's info string is dropped. Stricter than Markdown: an opener with no closer of its length swallows the spans after it, which costs at most one refusal."""
+    spans, i, n, opener = [], 0, len(text), None
+    while i < n and len(spans) < _MAX_QUOTES:
+        if text[i] != "`":
+            i += 1
+            continue
+        j = i
+        while j < n and text[j] == "`":
+            j += 1
+        run = j - i
+        if opener is None:
+            opener = (run, j)
+        elif opener[0] == run:
+            span = text[opener[1]:i]
+            spans.append(span.partition("\n")[2] if run >= 3 and "\n" in span else span)
+            opener = None
+        i = j
+    return spans
+
+
+def quotes_the_change(rationale: str, text: str, whole: frozenset[str]) -> bool:
+    """True when a backtick span of `rationale` is in the change: 12 or more characters anywhere in `text`, or a whole changed line or path of at least 4 non-blank characters with a letter or digit. Both sides are in `normalize.quote_form`."""
+    from .normalize import quote_form
+
+    for span in _backtick_spans(rationale):
+        quote = quote_form(span)
+        if len(quote) >= _MIN_QUOTE and quote in text:
+            return True
+        if (len(quote.replace(" ", "")) >= _MIN_WHOLE_LINE and any(c.isalnum() for c in quote)
+                and quote in whole):
+            return True
+    return False
+
+
+def decisive_verdict_model(facts: str | None, refusals: int = _INCONCLUSIVE_REFUSALS, *,
+                           quotable: tuple[str, frozenset[str]] | None = None) -> type[ChangeVerdict]:
+    """`ChangeVerdict` for a change that has content to read, except under `no_refusal`. Same name, fields and schema.
+    With `facts`, an `inconclusive` verdict is refused `refusals` times with a message naming that content: a planner whose own long print comes back cut can read the cut as a truncated change and SUBMIT `inconclusive` on a large PR.
+    With `quotable` (`normalize.quotable`), a `suspicious` or `malicious` verdict whose rationale quotes nothing from the change is refused once: a verdict picked by the planner's own code in the step that gathered the evidence never showed it that evidence, since a step that ends in SUBMIT keeps none of its output."""
+    left = [refusals if facts is not None else 0]
+    quotes_left = [_QUOTE_REFUSALS if quotable is not None else 0]
 
     class ChangeVerdict(_SubmittedVerdict):  # the name dspy's signature resolves
         __doc__ = _SubmittedVerdict.__doc__
@@ -171,6 +217,25 @@ def decisive_verdict_model(facts: str, refusals: int = _INCONCLUSIVE_REFUSALS) -
                     "was YOUR print cut short, not the change: read `event` in smaller slices. "
                     "SUBMIT benign, suspicious or malicious; a low `confidence` says you are unsure.")
             return value
+
+        @model_validator(mode="after")
+        def _grounded(self) -> ChangeVerdict:
+            verdict = str(self.verdict).strip().lower()
+            if verdict not in _ACCUSING or quotes_left[0] <= 0 or not _REFUSING.get():
+                return self
+            try:
+                grounded = quotes_the_change(str(self.rationale), *quotable)
+            except Exception:  # noqa: BLE001 (a fault here must never fail the run: dspy hands back only a ValueError)
+                grounded = True
+            if not grounded:
+                quotes_left[0] -= 1
+                raise ValueError(
+                    f"refused: a `{verdict}` verdict names what in the change carries the intent, and this "
+                    "rationale quotes nothing from it. When a step ends in SUBMIT, what it printed is not kept, so "
+                    "that step's output never reached you; your REPL variables are still there. Print the lines "
+                    "your verdict rests on, read them, then SUBMIT again with the line that carries the intent (for a "
+                    "decoded value, the line that holds it encoded) in backticks in `rationale`. The same verdict stands once it quotes the change.")
+            return self
 
     return ChangeVerdict
 

@@ -506,7 +506,9 @@ def test_a_release_run_offline_renders_and_exports_with_its_artifact(tmp_path):
     from diff_sentry.rl_export import export_dataset
 
     event = _event()
-    from tests.conftest import MALICIOUS_VERDICT as verdict
+    from tests.conftest import MALICIOUS_VERDICT
+
+    verdict = {**MALICIOUS_VERDICT, "rationale": "A new `.pth` line `import cook` runs a packed payload at start-up."}
 
     configure(RLMConfig(main_model="x", sub_model="x", interpreter="mock", observe=False, max_iterations=4),
               main_lm=scripted_lm([{"reasoning": "r", "code": "SUBMIT(...)"}]),

@@ -25,7 +25,7 @@ from rlm_harness import (
 
 from .config import SUBSCRIPTION_PREFIX, DetectConfig
 from .indicators import make_indicator_tool
-from .normalize import _files, has_groundable_content, normalize_event
+from .normalize import _files, has_groundable_content, normalize_event, quotable
 from .schema import ChangeVerdict, decisive_verdict_model, no_refusal
 
 INSTRUCTIONS = """You classify ONE GitHub change (a pull request, an issue, or a push) for MALICIOUS
@@ -83,11 +83,13 @@ WORKFLOW — triage → decode/scan → (escalate if ambiguous) → verdict
    subtle source→sink — then decide. Do NOT thrash; one focused escalation, then commit. If the change
    has NO assessable content at all (empty payload, unfetchable, not actually a change), emit
    `inconclusive` — see the HARD RULES. A large or hard change is not that: it gets a verdict.
-4. SUBMIT the `verdict` (JUDGEMENT only):
+4. Decide after reading: a step that calls SUBMIT shows you none of its output, so never SUBMIT from the
+   step that gathers the evidence or let your own code pick the verdict. SUBMIT the `verdict` (JUDGEMENT only):
    - `summary`             — what the change is and the call you made.
    - `verdict`             — benign | suspicious | malicious | inconclusive (your read of INTENT).
    - `confidence`          — 0..1.
-   - `rationale`           — grounded in the change + the indicators, not a vibe.
+   - `rationale`           — grounded in the change + the indicators, not a vibe; quote in backticks the
+                             line(s) a suspicious or malicious call rests on.
    - `techniques`          — the attack techniques you saw (empty for benign).
    - `suspect_files`       — files carrying the suspicious content (empty for benign).
    - `indicator_ids`       — the ids of the deterministic hits you relied on (CITATIONS; the system
@@ -206,11 +208,11 @@ class ClassifyChange(RLMTask):
 
         # The change itself, so the scanner can tell a region taken from it from text the planner wrote.
         self.tools = [make_indicator_tool(event), make_deep_classify_tool(config, chat_fn=chat_fn)]
-        # A change with content to read gets a decisive verdict: an `inconclusive` SUBMIT comes back refused. Not when GitHub withheld part of it (a file's patch, or files past its list cap): what is unseen may carry the intent.
+        # A change with content to read gets a decisive verdict: an `inconclusive` SUBMIT comes back refused, unless GitHub withheld part of it (a file's patch, or files past its list cap), since what is unseen may carry the intent. A `suspicious` or `malicious` one must quote the change, withheld or not.
         files = len(_files(event)) if event is not None else 0
-        if event is not None and not _withheld(event) and has_groundable_content(text := normalize_event(event)):
-            self.output_model = decisive_verdict_model(
-                (f"{files} file{'s' * (files != 1)}, " if files else "") + f"{len(text):,} characters in `event`")
+        if event is not None and has_groundable_content(text := normalize_event(event)):
+            facts = (f"{files} file{'s' * (files != 1)}, " if files else "") + f"{len(text):,} characters in `event`"
+            self.output_model = decisive_verdict_model(None if _withheld(event) else facts, quotable=quotable(event))
         if config.enable_fetch:
             self.tools = self.tools + [make_github_fetch_tool(config)]
         # A general extension seam: a consumer MAY pass extra sync tools. (SIEM emission is NOT here: it runs host-side after the run; see emit.py; so the planner needs no SIEM credentials.)

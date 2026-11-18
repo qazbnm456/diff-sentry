@@ -113,7 +113,7 @@ def test_the_triage_loop_does_not_grow_into_a_taxonomy():
     """Attack knowledge belongs in the skills; the instructions hold the loop. Raise the budget only for a change to the loop itself."""
     from diff_sentry.detect import INSTRUCTIONS
 
-    assert len(INSTRUCTIONS.split()) <= 1183
+    assert len(INSTRUCTIONS.split()) <= 1227
 
 
 # Generic spans the skills and the corpus share because both name the same well-known mechanism.
