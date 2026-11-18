@@ -926,6 +926,48 @@
       }
     },
     {
+      "name": "llm_product_release_from_its_own_branch",
+      "kind": "benign",
+      "family": "llm-product-own-change",
+      "expected_signal": false,
+      "expected_rules": [
+        "prompt-injection"
+      ],
+      "event": {
+        "repo": "acme/chatkit",
+        "kind": "pull_request",
+        "number": 412,
+        "author": "release-dev",
+        "title": "Release 0.9: chat settings and translations",
+        "body": "Merges dev into main for the 0.9 release: per-chat settings and updated translations.",
+        "head_ref": "dev",
+        "provenance": {
+          "author_login": "release-dev",
+          "author_type": "User",
+          "author_association": "CONTRIBUTOR",
+          "head_repo": "acme/chatkit",
+          "head_repo_fork": false,
+          "base_ref": "main"
+        },
+        "files": [
+          {
+            "filename": "web/src/i18n/locales/en-US/translation.json",
+            "status": "modified",
+            "additions": 2,
+            "deletions": 0,
+            "patch": "@@ -40,6 +40,8 @@\n \t\"chat.settings.title\": \"Chat settings\",\n+\t\"chat.settings.systemPrompt\": \"System prompt\",\n+\t\"chat.settings.systemPromptHint\": \"Shown to the model before every message in this chat\",\n \t\"chat.settings.temperature\": \"Temperature\",\n"
+          },
+          {
+            "filename": "backend/chatkit/settings.py",
+            "status": "modified",
+            "additions": 3,
+            "deletions": 1,
+            "patch": "@@ -12,7 +12,9 @@ class ChatSettings(BaseModel):\n     temperature: float = 0.7\n-    prompt: str = \"\"\n+    # The per-chat system prompt, sent ahead of the user's messages.\n+    system_prompt: str = \"\"\n+    max_tokens: int | None = None\n"
+          }
+        ]
+      }
+    },
+    {
       "name": "maintainer_comment_with_official_installer",
       "kind": "known-fp",
       "family": "documented-installer-in-comment",
