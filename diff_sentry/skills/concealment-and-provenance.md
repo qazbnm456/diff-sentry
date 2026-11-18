@@ -19,7 +19,7 @@ Concealment is the attacker paying to not be seen. It is a reason to look, and e
 ## History tells
 
 - A commit whose author date is far older than its committer date, on a commit that carries a payload: tooling that rewrites a commit with its original time and force-pushes. Rebases and cherry-picks make the same gap and force-pushing a PR is routine, so the gap matters only together with the payload.
-- Revisions that remove a payload after review (the watcher reports `evidence-scrubbed`); a head repository or account that disappears after the change.
+- Revisions that remove a payload after review (the watcher reports `evidence-scrubbed`; `evidence-unseen` when the file that held it is only hidden, because GitHub withheld its patch or cut the file list); a head repository or account that disappears after the change.
 - Tags or releases moved to commits that are not on the default branch.
 
 ## Who sent it
@@ -42,4 +42,4 @@ Weigh them both ways, and never as a verdict:
 
 ## Rules that fire here
 
-`diff-viewport-evasion`, `invisible-unicode`, `obfuscated-payload`, `obfuscated-identifiers`, `obfuscated-string-array`, `binary-name-holds-text`, `high-entropy-blob`, `ci-bypass`, and the provenance rules (`brand-new-account`, `unknown-contributor`, `agent-self-description`, `bot-impersonation`, `bot-like-author`, `bot-like-display-name`, `spoofed-commit-author`, `unsigned-commits`, `signature-identity-mismatch`, `actor-burst`, `actor-multi-repo`, `actor-known-bad`, `actor-prior-flag`, `ioc-reuse`, `evidence-scrubbed`, `content-edited`, `head-repo-deleted`, `author-unresolvable`). No rule reads author/committer date gaps, force-push counts or `.gitattributes` hiding. Those are yours to read when the event carries them.
+`diff-viewport-evasion`, `invisible-unicode`, `obfuscated-payload`, `obfuscated-identifiers`, `obfuscated-string-array`, `binary-name-holds-text`, `high-entropy-blob`, `ci-bypass`, and the provenance rules (`brand-new-account`, `unknown-contributor`, `agent-self-description`, `bot-impersonation`, `bot-like-author`, `bot-like-display-name`, `spoofed-commit-author`, `unsigned-commits`, `signature-identity-mismatch`, `actor-burst`, `actor-multi-repo`, `actor-known-bad`, `actor-prior-flag`, `ioc-reuse`, `evidence-scrubbed`, `evidence-unseen`, `content-edited`, `head-repo-deleted`, `author-unresolvable`). No rule reads author/committer date gaps, force-push counts or `.gitattributes` hiding. Those are yours to read when the event carries them.

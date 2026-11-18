@@ -2738,6 +2738,39 @@ _LINE_SPAN_RE = re.compile(r"`[^`\n]{1,200}`")                # the backticks of
 _ANY_SPAN_RE = re.compile(r"(?=(`[^`\n]{1,200}`))")          # every backtick of a line read as an opener
 _ESCAPED_BACKTICK_RE = re.compile(r"(?<!\\)((?:\\\\)*)\\`")       # after an odd number of backslashes
 _BARE_PHRASE_WHY = "the bare phrase alone, in prose"
+_BARE_PHRASE_CATALOG_WHY = "the bare phrase alone, in a translation catalog"
+_BARE_PHRASE_WRITER_WHY = "the bare phrase alone, in source a writer pushed"
+# Extensions only a translation catalog uses, and those a catalog shares with configs (a catalog only under a locale directory).
+_CATALOG_EXTS = (".po", ".pot", ".arb", ".xlf", ".xliff", ".strings", ".stringsdict")
+_CATALOG_DIR_EXTS = (".json", ".yml", ".yaml", ".properties", ".toml", ".ftl")
+_CATALOG_DIRS = frozenset({"locale", "locales", "i18n", "l10n", "lang", "langs", "translations", "messages"})
+# Files something runs or reads as its configuration, whatever directory they sit in.
+_NOT_CATALOG_NAMES = frozenset({"package.json", "action.yml", "action.yaml", "composer.json", "pyproject.toml", "cargo.toml"})
+# A VS Code extension's localized strings: `package.nls.json` and `package.nls.<locale>.json`, beside its `package.json`.
+_NLS_PREFIX, _NLS_SUFFIX = "package.nls.", ".json"
+
+
+def _is_catalog(path: str) -> bool:
+    """Whether a file is a translation catalog: by an extension only catalogs use, a VS Code extension's `package.nls*.json`, or a data extension under a locale directory; never a file a tool runs or reads as its configuration (`package.json`, `action.yml`, any `*.config.*`), nor one an agent reads."""
+    lowered = path.lower()
+    parts = lowered.split("/")
+    name = parts[-1]
+    if name in _NOT_CATALOG_NAMES or ".config." in name or _AGENT_FILE_RE.search(path):
+        return False
+    return (name.endswith(_CATALOG_EXTS) or (name.startswith(_NLS_PREFIX) and name.endswith(_NLS_SUFFIX))
+            or (name.endswith(_CATALOG_DIR_EXTS) and not _CATALOG_DIRS.isdisjoint(parts[:-1])))
+
+
+def _write_standing(event: dict) -> bool:
+    """Whether the change's author can push to the repository, read from the change's structure, never from the association: a push, or a pull request whose head is a branch of the repository itself (not a fork, not deleted), which only someone with write access can create."""
+    if event.get("kind") == "push":
+        return True
+    prov = event.get("provenance")
+    if event.get("kind") != "pull_request" or not isinstance(prov, dict):
+        return False
+    head, repo = prov.get("head_repo"), event.get("repo")
+    return (isinstance(head, str) and isinstance(repo, str) and bool(repo) and head.casefold() == repo.casefold()
+            and prov.get("head_repo_fork") is False and prov.get("head_repo_deleted") is not True)
 
 
 def _bare_system_prompt(text: str, kind: str) -> bool:
@@ -2799,19 +2832,25 @@ def _prose_substitutions(text: str) -> list[IndicatorHit]:
             for a, b in real[:8]]
 
 
-def _scope_to_file(hits: list[IndicatorHit], path: str, text: str, kind: str = "file", trusted: bool = False) -> list[IndicatorHit]:
+def _scope_to_file(hits: list[IndicatorHit], path: str, text: str, kind: str = "file", trusted: bool = False,
+                   standing: bool = False) -> list[IndicatorHit]:
     """What the kind of a segment changes in its hits. In prose (a body, a comment, a documentation file), `command-substitution` counts only for a `$(...)` or a backtick span that reads as a shell's (`_SHELLISH_SPAN_RE`); a title keeps every one, since a workflow interpolates it into a shell. `inline-code-exec` is `medium` in a body or comment whose writer is an OWNER, MEMBER or COLLABORATOR (`trusted`). For a FILE, by its path:
 
     * in source code that no shell reads (`_NON_SHELL_SOURCE_EXTS`), `command-substitution` counts only when the file also calls a shell or starts a program (`_EXEC_SINK_RE`): a template literal is not a shell's substitution;
-    * in a file an agent reads as its instructions (`_AGENT_FILE_RE`), the bare phrase "system prompt" is never softened.
+    * in a file an agent reads as its instructions (`_AGENT_FILE_RE`), the bare phrase "system prompt" is never softened;
+    * in a translation catalog (`_is_catalog`), a `prompt-injection` whose only trigger in the whole file is the bare phrase is `medium`: a UI label of an LLM product;
+    * in that source code, the same is `medium` when the change's author can push to the repository (`standing`, `_write_standing`): an injection-shaped string literal from a writer then rests on the other rules and the model stage.
 
     A branch name, a shell file, a file of an unknown kind and a file whose name holds a substitution keep every hit."""
     prose = kind in ("body", "comment") or (kind == "file" and path.lower().endswith(_PROSE_FILE_EXTS)
                                              and not path.lower().endswith(".ipynb"))      # a `!cmd` cell runs in a shell
     source = kind == "file" and path.lower().endswith(_NON_SHELL_SOURCE_EXTS)
     agent = kind == "file" and _AGENT_FILE_RE.search(path) is not None
-    if not (prose or source or agent):
+    catalog = kind == "file" and not agent and _is_catalog(path)
+    if not (prose or source or agent or catalog):
         return hits
+    phrase_why = _BARE_PHRASE_CATALOG_WHY if catalog else _BARE_PHRASE_WRITER_WHY if source and standing else ""
+    bare = None
     exec_why = _INLINE_EXEC_TRUSTED_WHY if trusted and kind in ("body", "comment") else ""
     named = kind == "file" and _CMD_SUBST_RE.search(path) is not None        # a file named for a substitution keeps them all
     sink = None
@@ -2827,6 +2866,11 @@ def _scope_to_file(hits: list[IndicatorHit], path: str, text: str, kind: str = "
                 continue
         elif h.rule == "prompt-injection" and agent and h.title.endswith(f" — {_BARE_PHRASE_WHY}"):
             h = h.model_copy(update={"severity": "high", "title": h.title[: -len(f" — {_BARE_PHRASE_WHY}")]})
+        elif h.rule == "prompt-injection" and phrase_why and h.severity == "high":
+            # judged over the whole file, so one imperative anywhere in it keeps every hit of the file `high`
+            bare = _bare_system_prompt(_lf(text), "file") if bare is None else bare
+            if bare:
+                h = h.model_copy(update={"severity": "medium", "title": f"{h.title} — {phrase_why}"})
         elif h.rule == "inline-code-exec" and exec_why:
             h = h.model_copy(update={"severity": "medium", "title": f"{h.title} — {exec_why}"})
         out.append(h)
@@ -2882,13 +2926,15 @@ def scan_content(event: dict) -> list[IndicatorHit]:
     An event is not a unified diff: `raw_content` has no `diff --git` headers, so `scan_diff` over it would scope nothing. The event already carries the per-file structure, so each `normalize.content_segments_ex` piece is scanned on its own and a file's hits name that file. A hit from a comment carries the commenter in `via`, decided by the segment's KIND, never by parsing its label."""
     from .normalize import content_segments_ex
     deduped: dict[str, IndicatorHit] = {}
+    standing = _write_standing(event)
     for (label, text, kind, who), trusted in zip(content_segments_ex(event), _segments_trusted(event)):
         prose_file = kind == "file" and label.lower().endswith(_PROSE_FILE_EXTS)
         diff = kind == "file"                                                  # a patch carries its own `+` markers; a body does not
         patch = diff and "\n" not in label                                     # a name's own lines are no lines of its patch
         hits = _segment_hits(text, kind, partial(scan_indicators, location=label, diff=diff, patch=patch), prose_file=prose_file, diff=diff, markdown=not label.lower().endswith(_NOT_MARKDOWN_EXTS))
         if kind != "branch":
-            hits = _or_closed(partial(_scope_to_file, hits, label, text, kind, trusted), hits, "_scope_to_file")
+            hits = _or_closed(partial(_scope_to_file, hits, label, text, kind, trusted, standing=standing and kind == "file"),
+                              hits, "_scope_to_file")
         for h in hits:
             if who:
                 h = h.model_copy(update={"via": who})
@@ -3620,7 +3666,13 @@ def _scan_actor_facts(prov: dict, *, outsider: bool, is_user: bool) -> list[Indi
                          "floor-level indicators flagged on an earlier version of this change are gone after "
                          "an edit (the author removed the payload)",
                          f"gone={','.join(sorted(scrubbed)[:5])}"))
-    elif _int_fact(prov, "content_revisions") > 0:
+    unseen = _str_list(prov, "evidence_unseen")
+    if unseen:
+        # Not known to be gone: GitHub did not show the file this time (a withheld patch, a truncated list). The earlier hits are carried forward and keep their own severity.
+        hits.append(_hit("evidence-unseen", "medium",
+                         "floor-level indicators of an earlier version sit in files this version does not show",
+                         f"unseen={','.join(sorted(unseen)[:5])}"))
+    if not scrubbed and _int_fact(prov, "content_revisions") > 0:
         hits.append(_hit("content-edited", "low", "the change's content was edited after it was first seen",
                          "edited-after-first-seen"))
     if prov.get("files_truncated") is True:
@@ -3790,6 +3842,10 @@ class _Change:
         # each file's patch lines as written (a line's diff marker kept), to tell which file a region is a slice of
         self.patches = [(label, frozenset(line.rstrip() for line in _lf(text).split("\n")))
                         for label, text, kind, _ in content_segments_ex(event) if kind == "file"]
+        self.files: dict[str, str] = {}       # each file's whole segment, which its file scope is judged on
+        for label, text, kind, _ in content_segments_ex(event):
+            if kind == "file":
+                self.files.setdefault(label, text)
         self._entries: deque[tuple[str, str]] = deque()
         self._digests: set[bytes] = set()
         self.derived = ""            # decoded values grounded earlier in this run, squeezed and line by line
@@ -3846,6 +3902,7 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
     from rlm_harness.trace import record_tool_call
 
     change = _Change(event) if event is not None else None
+    standing = event is not None and _write_standing(event)
     release = event is not None and event.get("kind") == "release"
     if release:
         from .releases import release_scope
@@ -3865,15 +3922,27 @@ def make_indicator_tool(event: dict | None = None) -> Callable[..., str]:
         added = _ADDED_LINE_RE.search(text) is not None
         # a region is a patch when it holds a hunk header or a file header, or added lines (a slice of a patch has no header); a `- ` bullet of a plain region is not a removed line, and a region with both added lines and `- ` lines and no header cannot be told apart from the other: it is not softened, unless every line of it is a line of one documentation file's patch, which the region is then a slice of and is read as the baseline reads that file
         hits = None
+        scoped: list[str] = []
         if not header and added and re.search(r"^-[ \t]", text, re.MULTILINE) and change is not None:
             labels = change.patch_of(text)
             if labels and all(label.lower().endswith(_PROSE_FILE_EXTS) for label in labels):
                 markdown = {not label.lower().endswith(_NOT_MARKDOWN_EXTS) for label in labels}
                 if len(markdown) == 1:
                     hits = _segment_hits(text, "file", scan_diff, prose_file=True, diff=True, markdown=markdown.pop())
+            elif labels and (all(label.lower().endswith(_NON_SHELL_SOURCE_EXTS) for label in labels)
+                             or all(_is_catalog(label) for label in labels)):
+                scoped = labels     # a slice of source or of a catalog: the file scope the baseline gave that file
         if hits is None:
             hits = _segment_hits(text, "body", scan_diff, prose_file=False, diff=header or added,
                                  softened=header or not (added and re.search(r"^-[ \t]", text, re.MULTILINE)))
+        if scoped:
+            # judged on each file's whole text, as the baseline judged it; a slice that is a line of several files keeps the strictest reading
+            found, by_file = hits, {}
+            for label in scoped:
+                for h in _or_closed(partial(_scope_to_file, found, label, change.files.get(label, text), "file", standing=standing),
+                                    found, "_scope_to_file"):
+                    keep_worse(by_file, h)
+            hits = list(by_file.values())
         copied = change is None or change.holds(text)
         grounded = copied or (bool(decoded_from) and (change.holds(decoded_from) or change.decoded_before(decoded_from)))
         try:
