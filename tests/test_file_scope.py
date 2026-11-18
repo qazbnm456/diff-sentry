@@ -140,6 +140,8 @@ _LABELS = {
     "po/fr.po": 'msgid "System prompt"\nmsgstr "Invite systeme"',
     "l10n/app_de.arb": '"systemPrompt": "System prompt",',
     "locales/fr/main.ftl": "system-prompt-label = System prompt",
+    "extensions/chat/package.nls.json": '"chat.prompt.enabled": "Enables the updated system prompt for the chat model.",',
+    "extensions/chat/package.nls.zh-cn.json": '"chat.prompt.label": "System prompt",',
 }
 
 
@@ -159,7 +161,8 @@ def test_one_imperative_label_keeps_every_hit_of_its_catalog_high():
 
 @pytest.mark.parametrize("name", ["src/config.json", "locales/package.json", "i18n/action.yml", "locales/vite.config.json",
                                   "locales/.claude/settings.json", "locales/AGENTS.md", "app/main.ftl", "i18n/composer.json",
-                                  "lang/pyproject.toml", "messages/Cargo.toml"])
+                                  "lang/pyproject.toml", "messages/Cargo.toml", "extensions/chat/package.nls.js",
+                                  "extensions/chat/package.json"])
 def test_a_config_or_an_agent_file_is_no_catalog(name):
     assert _injection(_event(name, '"label": "System prompt"')) == {"high"}
 

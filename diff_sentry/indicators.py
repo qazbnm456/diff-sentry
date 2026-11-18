@@ -2746,16 +2746,19 @@ _CATALOG_DIR_EXTS = (".json", ".yml", ".yaml", ".properties", ".toml", ".ftl")
 _CATALOG_DIRS = frozenset({"locale", "locales", "i18n", "l10n", "lang", "langs", "translations", "messages"})
 # Files something runs or reads as its configuration, whatever directory they sit in.
 _NOT_CATALOG_NAMES = frozenset({"package.json", "action.yml", "action.yaml", "composer.json", "pyproject.toml", "cargo.toml"})
+# A VS Code extension's localized strings: `package.nls.json` and `package.nls.<locale>.json`, beside its `package.json`.
+_NLS_PREFIX, _NLS_SUFFIX = "package.nls.", ".json"
 
 
 def _is_catalog(path: str) -> bool:
-    """Whether a file is a translation catalog: by an extension only catalogs use, or a data extension under a locale directory; never a file a tool runs or reads as its configuration (`package.json`, `action.yml`, any `*.config.*`), nor one an agent reads."""
+    """Whether a file is a translation catalog: by an extension only catalogs use, a VS Code extension's `package.nls*.json`, or a data extension under a locale directory; never a file a tool runs or reads as its configuration (`package.json`, `action.yml`, any `*.config.*`), nor one an agent reads."""
     lowered = path.lower()
     parts = lowered.split("/")
     name = parts[-1]
     if name in _NOT_CATALOG_NAMES or ".config." in name or _AGENT_FILE_RE.search(path):
         return False
-    return name.endswith(_CATALOG_EXTS) or (name.endswith(_CATALOG_DIR_EXTS) and not _CATALOG_DIRS.isdisjoint(parts[:-1]))
+    return (name.endswith(_CATALOG_EXTS) or (name.startswith(_NLS_PREFIX) and name.endswith(_NLS_SUFFIX))
+            or (name.endswith(_CATALOG_DIR_EXTS) and not _CATALOG_DIRS.isdisjoint(parts[:-1])))
 
 
 def _write_standing(event: dict) -> bool:
