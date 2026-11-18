@@ -486,6 +486,88 @@ def test_the_same_rule_moved_to_another_place_is_a_scrub(store):
     assert facts["evidence_scrubbed"] == [at_file.id]
 
 
+# ── unseen is not scrubbed: GitHub withholding a file says nothing about its payload ─────────────────
+
+def _at(path, rule="prompt-injection", sev="high"):
+    return IndicatorHit(id=f"ind-{rule}-{abs(hash(path)) % 10**6}", rule=rule, severity=sev, title="t",
+                        evidence="System prompt", location=path)
+
+
+def _f(name, status="modified", add=0, rm=0, patch=""):
+    return {"filename": name, "status": status, "additions": add, "deletions": rm, "patch": patch}
+
+
+def _rev(files, **prov):
+    return {**_ev(number=9), "files": files, "provenance": {**_ev()["provenance"], **prov}}
+
+
+def _second(store, prior, files, **prov):
+    _record(store, _rev([_f(h.location, add=1, patch="@@ -1 +1 @@\n+x") for h in prior]), prior, run_id="r0")
+    return store.correlate(_rev(files, **prov), [])
+
+
+def test_a_catalog_withheld_beside_others_is_unseen_and_carried(store):
+    # zh-TW's shape: `modified` 0/0 with no patch, while GitHub withheld the others' patches with their lines counted
+    zh, fr = _at("locales/zh-TW.json"), _at("locales/fr.json")
+    facts, prior = _second(store, [zh, fr], [_f("locales/zh-TW.json"), _f("locales/fr.json", add=3, rm=1)])
+    assert facts["evidence_unseen"] == sorted([zh.id, fr.id]) and "evidence_scrubbed" not in facts
+    assert {p["id"] for p in prior} == {zh.id, fr.id}
+    hits = {h.rule: h.severity for h in scan_provenance({**_rev([])["provenance"], **facts})}
+    assert hits["evidence-unseen"] == "medium" and "evidence-scrubbed" not in hits
+
+
+@pytest.mark.parametrize("file", [
+    _f("a.py", status="added"),                                     # an emptied file, nothing else withheld
+    _f("a.py"),                                                     # a mode-only change back, nothing else withheld
+    _f("a.py", status="removed", rm=4),                             # the file is gone
+    _f("a.py", add=2, rm=1, patch="@@ -1 +1 @@\n-x\n+clean"),       # shown, and the line is not there
+])
+def test_a_file_that_is_shown_or_gone_without_its_hit_is_scrubbed(store, file):
+    payload = _at("a.py")
+    facts, prior = _second(store, [payload], [file])
+    assert facts["evidence_scrubbed"] == [payload.id] and "evidence_unseen" not in facts
+    assert [p["id"] for p in prior] == [payload.id]
+
+
+def test_a_pure_rename_is_scrubbed_even_beside_withheld_files(store):
+    # renamed at 0/0 with no patch: the file now equals its base, so the earlier revision's payload is gone
+    payload = _at("a.py")
+    facts, _ = _second(store, [payload], [_f("a.py", status="renamed"), _f("big.json", add=900)])
+    assert facts["evidence_scrubbed"] == [payload.id] and "evidence_unseen" not in facts
+
+
+def test_a_file_past_a_truncated_list_is_unseen_and_one_missing_from_a_full_list_is_scrubbed(store):
+    payload = _at("a.py")
+    facts, _ = _second(store, [payload], [_f("b.py", add=1, patch="@@ -1 +1 @@\n+y")], files_truncated=True)
+    assert facts["evidence_unseen"] == [payload.id] and "evidence_scrubbed" not in facts
+    facts, _ = store.correlate(_rev([_f("b.py", add=1, patch="@@ -1 +1 @@\n+y")]), [])
+    assert facts["evidence_scrubbed"] == [payload.id] and "evidence_unseen" not in facts
+
+
+def test_a_truncated_list_does_not_hide_a_payload_removed_from_the_body(store):
+    body_hit = IndicatorHit(id="ind-b-1", rule="curl-pipe-shell", severity="critical", title="t", evidence=_PAYLOAD)
+    _record(store, _rev([]), [body_hit], run_id="r0")
+    facts, _ = store.correlate(_rev([], files_truncated=True), [])
+    assert facts["evidence_scrubbed"] == [body_hit.id] and "evidence_unseen" not in facts
+
+
+def test_real_and_withheld_vanishings_are_told_apart_per_hit(store):
+    withheld, removed = _at("locales/de.json"), _at("src/agent.py")
+    facts, _ = _second(store, [withheld, removed],
+                       [_f("locales/de.json", add=5, rm=5), _f("src/agent.py", add=1, rm=1, patch="@@ -1 +1 @@\n+ok")])
+    assert facts["evidence_scrubbed"] == [removed.id] and facts["evidence_unseen"] == [withheld.id]
+
+
+def test_bloating_a_file_until_github_withholds_it_is_unseen_and_still_carried(store):
+    # The accepted residual: the author removes the payload and pads the file past what GitHub shows; the carried prior keeps the evidence at its floor.
+    payload = _at("install.sh", rule="curl-pipe-shell", sev="critical")
+    facts, prior = _second(store, [payload], [_f("install.sh", add=40_000, rm=3)])
+    assert facts["evidence_unseen"] == [payload.id] and "evidence_scrubbed" not in facts
+    assert [(p["id"], p["severity"]) for p in prior] == [(payload.id, "critical")]
+    assert {h.rule: h.severity for h in scan_provenance({**_rev([])["provenance"], **facts})
+            if h.rule.startswith("evidence")} == {"evidence-unseen": "medium"}
+
+
 # ── the rhythm: one count per change, and a profile that flips back is still a change ────────────────
 
 def test_edits_and_rechecks_do_not_inflate_the_hour_histogram(store):

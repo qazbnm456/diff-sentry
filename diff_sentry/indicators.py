@@ -3620,7 +3620,13 @@ def _scan_actor_facts(prov: dict, *, outsider: bool, is_user: bool) -> list[Indi
                          "floor-level indicators flagged on an earlier version of this change are gone after "
                          "an edit (the author removed the payload)",
                          f"gone={','.join(sorted(scrubbed)[:5])}"))
-    elif _int_fact(prov, "content_revisions") > 0:
+    unseen = _str_list(prov, "evidence_unseen")
+    if unseen:
+        # Not known to be gone: GitHub did not show the file this time (a withheld patch, a truncated list). The earlier hits are carried forward and keep their own severity.
+        hits.append(_hit("evidence-unseen", "medium",
+                         "floor-level indicators of an earlier version sit in files this version does not show",
+                         f"unseen={','.join(sorted(unseen)[:5])}"))
+    if not scrubbed and _int_fact(prov, "content_revisions") > 0:
         hits.append(_hit("content-edited", "low", "the change's content was edited after it was first seen",
                          "edited-after-first-seen"))
     if prov.get("files_truncated") is True:

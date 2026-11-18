@@ -27,7 +27,7 @@ from typing import Any
 
 from .dbutil import open_versioned
 from .hosts import fetch_targets, ioc_of
-from .normalize import event_metadata
+from .normalize import _files, event_metadata
 from .schema import IndicatorHit, at_signal_floor, max_severity, severity_rank
 
 _SCHEMA = """
@@ -116,6 +116,32 @@ def _longest_quiet_run(hours: list[int]) -> int:
         run = run + 1 if h == 0 else 0
         best = max(best, run)
     return min(best, 24)
+
+
+# Labels of the segments that are not files (`normalize.content_segments_ex`): a branch name and a comment.
+_NON_FILE_LOCATIONS = ("branch:", "comment:")
+
+
+def _unseen_locations(event: dict) -> Callable[[str], bool]:
+    """Whether this version of the change does not show the file a hit was found in, so a hit gone from there is not evidence of a removed payload. A listed file is unseen when GitHub sent no patch for it and it is not `removed`, and it has changed lines, or it is `added` or `modified` with none while the event shows GitHub withheld content (another listed file with changed lines and no patch, or a truncated list); a lone file with no lines and no patch is an emptied file or a mode change, and a `renamed` one with none now equals its base. A file not listed is unseen only when the list is truncated, and only a file's label can be one (never the body's empty label, a branch's or a comment's)."""
+    prov = event.get("provenance") if isinstance(event.get("provenance"), dict) else {}
+    truncated = prov.get("files_truncated") is True
+    files = _files(event)
+    listed: dict[str, dict] = {}
+    for f in files:
+        listed.setdefault(f["filename"], f)
+    withheld = {f["filename"] for f in files if not f["patch"] and f["additions"] + f["deletions"] > 0}
+
+    def unseen(location: str) -> bool:
+        f = listed.get(location)
+        if f is None:
+            return truncated and bool(location) and not location.startswith(_NON_FILE_LOCATIONS)
+        if f["patch"] or f["status"] == "removed":
+            return False
+        if f["additions"] + f["deletions"] > 0:
+            return True
+        return f["status"] in ("added", "modified") and (truncated or bool(withheld - {location}))
+    return unseen
 
 
 def _is_own(hit: IndicatorHit, login: str) -> bool:
@@ -355,12 +381,18 @@ class ActorStore:
                 spot = (h.rule, h.location)
                 fresh[spot] = fresh.get(spot, False) or at_signal_floor(h.severity)
             # Only evidence that could have signalled counts: dropping a `$(pwd)` from prose is an edit, not a payload removal.
-            scrubbed = sorted(h["id"] for h in prior.values()
-                              if (not h.get("via") or h["via"].strip().lower() == login.strip().lower())
-                              and not fresh.get((h["rule"], h.get("location", "")), False)
-                              and at_signal_floor(h["severity"]))
+            vanished = [h for h in prior.values()
+                        if (not h.get("via") or h["via"].strip().lower() == login.strip().lower())
+                        and not fresh.get((h["rule"], h.get("location", "")), False)
+                        and at_signal_floor(h["severity"])]
+            # A hit in a file this version does not show (GitHub withheld its patch, or cut the list) is not known to be gone: judged per hit, so a payload removed beside a withheld file still reads as scrubbed. The prior hit is carried either way.
+            unseen = _unseen_locations(event)
+            hidden = {h["id"] for h in vanished if not h.get("via") and unseen(h.get("location", ""))}
+            scrubbed = sorted(h["id"] for h in vanished if h["id"] not in hidden)
             if scrubbed:
                 facts["evidence_scrubbed"] = scrubbed[:10]
+            if hidden:
+                facts["evidence_unseen"] = sorted(hidden)[:10]
         return facts, list(prior.values())
 
     @staticmethod
