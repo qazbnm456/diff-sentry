@@ -177,6 +177,37 @@ def _release_facts(event: dict) -> dict:
     return out
 
 
+def _body_parts(event: dict, facts: bool) -> list[tuple[str, str]]:
+    """`(heading, text)` per section of the untrusted body, in the order `normalize_event` renders them."""
+    body_parts: list[tuple[str, str]] = []
+    if event.get("title"):
+        body_parts.append(("### TITLE (untrusted)", event["title"]))
+    if event.get("body"):
+        body_parts.append(("### BODY (untrusted)", event["body"]))
+    if event.get("head_ref"):
+        body_parts.append(("### BRANCH (untrusted)", event["head_ref"]))
+    for f in _files(event):
+        # Git allows a line break in a filename; escaped here, it cannot end the header line and forge the next section
+        name = f["filename"].replace("\r", "\\r").replace("\n", "\\n")
+        head = f"### FILE (untrusted): {name}  [{f['status']} +{f['additions']} -{f['deletions']}]"
+        body_parts.append((head, f["patch"]))
+    release = _release_facts(event) if facts and _files(event) else {}
+    if release:
+        # json.dumps escapes every line break, so nothing inside can start a line of its own
+        rendered = json.dumps(release, ensure_ascii=False, default=str)[:_MAX_RELEASE_FACTS_CHARS]
+        body_parts.append(((f"{_RELEASE_FACTS_HEADING} (host-derived from the registry; package, publisher and "
+                            "provenance strings inside are the publisher's and untrusted)"), rendered))
+    for c in _comments(event):
+        who = f"{c['author']} [{c['association'] or 'n/a'}] {c['created_at']}".strip()
+        body_parts.append((f"### COMMENT (untrusted) by {who}", c["body"]))
+    history = event.get("actor_history")
+    if isinstance(history, dict) and history:
+        rendered = json.dumps(history, ensure_ascii=False, indent=2, default=str)[:_MAX_ACTOR_HISTORY_CHARS]
+        body_parts.append((("### ACTOR HISTORY (host-derived from earlier sightings; free-text fields inside "
+                            "are attacker-authored and untrusted)"), rendered))
+    return body_parts
+
+
 def normalize_event(event: dict, *, facts: bool = True) -> str:
     """Render a change event as the untrusted `event: str` the RLM holds as a REPL variable.
 
@@ -185,32 +216,7 @@ def normalize_event(event: dict, *, facts: bool = True) -> str:
     A release with files also gets its RELEASE FACTS after them (before any comment). A release without files gets none, so the facts never decide whether it has groundable content (`has_groundable_content`); its title does, as before. `facts=False` leaves them out: the text a planner's scan is grounded in (`indicators._Change`), since the facts are the host's, not the change's."""
     meta = event_metadata(event)
     header = json.dumps({"_diff_sentry_metadata": meta}, ensure_ascii=False, indent=2)
-    body_parts: list[str] = []
-    if event.get("title"):
-        body_parts.append(f"### TITLE (untrusted)\n{event['title']}")
-    if event.get("body"):
-        body_parts.append(f"### BODY (untrusted)\n{event['body']}")
-    if event.get("head_ref"):
-        body_parts.append(f"### BRANCH (untrusted)\n{event['head_ref']}")
-    for f in _files(event):
-        # Git allows a line break in a filename; escaped here, it cannot end the header line and forge the next section
-        name = f["filename"].replace("\r", "\\r").replace("\n", "\\n")
-        head = f"### FILE (untrusted): {name}  [{f['status']} +{f['additions']} -{f['deletions']}]"
-        body_parts.append(f"{head}\n{f['patch']}")
-    release = _release_facts(event) if facts and _files(event) else {}
-    if release:
-        # json.dumps escapes every line break, so nothing inside can start a line of its own
-        rendered = json.dumps(release, ensure_ascii=False, default=str)[:_MAX_RELEASE_FACTS_CHARS]
-        body_parts.append(f"{_RELEASE_FACTS_HEADING} (host-derived from the registry; package, publisher and "
-                          f"provenance strings inside are the publisher's and untrusted)\n{rendered}")
-    for c in _comments(event):
-        who = f"{c['author']} [{c['association'] or 'n/a'}] {c['created_at']}".strip()
-        body_parts.append(f"### COMMENT (untrusted) by {who}\n{c['body']}")
-    history = event.get("actor_history")
-    if isinstance(history, dict) and history:
-        rendered = json.dumps(history, ensure_ascii=False, indent=2, default=str)[:_MAX_ACTOR_HISTORY_CHARS]
-        body_parts.append("### ACTOR HISTORY (host-derived from earlier sightings; free-text fields inside "
-                          f"are attacker-authored and untrusted)\n{rendered}")
+    body_parts = [f"{head}\n{text}" for head, text in _body_parts(event, facts)]
     body = "\n\n".join(body_parts) if body_parts else NO_CONTENT_SENTINEL
     footer = json.dumps({"_diff_sentry_metadata_footer": meta}, ensure_ascii=False, indent=2)
     return (
@@ -220,6 +226,20 @@ def normalize_event(event: dict, *, facts: bool = True) -> str:
         f"{_CONTENT_END}\n\n"
         f"{footer}\n"
     )
+
+
+def quote_form(text: str) -> str:
+    """Text as a quote of it is compared: each line without a leading diff marker (`+`, `-`, one blank), whitespace runs collapsed to one blank."""
+    return " ".join(" ".join(line[1:] if line[:1] in ("+", "-", " ") else line for line in text.splitlines()).split())
+
+
+def quotable(event: dict) -> tuple[str, frozenset[str]]:
+    """What a verdict can quote from a change, in `quote_form`: every section of the body the planner reads (not the MF1 metadata, nor the section headings), and the set of whole changed lines and file paths, which a quote may match even when it is short."""
+    files = _files(event)
+    texts = [f["filename"] for f in files] + [str(text) for _, text in _body_parts(event, facts=True)]
+    whole = {quote_form(f["filename"]) for f in files}
+    whole.update(quote_form(line) for f in files for line in (f["patch"] or "").splitlines() if line[:1] in ("+", "-"))
+    return quote_form("\n".join(texts)), frozenset(whole)
 
 
 def has_groundable_content(event_str: str) -> bool:

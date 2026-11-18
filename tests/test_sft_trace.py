@@ -97,3 +97,18 @@ def test_ds_run_tag_is_read_from_the_environment(monkeypatch):
     assert DetectConfig.from_env().run_tag == "teacher-1"
     monkeypatch.setenv("DS_RUN_TAG", " ")
     assert DetectConfig.from_env().run_tag is None
+
+
+def test_an_unquoted_accusation_is_refused_inside_the_trajectory_and_still_exports(tmp_path, monkeypatch):
+    unquoted = {**MALICIOUS_VERDICT, "rationale": "Release churn this large is not explicable as ordinary work."}
+    events = _classify(
+        tmp_path, monkeypatch,
+        steps=[submit({"verdict": unquoted}), submit({"verdict": MALICIOUS_VERDICT})],
+        turns=[{"reasoning": "decide in code", "code": "SUBMIT(...)"},
+               {"reasoning": "quote the line", "code": "SUBMIT(...)"}])
+    steps = [e["payload"] for e in events if e["type"] == "main_step"]
+    assert len(steps) == 2 and "quotes nothing from it" in str(steps[0]["output"])
+    assert next(e["payload"] for e in events if e["type"] == "result")["output"]["rationale"] == \
+        MALICIOUS_VERDICT["rationale"]
+    records = export_sft_turns(group_by_run(events), render="adapter", strict=True)
+    assert [r["kind"] for r in records] == ["action", "action"] and all(r["verified"] for r in records)

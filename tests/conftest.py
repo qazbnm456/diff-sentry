@@ -58,7 +58,7 @@ MALICIOUS_VERDICT = {
                "CODEOWNERS.",
     "verdict": "malicious",
     "confidence": 0.95,
-    "rationale": "The filename decodes to `curl … | bash` and the change grabs CODEOWNERS.",
+    "rationale": "The filename decodes to `curl … | bash` and the change grabs CODEOWNERS with `* @hackerbot-claw`.",
     "techniques": ["ci-shell-injection", "obfuscated-payload", "codeowners-tamper"],
     "suspect_files": [".github/workflows/ci.yml", "CODEOWNERS"],
     "indicator_ids": [],
