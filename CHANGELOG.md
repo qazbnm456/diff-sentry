@@ -2,6 +2,19 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.18.0
+
+Upgrade from 0.17.0: a pull request of an LLM product no longer signals on the words "system prompt" in its own translations and code, and the planner must quote the change it accuses. If you run `watch`, delete `actors.db` from its state directory (`DS_WATCH_STATE_DIR`, default `output/state`) before restarting it: otherwise hits stored under the old rules read as a scrubbed payload on the next revision. This restarts the cross-event memory (actor history, prior flags, `ioc_reuse`, carried hits) from zero; leave `watch.db` and `snapshots/` alone. The GitHub Action's scan is unchanged, and `rlm-harness==1.25.0` is unchanged.
+
+### Changed
+- **A `suspicious` or `malicious` verdict must quote the change.** A SUBMIT whose rationale quotes nothing from the change in backticks (12 or more characters of what the planner reads, or a whole changed line or path) is sent back once in the same run, with a note that a step ending in SUBMIT shows none of its own output. A planner that picks the verdict in its own code before reading the result can no longer accuse a change on a substring match, such as `oast` inside `toast`. `benign` is never sent back, and neither is the verdict written at the iteration cap.
+- **The bare phrase "system prompt" is `medium` in a translation catalog** (`.po`, `.arb`, `.xliff`, a VS Code extension's `package.nls*.json`, or a `.json` or `.yml` file under `locales/`, `i18n/` and the like), from anyone. An instruction aimed at the phrase anywhere in the file keeps every hit in it `high`.
+- **The bare phrase is `medium` in the source code of a change whose author can push to the repository**: a push, or a pull request from a branch of the repository itself, whatever association GitHub shows. A fork's pull request keeps it `high`. The cost: an injection-shaped prompt such a writer puts in a string literal is `medium` too, and rests on the other rules and the model.
+- **The planner's own scan of a source or catalog hunk reads it as the baseline does**, so a re-scan no longer raises a `high` the baseline lowered.
+
+### Fixed
+- **A file GitHub stops showing no longer reads as a scrubbed payload.** When a later revision comes without a file's patch, or past GitHub's 3000-file list, an earlier floor-level hit in that file is `evidence-unseen` (`medium`) instead of `evidence-scrubbed` (`high`). A deleted file, a patch without the line, an emptied file and a pure rename still count as scrubbed, and the earlier hit is carried either way.
+
 ## 0.17.0
 
 Upgrade from 0.16.0: the planner now reads every added and removed line for sinks before it decides, not only the lines the scanner flagged. The GitHub Action's scan is unchanged, nothing needs configuring, and `rlm-harness==1.25.0` is unchanged.
