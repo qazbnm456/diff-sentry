@@ -296,19 +296,17 @@ class ActorStore:
         """Attach the model's outcome to a sighting once the run has finished.
 
         Attribution follows the evidence. If the change's floor-level evidence is a third party's comment (the author's own hits stayed below the floor), the verdict belongs to that commenter, not to the author."""
-        with self._lock:
+        with self._lock, self._db:
             row = self._db.execute("SELECT mixed, own_signal FROM sightings WHERE run_id=?", (run_id,)).fetchone()
             if row is not None and row["mixed"] and not row["own_signal"]:
                 taken = self._db.execute(
                     "UPDATE sightings SET verdict=? WHERE parent=? AND channel='comment' AND signal=1",
                     (verdict, run_id)).rowcount
                 if taken:
-                    self._db.commit()
                     return
                 # nobody else's sighting exists to carry it (the comment is gone, or its writer could not be matched): the verdict is not lost, it stays with the change it was made about
             self._db.execute("UPDATE sightings SET verdict=?, signal=?, max_severity=? WHERE run_id=?",
                              (verdict, int(signal), max_severity, run_id))
-            self._db.commit()
 
     # ── reading ────────────────────────────────────────────────────────────────────────────────────
 

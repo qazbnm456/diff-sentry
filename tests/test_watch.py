@@ -1376,14 +1376,173 @@ def test_a_backlog_of_undelivered_alerts_is_retried_a_few_at_a_time(rig):
     assert w.poll_once().alerts == 8 - _ALERT_RETRIES_PER_POLL
 
 
-def test_a_failing_bookkeeping_step_does_not_leave_the_change_running(rig):
+@pytest.mark.parametrize("failure", ["actor", "watch"])
+def test_a_completed_run_is_settled_after_restart_without_running_again(rig, failure):
+    w = _start(rig)
+    run_id = "acme__widgets-pr-7"
+    rig.world.pr("acme/widgets", 7)
+    w.poll_once()
+    rig.runner.verdict = "malicious"
+    runner = w._runner
+
+    def run_and_send(*a, **kw):
+        result = runner(*a, **kw)
+        kw["poster"]("", {}, {"stage": "final"})
+        return result
+
+    w._runner = run_and_send
+    if failure == "actor":
+        w.actors._db.execute(
+            "CREATE TEMP TRIGGER locked BEFORE UPDATE ON sightings BEGIN SELECT RAISE(ABORT, 'locked'); END")
+    else:
+        w.state._db.execute(
+            "CREATE TEMP TRIGGER locked BEFORE DELETE ON queue BEGIN SELECT RAISE(ABORT, 'locked'); END")
+
+    assert w.drain() == 1
+    assert w.state.has_run(run_id)
+    assert w.state.change("acme/widgets", "pull_request", 7)["state"] != "done"
+    w.close()
+
+    held = rig.make(paused=("acme/widgets",))
+    held.recover()
+    assert held.drain() == 0 and held.state.has_run(run_id)
+    held.close()
+
+    again = rig.make()
+    again.recover()
+    assert again.drain() == 0
+    assert again.state.change("acme/widgets", "pull_request", 7)["state"] == "done"
+    assert not again.state.has_run(run_id)
+    result = again.actors._db.execute("SELECT verdict, signal FROM sightings WHERE run_id=?", (run_id,))
+    assert [tuple(row) for row in result] == [("malicious", 1)]
+    assert len(rig.runner.calls) == 1 and [p["stage"] for p in rig.sent] == ["final"]
+
+
+def test_a_blocked_settlement_batch_does_not_starve_later_outcomes(rig, monkeypatch):
+    from diff_sentry import watch
+
+    w = _start(rig)
+    monkeypatch.setattr(watch, "_SETTLEMENT_BATCH", 1)
+    monkeypatch.setattr(watch, "_SETTLEMENT_RETRY_S", 0)
+    for number in (7, 8, 9):
+        rig.world.pr("acme/widgets", number)
+    w.poll_once()
+    real = w.actors.finalize
+    blocked = {"acme__widgets-pr-7", "acme__widgets-pr-8"}
+
+    def finalize(run_id, **kwargs):
+        if run_id in blocked:
+            raise RuntimeError("locked")
+        real(run_id, **kwargs)
+
+    monkeypatch.setattr(w.actors, "finalize", finalize)
+    assert w.drain(limit=2) == 2
+    blocked.remove("acme__widgets-pr-8")
+    assert w.run_next() == "acme__widgets-pr-9"
+    assert w.run_next() is None
+    assert w.state.has_run("acme__widgets-pr-7")
+    assert not w.state.has_run("acme__widgets-pr-8")
+
+
+def test_once_retries_later_saved_outcomes_even_if_the_first_batch_stays_blocked(rig, monkeypatch):
+    from diff_sentry import watch
+
+    monkeypatch.setattr(watch, "_SETTLEMENT_BATCH", 1)
+    w = _start(rig)
+    for number in (7, 8):
+        rig.world.pr("acme/widgets", number)
+    w.poll_once()
+    w.actors._db.execute(
+        "CREATE TEMP TRIGGER locked BEFORE UPDATE ON sightings BEGIN SELECT RAISE(ABORT, 'locked'); END")
+    assert w.drain() == 2
+    w.close()
+
+    again = rig.make()
+    again.actors._db.execute(
+        "CREATE TEMP TRIGGER locked BEFORE UPDATE ON sightings WHEN OLD.number=7"
+        " BEGIN SELECT RAISE(ABORT, 'locked'); END")
+    again.recover()
+    assert again.drain() == 0 and len(rig.runner.calls) == 2
+    assert again.state.has_run("acme__widgets-pr-7")
+    assert again.state.change("acme/widgets", "pull_request", 8)["state"] == "done"
+
+
+def test_once_flushes_a_completed_result_when_the_checkpoint_write_temporarily_fails(rig, monkeypatch):
+    import sqlite3
+
+    from diff_sentry import watch
+
     w = _start(rig)
     rig.world.pr("acme/widgets", 7)
     w.poll_once()
-    w.actors.finalize = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("database is locked"))
-    assert w.drain() == 1
+    real_checkpoint = w.state.checkpoint
+    failures = []
+
+    def checkpoint(*args):
+        if not failures:
+            failures.append(1)
+            raise sqlite3.OperationalError("database is locked")
+        real_checkpoint(*args)
+
+    monkeypatch.setattr(w.state, "checkpoint", checkpoint)
+    monkeypatch.setattr(watch, "_SETTLEMENT_RETRY_S", 0)
+    assert w.drain(limit=1) == 1
+    assert failures == [1] and len(rig.runner.calls) == 1
     assert w.state.change("acme/widgets", "pull_request", 7)["state"] == "done"
-    assert w.state.queued_run_ids() == [] and w.state.queue_size() == 0
+
+
+def test_serve_keeps_state_open_until_the_running_worker_exits(rig, monkeypatch):
+    import threading
+
+    w = _start(rig)
+    for number in (7, 8):
+        rig.world.pr("acme/widgets", number)
+    w.poll_once()
+    running, release, joining, closed = (threading.Event() for _ in range(4))
+    runner = w._runner
+    join = threading.Thread.join
+
+    def slow(*a, **kw):
+        running.set()
+        assert release.wait(10)
+        return runner(*a, **kw)
+
+    def observe_join(thread, timeout=None):
+        if thread.name == "diff-sentry-worker":
+            joining.set()
+            if timeout is not None:
+                timeout = 0
+        return join(thread, timeout)
+
+    def serve_and_close():
+        try:
+            w.serve()
+        finally:
+            w.close()
+            closed.set()
+
+    w._runner = slow
+    monkeypatch.setattr(threading.Thread, "join", observe_join)
+    thread = threading.Thread(target=serve_and_close)
+    thread.start()
+    try:
+        assert running.wait(5)
+        w.stop()
+        assert joining.wait(5)
+        assert not closed.wait(0.2)
+        contender = rig.make()
+        with pytest.raises(RuntimeError, match="already using"):
+            contender.recover()
+    finally:
+        release.set()
+        thread.join(timeout=10)
+    assert closed.is_set() and not thread.is_alive()
+
+    again = rig.make()
+    again.recover()
+    assert again.state.change("acme/widgets", "pull_request", 7)["state"] == "done"
+    assert len(rig.runner.calls) == 1
+    assert again.drain() == 1
 
 
 # ── pausing a repository ───────────────────────────────────────────────────────────────────────────────

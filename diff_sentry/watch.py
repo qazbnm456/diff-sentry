@@ -40,6 +40,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wai
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from itertools import islice
 from typing import Any
 
 from .actors import ActorStore
@@ -68,6 +69,9 @@ SCHEMA_VERSION = 2
 _DEAD = 2                   # `queue.claimed` value for a run that exhausted its attempts (kept for --requeue-failed)
 # The hand-over from `release-watch --final` (`spool_final`): a release's event as a file, imported into the queue by `Watcher.import_spool`.
 FINAL_QUEUE = "final-queue"
+_PENDING_SETTLEMENT = 3     # the result is saved and only bookkeeping can run
+_SETTLEMENT_RETRY_S = 5
+_SETTLEMENT_BATCH = 4
 _CONSUMER = ".consumer"         # written by every `watch` that imports: whether it runs the model, and when it last looked
 _CONSUMER_VERSION = 1
 _CONSUMER_STALE_S = 3600
@@ -88,6 +92,8 @@ CREATE TABLE IF NOT EXISTS queue (
     seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT UNIQUE NOT NULL, priority INTEGER NOT NULL,
     enqueued_at TEXT NOT NULL, event_json TEXT NOT NULL, claimed INTEGER NOT NULL DEFAULT 0,
     attempts INTEGER NOT NULL DEFAULT 0, not_before TEXT);
+CREATE TABLE IF NOT EXISTS pending_settlements (
+    run_id TEXT PRIMARY KEY NOT NULL, verdict TEXT, signal INTEGER NOT NULL, severity TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS deep_log (started_at TEXT NOT NULL);
 """
 
@@ -435,12 +441,13 @@ class WatchState:
                              (repo, kind, number, *cols.values()))
 
     def record_examined(self, repo: str, kind: str, number: int, cols: dict[str, Any], *,
-                        queue: tuple[str, int, dict, datetime] | None = None, shed: str | None = None) -> None:
+                        queue: tuple[str, int, dict, datetime] | None = None, shed: str | None = None) -> bool:
         """What one examination decided, in ONE transaction: the change row, its queue row (`queue`: run id, priority, event, time), and the change `shed` to make room. A failure writes none of them, so a change never reads `queued` without a queue row (the next poll would call it unchanged and never run it), and a worker never claims a queue row whose change has no row."""
         with self._lock:
             try:
-                if shed is not None:
-                    self._db.execute("DELETE FROM queue WHERE run_id=?", (shed,))
+                removed = shed is not None and bool(self._db.execute(
+                    "DELETE FROM queue WHERE run_id=? AND claimed=0", (shed,)).rowcount)
+                if removed:
                     self._db.execute("UPDATE changes SET state='shed' WHERE run_id=?", (shed,))
                 self._upsert(repo, kind, number, cols)
                 if queue is not None:
@@ -452,6 +459,7 @@ class WatchState:
             except BaseException:
                 self._db.rollback()
                 raise
+            return removed
 
     def due_checks(self, now: datetime, paused: tuple[str, ...] = ()) -> list[sqlite3.Row]:
         skip, args = _unpaused("repo", paused)
@@ -513,10 +521,44 @@ class WatchState:
             return row
 
     def unclaim(self, run_id: str) -> None:
-        self._q("UPDATE queue SET claimed=0, attempts=MAX(attempts-1, 0) WHERE run_id=? AND claimed=1", (run_id,))
+        """Return the single dispatcher's most recent claim when it stops before starting the model."""
+        with self._lock, self._db:
+            returned = self._db.execute("UPDATE queue SET claimed=0, attempts=attempts-1 WHERE run_id=? AND claimed=1",
+                                        (run_id,)).rowcount
+            if returned:
+                self._db.execute("UPDATE changes SET state='queued' WHERE run_id=?", (run_id,))
+                self._db.execute("DELETE FROM deep_log WHERE rowid=(SELECT MAX(rowid) FROM deep_log)")
 
-    def complete(self, run_id: str) -> None:
-        self._q("DELETE FROM queue WHERE run_id=?", (run_id,))
+    def checkpoint(self, run_id: str, outcome: tuple) -> None:
+        with self._lock, self._db:
+            self._db.execute("INSERT OR IGNORE INTO pending_settlements VALUES (?, ?, ?, ?)", (run_id, *outcome))
+            self._db.execute("UPDATE queue SET claimed=? WHERE run_id=?", (_PENDING_SETTLEMENT, run_id))
+
+    def pending_settlements(self, paused: tuple[str, ...], after: int) -> list[sqlite3.Row]:
+        skip, args = _unpaused(_QUEUE_REPO, paused)
+        with self._lock:
+            return self._db.execute(
+                "SELECT queue.seq, queue.run_id, verdict, signal, severity,"
+                " json_extract(event_json, '$.kind')='release' AS release,"
+                " json_extract(event_json, '$.spooled') IS NOT NULL AS spooled"
+                f" FROM pending_settlements JOIN queue USING (run_id) WHERE queue.seq>?{skip}"
+                " ORDER BY queue.seq LIMIT ?", (after, *args, _SETTLEMENT_BATCH)).fetchall()
+
+    def finish(self, run_id: str) -> None:
+        with self._lock, self._db:
+            self._db.execute("UPDATE changes SET state='done' WHERE run_id=?", (run_id,))
+            self._db.execute("DELETE FROM queue WHERE run_id=?", (run_id,))
+            self._db.execute("DELETE FROM pending_settlements WHERE run_id=?", (run_id,))
+
+    def settle_failure(self, run_id: str, attempts: int, not_before: datetime) -> None:
+        with self._lock, self._db:
+            if attempts >= _MAX_ATTEMPTS:
+                self._db.execute("UPDATE queue SET claimed=? WHERE run_id=?", (_DEAD, run_id))
+                self._db.execute("UPDATE changes SET state='failed' WHERE run_id=?", (run_id,))
+            else:
+                self._db.execute("UPDATE queue SET claimed=0, attempts=?, not_before=? WHERE run_id=?",
+                                 (attempts, _iso(not_before), run_id))
+                self._db.execute("UPDATE changes SET state='queued' WHERE run_id=?", (run_id,))
 
     def retry(self, run_id: str, attempts: int, not_before: datetime) -> None:
         self._q("UPDATE queue SET claimed=0, attempts=?, not_before=? WHERE run_id=?",
@@ -528,8 +570,13 @@ class WatchState:
 
     def requeue_claimed(self) -> int:
         """Put back what a previous process was running when it stopped, unless it has used up its attempts."""
-        self._q("UPDATE queue SET claimed=? WHERE claimed=1 AND attempts>=?", (_DEAD, _MAX_ATTEMPTS))
-        return self._q("UPDATE queue SET claimed=0 WHERE claimed=1").rowcount
+        with self._lock, self._db:
+            self._db.execute("UPDATE changes SET state='failed' WHERE run_id IN"
+                             " (SELECT run_id FROM queue WHERE claimed=1 AND attempts>=?)", (_MAX_ATTEMPTS,))
+            self._db.execute("UPDATE queue SET claimed=? WHERE claimed=1 AND attempts>=?", (_DEAD, _MAX_ATTEMPTS))
+            self._db.execute("UPDATE changes SET state='queued' WHERE run_id IN"
+                             " (SELECT run_id FROM queue WHERE claimed=1)")
+            return self._db.execute("UPDATE queue SET claimed=0 WHERE claimed=1").rowcount
 
     def requeue_dead(self) -> list[str]:
         with self._lock:
@@ -550,8 +597,9 @@ class WatchState:
         self._q("UPDATE changes SET state=? WHERE run_id=?", (state, run_id))
 
     def note_deep(self, now: datetime) -> None:
-        self._q("INSERT INTO deep_log (started_at) VALUES (?)", (_iso(now),))
-        self._q("DELETE FROM deep_log WHERE started_at<?", (_iso(now - timedelta(hours=2)),))
+        with self._lock, self._db:
+            self._db.execute("INSERT INTO deep_log (started_at) VALUES (?)", (_iso(now),))
+            self._db.execute("DELETE FROM deep_log WHERE started_at<?", (_iso(now - timedelta(hours=2)),))
 
     def deep_last_hour(self, now: datetime) -> list[str]:
         with self._lock:
@@ -711,6 +759,9 @@ class Watcher:
         self._import_lock = threading.Lock()       # the poller and, with workers > 1, the worker thread both import
         self._stop = threading.Event()
         self._wake = threading.Event()
+        self._unwritten: dict[str, tuple[sqlite3.Row, tuple | None]] = {}
+        self._next_settlement = 0.0
+        self._settlement_cursor = 0
         self._interval = config.poll_interval_s
         self._rate_wait_until: datetime | None = None
         self._rate_left: int | None = None                 # the API budget we believe is left
@@ -726,8 +777,7 @@ class Watcher:
         n = self.state.requeue_claimed()
         if n:
             log.info("requeued %d change(s) a previous run was judging when it stopped", n)
-            for run_id in self.state.queued_run_ids():
-                self.state.set_state_of_run(run_id, "queued")
+
 
     # ── polling ────────────────────────────────────────────────────────────────────────────────────
 
@@ -1044,13 +1094,13 @@ class Watcher:
         state, prio, victim = "screened", 0, None
         if not self.config.screen_only and self._wants_model(hits):
             state, prio, victim = self._admit(run_id, hits, event)
-        self.state.record_examined(
+        removed = self.state.record_examined(
             repo, kind, number,
             {"updated_at": updated, "content_sha256": digest, "flags": flags, "revision": revision, "run_id": run_id,
              "state": state, "first_seen": first_seen, "checks": checks, "next_check_at": next_check, "gone_at": None,
              "alerted": json.dumps(sorted(alerted)), "alert_pending": pending, "alert_fails": 0, **healthy},
             queue=(run_id, prio, event, now) if state == "queued" else None, shed=victim)
-        if victim is not None or state == "shed":
+        if removed or state == "shed":
             report.shed += 1
             log.info("queue full — shed %s", victim or run_id)
         report.queued += state == "queued"
@@ -1102,7 +1152,7 @@ class Watcher:
 
     def _claim(self) -> tuple[sqlite3.Row, dict] | None:
         """Take the highest-priority ready change, unless the hourly cap is reached, and mark it running. A handed-over release's full event is read from `final-queue/accepted/` here; one that cannot be read is buried at once (nothing brings it back). A claim whose bookkeeping fails backs off like a failed run, so the row does not come first again on the next claim and hold up every one behind it."""
-        while self._may_run():
+        while not self._stop.is_set() and self._may_run():
             row = self.state.claim(self._clock(), self.config.paused)
             if row is None:
                 return None
@@ -1145,13 +1195,6 @@ class Watcher:
         if not isinstance(event, dict):
             raise ValueError("the handed-over file holds no event")
         return event
-
-    def _drop_accepted(self, row: sqlite3.Row) -> None:
-        try:
-            if json.loads(row["event_json"]).get("spooled"):
-                os.remove(self._accepted(row["run_id"]))
-        except (OSError, ValueError):
-            pass
 
     def _responded(self, run_id: str) -> bool:
         return os.path.exists(os.path.join(self.config.out_dir, "responses", f"{run_id}.json"))
@@ -1255,43 +1298,85 @@ class Watcher:
 
     def run_next(self) -> str | None:
         """Run the highest-priority ready change through the model, in this thread. Returns its run id, or None when nothing is ready or the hourly cap is reached. A run that itself fails (a model outage) is retried with backoff up to `_MAX_ATTEMPTS` times before the change is marked `failed`."""
+        self._retry_settlements()
         claimed = self._claim()
         if claimed is None:
             return None
         row, event = claimed
-        self._settle(row, event, _run_model(event, *self._run_args(row["run_id"])))
+        if self._stop.is_set():
+            self.state.unclaim(row["run_id"])
+            return None
+        self._settle(row, _run_model(event, *self._run_args(row["run_id"])))
         return row["run_id"]
 
-    def _settle(self, row: sqlite3.Row, event: dict, outcome: tuple | None) -> None:
-        """Record what a run produced: the verdict onto the sighting and the queue row done, or a retry with backoff, or after `_MAX_ATTEMPTS` the change buried as `failed`. `outcome` is `_outcome`'s tuple."""
+    def _save_settlement(self, row: sqlite3.Row, outcome: tuple | None) -> bool:
         run_id = row["run_id"]
         try:
             if outcome is not None:
-                verdict, signal, top = outcome
-                if event.get("kind") != "release":          # a release is no account's sighting
-                    self.actors.finalize(run_id, verdict=verdict, signal=signal, max_severity=top)
-                self._mark(run_id, event, "done")
-                self.state.complete(run_id)
-                self._drop_accepted(row)
-            elif row["attempts"] + 1 < _MAX_ATTEMPTS:
-                delay = _backoff(row["attempts"] + 1)
-                self.state.retry(run_id, row["attempts"] + 1, self._clock() + delay)
-                self._mark(run_id, event, "queued")
-                log.warning("run %s failed (attempt %d) — retrying in %s", run_id, row["attempts"] + 1, delay)
+                self.state.checkpoint(run_id, outcome)
             else:
-                self._mark(run_id, event, "failed")
-                self.state.bury(run_id)
-                log.error("run %s failed %d times — marked failed (kept; `watch --requeue-failed` brings it back)",
-                          run_id, _MAX_ATTEMPTS)
+                attempts = row["attempts"] + 1
+                delay = _backoff(attempts)
+                self.state.settle_failure(run_id, attempts, self._clock() + delay)
+                if attempts < _MAX_ATTEMPTS:
+                    log.warning("run %s failed (attempt %d), retrying in %s", run_id, attempts, delay)
+                else:
+                    log.error("run %s failed %d times (use watch --requeue-failed to retry)", run_id, attempts)
         except Exception:
-            # The run itself happened; only the bookkeeping failed. Do not leave the row claimed for ever, and do not leave the change reading `running`.
-            log.exception("bookkeeping for %s failed", run_id)
-            self.state.complete(run_id)
-            self._drop_accepted(row)
-            try:
-                self.state.set_state_of_run(run_id, "done")
-            except Exception:  # noqa: BLE001,S110 (the store itself is failing; the log line above is the record)
-                pass
+            self._unwritten.pop(run_id, None)
+            self._unwritten[run_id] = (row, outcome)
+            log.exception("could not save the outcome of %s; will retry bookkeeping", run_id)
+            return False
+        self._unwritten.pop(run_id, None)
+        return True
+
+    def _finish_settlement(self, run_id: str, outcome: tuple, *, release: bool, spooled: bool) -> None:
+        verdict, signal, top = outcome
+        try:
+            if not release:
+                self.actors.finalize(run_id, verdict=verdict, signal=bool(signal), max_severity=top)
+            self.state.finish(run_id)
+        except Exception:
+            log.exception("could not finalize %s; its outcome is saved for retry", run_id)
+        else:
+            if spooled:
+                with contextlib.suppress(OSError):
+                    os.remove(self._accepted(run_id))
+
+    def _settle(self, row: sqlite3.Row, outcome: tuple | None) -> None:
+        if self._save_settlement(row, outcome) and outcome is not None:
+            event = json.loads(row["event_json"])
+            self._finish_settlement(row["run_id"], outcome, release=event.get("kind") == "release",
+                                    spooled=bool(event.get("spooled")))
+
+    def _retry_settlements(self) -> None:
+        now = time.monotonic()
+        if now < self._next_settlement:
+            return
+        self._next_settlement = now + _SETTLEMENT_RETRY_S
+        for row, outcome in list(islice(self._unwritten.values(), _SETTLEMENT_BATCH)):
+            if self._stop.is_set():
+                return
+            self._save_settlement(row, outcome)
+        self._settlement_cursor = self._retry_saved_settlements(self._settlement_cursor)
+
+    def _retry_saved_settlements(self, after: int) -> int:
+        rows = self.state.pending_settlements(self.config.paused, after)
+        for row in rows:
+            if self._stop.is_set():
+                return after
+            self._finish_settlement(row["run_id"], (row["verdict"], row["signal"], row["severity"]),
+                                    release=bool(row["release"]), spooled=bool(row["spooled"]))
+            after = row["seq"]
+        return after if len(rows) == _SETTLEMENT_BATCH else 0
+
+    def _flush_successful_outcomes(self) -> None:
+        """Do not exit gracefully with a successful outcome held only in memory."""
+        while pending := [(row, outcome) for row, outcome in self._unwritten.values() if outcome is not None]:
+            for row, outcome in pending:
+                self._settle(row, outcome)
+            if any(outcome is not None for _, outcome in self._unwritten.values()):
+                time.sleep(_SETTLEMENT_RETRY_S)
 
     # ── several runs at once: one process each ──
 
@@ -1303,7 +1388,9 @@ class Watcher:
               budget: int | None) -> tuple[int, bool]:
         """Fill the free processes with ready changes (at most `budget` more), then settle whatever finished within a second. Returns how many it started and whether the pool broke (a child died)."""
         started = 0
-        while len(inflight) < self.config.workers and (budget is None or started < budget):
+        self._retry_settlements()
+        while (not self._stop.is_set() and len(inflight) < self.config.workers
+               and (budget is None or started < budget)):
             try:
                 claimed = self._claim()
             except Exception:
@@ -1312,11 +1399,14 @@ class Watcher:
             if claimed is None:
                 break
             row, event = claimed
+            if self._stop.is_set():
+                self.state.unclaim(row["run_id"])
+                break
             try:
                 inflight[pool.submit(_run_model, event, *self._run_args(row["run_id"]))] = claimed
             except Exception as exc:  # noqa: BLE001 (BrokenProcessPool, or a spawn that failed: ENOMEM, EMFILE)
                 log.warning("could not start %s: %s", row["run_id"], exc)
-                self._settle(row, event, None)
+                self._settle(row, None)
                 return started, True                         # start over with a new pool, without waiting
             started += 1
         if not inflight:
@@ -1324,17 +1414,19 @@ class Watcher:
         done, _ = wait(list(inflight), timeout=1, return_when=FIRST_COMPLETED)
         broken = False
         for fut in done:
-            row, event = inflight.pop(fut)
+            if self._stop.is_set():
+                break
+            row, _ = inflight.pop(fut)
             outcome, died = _result(fut, row["run_id"])
             broken = broken or died
-            self._settle(row, event, outcome)
+            self._settle(row, outcome)
         return started, broken
 
     def _settle_all(self, inflight: dict[Future, tuple[sqlite3.Row, dict]]) -> None:
         """Settle every run still in flight from what its future holds: a finished one keeps its result, the rest count as a failed attempt (their process is gone or about to be)."""
-        for fut, (row, event) in list(inflight.items()):
+        for fut, (row, _) in list(inflight.items()):
             inflight.pop(fut)
-            self._settle(row, event, _result(fut, row["run_id"])[0] if fut.done() else None)
+            self._settle(row, _result(fut, row["run_id"])[0] if fut.done() else None)
 
     def _run_pool(self, limit: int | None, *, serving: bool = False) -> int:
         """Run ready changes `workers` at a time until none is left and none is running (`drain`, at most `limit`), or, `serving`, until `stop()`. Returns how many it started. A stop or an interrupt leaves the runs it cuts off claimed for `recover()`; an error settles them, so a long-lived watcher strands nothing."""
@@ -1348,6 +1440,8 @@ class Watcher:
                 budget = None if limit is None else limit - ran
                 started, broken = self._pump(pool, inflight, budget)
                 ran += started
+                if self._stop.is_set():
+                    break
                 if broken:                                   # every run in a broken pool fails; settle and start over
                     self._settle_all(inflight)
                     _terminate(pool)
@@ -1356,7 +1450,7 @@ class Watcher:
                 if not inflight:
                     if not serving:
                         break
-                    self._wake.wait(timeout=30)
+                    self._wake.wait(timeout=_SETTLEMENT_RETRY_S)
                     self._wake.clear()
         except Exception:
             failed = True
@@ -1366,17 +1460,31 @@ class Watcher:
             # An error settles what it cut off; a stop or an interrupt (Ctrl-C) leaves it claimed for `recover()`.
             if failed and inflight and not self._stop.is_set():
                 self._settle_all(inflight)
+            else:
+                for fut, (row, _) in inflight.items():
+                    if fut.done() and not fut.cancelled() and fut.exception() is None:
+                        outcome = fut.result()
+                        if outcome is not None:
+                            self._settle(row, outcome)
         return ran
 
     def drain(self, limit: int | None = None) -> int:
         """Run ready changes until none is left (or `limit`, or the hourly cap). Returns how many ran."""
-        if self.config.workers > 1:
-            return self._run_pool(limit)
-        self.import_hand_overs()
-        ran = 0
-        while (limit is None or ran < limit) and self.run_next() is not None:
-            ran += 1
-        return ran
+        try:
+            if not self._stop.is_set():
+                cursor = self._retry_saved_settlements(0)
+                while cursor and not self._stop.is_set():
+                    cursor = self._retry_saved_settlements(cursor)
+                self._next_settlement = time.monotonic() + _SETTLEMENT_RETRY_S
+            if self.config.workers > 1:
+                return self._run_pool(limit)
+            self.import_hand_overs()
+            ran = 0
+            while (limit is None or ran < limit) and self.run_next() is not None:
+                ran += 1
+            return ran
+        finally:
+            self._flush_successful_outcomes()
 
     # ── serving ────────────────────────────────────────────────────────────────────────────────────
 
@@ -1414,7 +1522,8 @@ class Watcher:
         finally:
             self.stop()
             if worker.is_alive():
-                worker.join(timeout=5)
+                worker.join()
+            self._flush_successful_outcomes()
 
     def _work_loop(self) -> None:
         while not self._stop.is_set():
@@ -1425,7 +1534,7 @@ class Watcher:
                 self._stop.wait(5)
                 continue
             if ran is None:
-                self._wake.wait(timeout=30)
+                self._wake.wait(timeout=_SETTLEMENT_RETRY_S)
                 self._wake.clear()
 
     def _pool_loop(self) -> None:
