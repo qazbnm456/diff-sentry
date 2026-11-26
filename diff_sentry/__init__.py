@@ -72,7 +72,7 @@ __all__ = [
     "screen",
 ]
 
-__version__ = "0.18.0"
+__version__ = "0.18.1"
 
 
 def __getattr__(name: str):  # PEP 562: defer the dspy import to first use

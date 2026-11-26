@@ -2,6 +2,14 @@
 
 All notable changes to diff-sentry, a BewAIre-style detector that classifies one GitHub change (PR, issue or push) for malicious intent on [`rlm-harness`](https://github.com/qazbnm456/rlm-harness).
 
+## 0.18.1
+
+Upgrade from 0.18.0: `watch` can reuse its existing state directory.
+
+### Fixed
+- **`watch` waits for its worker before closing the databases and releasing the state lock.** A single worker finishes its current run, and work interrupted in a process pool can resume after restart within the existing attempt limit.
+- **`watch` can finish recording a completed run after a database error.** Once the result is saved, the watcher can retry the actor update, including after a restart, without rerunning the model or sending the final SIEM alert again.
+
 ## 0.18.0
 
 Upgrade from 0.17.0: a pull request of an LLM product no longer signals on the words "system prompt" in its own translations and code, and the planner must quote the change it accuses. If you run `watch`, delete `actors.db` from its state directory (`DS_WATCH_STATE_DIR`, default `output/state`) before restarting it: otherwise hits stored under the old rules read as a scrubbed payload on the next revision. This restarts the cross-event memory (actor history, prior flags, `ioc_reuse`, carried hits) from zero; leave `watch.db` and `snapshots/` alone. The GitHub Action's scan is unchanged, and `rlm-harness==1.25.0` is unchanged.
